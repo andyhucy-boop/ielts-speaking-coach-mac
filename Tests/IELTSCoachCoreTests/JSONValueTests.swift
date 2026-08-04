@@ -15,4 +15,12 @@ final class JSONValueTests: XCTestCase {
         let again = try JSONDecoder().decode(JSONValue.self, from: data)
         XCTAssertEqual(original, again)
     }
+
+    func testThrowsChineseErrorOnMalformedJSON() {
+        XCTAssertThrowsError(try JSONValue.decode(from: #"{"a":1,"b":"#)) { error in
+            let message = (error as? CoachError)?.errorDescription ?? "\(error)"
+            XCTAssertTrue(message.contains("不是合法的 JSON"), "错误信息不对：\(message)")
+            XCTAssertTrue(message.contains("下一步"), "错误信息缺少下一步指引：\(message)")
+        }
+    }
 }
