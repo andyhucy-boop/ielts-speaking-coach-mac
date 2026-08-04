@@ -13,6 +13,11 @@ public struct ReviewLocation: Equatable, Sendable {
     public let index: Int
     public let rawReport: String
     public let report: JSONValue
+
+    // 合成的 memberwise init 是 internal 的，App target 与 MCP target 构造不了。
+    public init(index: Int, rawReport: String, report: JSONValue) {
+        self.index = index; self.rawReport = rawReport; self.report = report
+    }
 }
 
 public enum ReviewParser {

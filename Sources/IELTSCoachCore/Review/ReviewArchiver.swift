@@ -76,7 +76,7 @@ public enum ReviewArchiver {
             from: report, sessionID: sessionID, createdAt: timestamp) else { return }
         // 同一 session 重复入库时不追加第二份
         guard !state.targets.contains(where: {
-            $0.id == target.id && $0.sourceSessionId == sessionID
+            $0.targetKey == target.targetKey && $0.sourceSessionId == sessionID
         }) else { return }
         state.targets.append(target)
     }

@@ -10,7 +10,7 @@ public enum RetrainingPolicy {
         guard !id.isEmpty else { return nil }
 
         return RetrainingTarget(
-            id: id,
+            targetKey: id,
             label: target["label"]?.stringValue ?? "",
             status: (target["status"]?.stringValue).flatMap { $0.isEmpty ? nil : $0 } ?? "new",
             evidence: (target["evidence"]?.arrayValue ?? []).compactMap(\.stringValue),

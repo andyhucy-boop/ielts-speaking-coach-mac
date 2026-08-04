@@ -23,6 +23,13 @@ public enum AnswerUpgradePolicy {
     7. 长度是练习目标，不是评分门槛。不得仅按词数判断分数，也不得用重复、空话或无关细节凑长度。
     """
 
+    /// `part` 刻意保持 String，不跟着 PracticeSession/ExaminerPrompt 改成 FocusPart：
+    /// 这里的合法域和 FocusPart 不是一回事。"full mock" 在 FocusPart 里是正式取值，
+    /// 但回答升级规则从来没有为 full mock 单独定过标准，落进 fallbackRule 通用兜底
+    /// 才是这里的预期行为（见 AnswerUpgradePolicyTests.testUnknownPartFallsBackToGeneralRule）；
+    /// 换成 FocusPart 会让这条「预期的兜底」看起来像遗漏了一个 case。
+    /// 另外这段规则文本逐字移植自上游 desktop/answer-upgrade-policy.mjs，
+    /// 换参数类型没有必要牵动那段不能改写措辞的文本。
     public static func guidance(part: String) -> String {
         let partRule = partGuidance[part] ?? fallbackRule
         return "\(partRule)\n\n\(sharedRules)"

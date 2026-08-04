@@ -66,7 +66,7 @@ final class ReviewArchiverTests: XCTestCase {
         let state = ReviewArchiver.archive(report: report, into: baseState(),
                                            sessionID: "s1", questionID: "q1", at: "t")
         XCTAssertEqual(state.targets.count, 1)
-        XCTAssertEqual(state.targets[0].id, "logic-explain-example")
+        XCTAssertEqual(state.targets[0].targetKey, "logic-explain-example")
         XCTAssertEqual(state.targets[0].sourceSessionId, "s1")
     }
 

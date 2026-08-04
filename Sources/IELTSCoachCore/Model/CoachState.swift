@@ -3,17 +3,32 @@ import Foundation
 public struct LearnerProfile: Codable, Equatable, Sendable {
     public var displayName: String
     public var createdAt: String
+
+    // 合成的 memberwise init 是 internal 的，App target 与 MCP target 构造不了。
+    public init(displayName: String, createdAt: String) {
+        self.displayName = displayName; self.createdAt = createdAt
+    }
 }
 
 public struct CoachSettings: Codable, Equatable, Sendable {
     public var recordingEnabled: Bool
     public var recordingConsentAt: String
+
+    // 合成的 memberwise init 是 internal 的，App target 与 MCP target 构造不了。
+    public init(recordingEnabled: Bool, recordingConsentAt: String) {
+        self.recordingEnabled = recordingEnabled; self.recordingConsentAt = recordingConsentAt
+    }
 }
 
 public struct QuestionCursor: Codable, Equatable, Sendable {
     public var part1: Int
     public var part2: Int
     public var part3: Int
+
+    // 合成的 memberwise init 是 internal 的，App target 与 MCP target 构造不了。
+    public init(part1: Int, part2: Int, part3: Int) {
+        self.part1 = part1; self.part2 = part2; self.part3 = part3
+    }
 }
 
 /// state.json 的顶层模型。字段名与上游逐字一致，全部 camelCase。

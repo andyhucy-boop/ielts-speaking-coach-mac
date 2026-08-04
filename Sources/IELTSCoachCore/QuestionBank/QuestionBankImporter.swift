@@ -4,6 +4,11 @@ public struct ImportResult: Equatable, Sendable {
     public let questions: [Question]
     public let source: QuestionSource
     public let warnings: [String]
+
+    // 合成的 memberwise init 是 internal 的，App target 与 MCP target 构造不了。
+    public init(questions: [Question], source: QuestionSource, warnings: [String]) {
+        self.questions = questions; self.source = source; self.warnings = warnings
+    }
 }
 
 public enum QuestionBankImporter {

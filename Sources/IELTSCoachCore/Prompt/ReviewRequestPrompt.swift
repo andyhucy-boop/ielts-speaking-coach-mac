@@ -6,14 +6,14 @@ public enum ReviewRequestPrompt {
         ("<<<IELTS_REVIEW_JSON:\(requestID)>>>", "<<<END_IELTS_REVIEW_JSON:\(requestID)>>>")
     }
 
-    public static func build(requestID: String, focusPart: String) -> String {
+    public static func build(requestID: String, focusPart: FocusPart) -> String {
         let (open, close) = marker(requestID: requestID)
         return """
         [SYNC_REQUEST_ID:\(requestID)]
 
         考官模式结束。现在基于刚才的完整对话生成结构化复盘。
 
-        \(AnswerUpgradePolicy.guidance(part: focusPart))
+        \(AnswerUpgradePolicy.guidance(part: focusPart.rawValue))
 
         输出要求：
         1. 只输出一个 JSON 对象，用下面两行标记严格包裹，标记前后不要有任何其他文字。

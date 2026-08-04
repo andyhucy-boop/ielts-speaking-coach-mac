@@ -2,11 +2,11 @@ import Foundation
 
 public struct SessionSetup: Equatable, Sendable {
     public let question: Question
-    public let focusPart: String          // "Part 1" | "Part 2" | "Part 3" | "full mock"
+    public let focusPart: FocusPart
     public let durationMinutes: Int
     public let goal: String               // 可为空
 
-    public init(question: Question, focusPart: String, durationMinutes: Int, goal: String) {
+    public init(question: Question, focusPart: FocusPart, durationMinutes: Int, goal: String) {
         self.question = question
         self.focusPart = focusPart
         self.durationMinutes = durationMinutes
@@ -33,21 +33,21 @@ public enum ExaminerPrompt {
     - Never promise an exact silence threshold; the Voice system controls turn detection.
     """
 
-    private static let partRules: [String: String] = [
-        "Part 1": """
+    private static let partRules: [FocusPart: String] = [
+        .part1: """
         Section rules (Part 1):
         - Ask 6–10 short questions across 2–3 everyday topics.
         - Use limited natural follow-up when an answer contains a useful personal detail.
         - Keep the section conversational but neutral.
         """,
-        "Part 2": """
+        .part2: """
         Section rules (Part 2):
         - Present one cue card.
         - Announce one minute of preparation and up to two minutes of speaking.
         - Do not supply content during preparation unless the learner requests practice support.
         - Ask one brief rounding-off question after the long turn.
         """,
-        "Part 3": """
+        .part3: """
         Section rules (Part 3):
         - Start from the Part 2 theme when possible.
         - Generate follow-ups from the learner's actual claim, not only from a fixed list.
@@ -55,7 +55,7 @@ public enum ExaminerPrompt {
         - Increase abstraction gradually.
         - If an answer is thin, probe with one neutral prompt such as "Why do you think that is?"
         """,
-        "full mock": """
+        .fullMock: """
         Section rules (full mock):
         - Run Part 1, Part 2, and Part 3 in order without pausing for feedback between them.
         - Apply each part's own timing and questioning rules.
@@ -71,16 +71,10 @@ public enum ExaminerPrompt {
     public static func build(setup: SessionSetup) -> String {
         var blocks: [String] = [contract]
 
-        if let rules = partRules[setup.focusPart] {
-            blocks.append(rules)
-        } else {
-            // focusPart 由本 App 自己填（界面上选 Part 1/2/3/full mock），不是用户输入。
-            // 出现未知值意味着调用方把字符串写错了，而静默退回 full mock 会产出一份
-            // 「看起来合理、其实是错的」考官提示词 —— 用户练了一整场才发现 Part 不对。
-            // 发布版仍退回 full mock 保证可用，但调试与测试期必须炸出来。
-            assertionFailure("未知的 focusPart：\(setup.focusPart)。合法值：Part 1 / Part 2 / Part 3 / full mock")
-            blocks.append(partRules["full mock"]!)
-        }
+        // focusPart 现在是 FocusPart 枚举，穷尽后不存在未知值：partRules 覆盖了
+        // FocusPart 的全部 case（ExaminerPromptTests 里有一条测试逐 case 验证），
+        // 不再需要运行时兜底或 assertionFailure。
+        blocks.append(partRules[setup.focusPart]!)
 
         var questionBlock = """
         Today's question (Part \(setup.question.part), topic: \(setup.question.topic)):
