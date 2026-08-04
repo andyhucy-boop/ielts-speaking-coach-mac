@@ -3,9 +3,12 @@ import Foundation
 enum DumpCommand {
     static func run(outputPath: String?) -> Int32 {
         guard let app = AXTree.appElement(bundleID: Doctor.targetBundleID) else {
-            print("❌ ChatGPT Classic 未在运行。先打开它并进入一个会话，再运行本命令。")
+            print("❌ 目标应用未在运行。")
+            print("   下一步：打开 ChatGPT（新版，bundle id \(Doctor.targetBundleID)）并进入一个会话，再运行本命令。")
             return 1
         }
+
+        AXTree.wake(app)
 
         var lines: [String] = []
         var roleCounts: [String: Int] = [:]

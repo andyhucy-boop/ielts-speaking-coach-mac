@@ -73,3 +73,33 @@ enum AXTree {
         return best
     }
 }
+
+extension AXTree {
+    /// 唤醒 Chromium 的惰性无障碍树。两个属性设置均返回错误码属正常现象，
+    /// 判据是随后能否找到 AXWebArea —— 实测树会从约 234 节点扩展到约 675 节点。
+    static func wake(_ app: AXUIElement, timeout: TimeInterval = 8.0) {
+        for flag in ["AXManualAccessibility", "AXEnhancedUserInterface"] {
+            _ = AXUIElementSetAttributeValue(app, flag as CFString, kCFBooleanTrue)
+        }
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            var found = false
+            walk(app) { node, _ in if node.role == "AXWebArea" { found = true } }
+            if found { return }
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+    }
+
+    /// 按 role 与（可选的）description 找第一个匹配元素。
+    static func findElement(role: String, description: String?,
+                            bundleID: String = Doctor.targetBundleID) -> AXUIElement? {
+        guard let app = appElement(bundleID: bundleID) else { return nil }
+        var result: AXUIElement?
+        walk(app) { node, element in
+            guard result == nil, node.role == role else { return }
+            if let want = description, node.descriptionText != want { return }
+            result = element
+        }
+        return result
+    }
+}
