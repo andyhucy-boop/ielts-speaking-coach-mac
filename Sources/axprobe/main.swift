@@ -23,6 +23,8 @@ case "deeplink":
         exit(2)
     }
     exit(DeepLinkExperiment.run(rawURL: args[1]))
+case "dump":
+    exit(DumpCommand.run(outputPath: args.count >= 2 ? args[1] : nil))
 default:
     print("未知命令：\(command)。运行 axprobe 查看用法。")
     exit(2)
