@@ -18,8 +18,8 @@ public struct ReviewLocation: Equatable, Sendable {
 public enum ReviewParser {
     /// 定界标记：<<<IELTS_REVIEW_JSON>>> / <<<START_OF_JSON>>> / <<<JSON>>>，可带 :request-id 后缀
     private static let markerPattern =
-        "<<<(?:IELTS_REVIEW_JSON|START_OF_JSON|JSON)(?::[a-z0-9-]+)?>>>([\\s\\S]*?)"
-        + "<<<(?:END_IELTS_REVIEW_JSON|END_OF_JSON|END_JSON)(?::[a-z0-9-]+)?>>>"
+        "<<<(?:IELTS_REVIEW_JSON|START_OF_JSON|JSON)(?::[a-z0-9_-]+)?>>>([\\s\\S]*?)"
+        + "<<<(?:END_IELTS_REVIEW_JSON|END_OF_JSON|END_JSON)(?::[a-z0-9_-]+)?>>>"
 
     public static func parse(_ text: String, requireAnswerUpgrades: Bool = false) throws -> JSONValue {
         let source = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -41,8 +41,8 @@ public enum ReviewParser {
         }
 
         throw requireAnswerUpgrades
-            ? CoachError.reviewIncomplete("ChatGPT已经回复，但复盘缺少完整的回答建议。请点「补生成复盘报告」重新生成。")
-            : CoachError.reviewNotFound("ChatGPT已经回复，但没有返回可识别的标准复盘JSON。请点「补生成复盘报告」重新生成。")
+            ? CoachError.reviewIncomplete("ChatGPT已经回复，但复盘缺少完整的回答建议。下一步：点「补生成复盘报告」让 ChatGPT 重新输出一次。")
+            : CoachError.reviewNotFound("ChatGPT已经回复，但没有返回可识别的标准复盘JSON。下一步：点「补生成复盘报告」让 ChatGPT 重新输出一次。")
     }
 
     public static func findAfterRequest(turns: [ConversationTurn], requestID: String,
