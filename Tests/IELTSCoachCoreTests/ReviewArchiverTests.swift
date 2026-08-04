@@ -51,6 +51,11 @@ final class ReviewArchiverTests: XCTestCase {
         // 「每次都新增一条错题记录」，issues[0] 依然是第一条、依然只含 s1，测试照样绿。
         XCTAssertEqual(state.issues.count, 1, "同一 session 重复入库不应新增错题记录")
         XCTAssertEqual(state.issues[0].sourceSessionIds, ["s1"])
+        // 同理：词汇按 basicWord 去重、重训目标按 targetKey+sourceSessionId 去重，各自的
+        // 守卫删掉后没有任何测试失败——只查内容不查数量的话，即使每次都新增一条重复记录，
+        // vocabulary[0]/targets[0] 依然是第一条、内容不变，测试照样绿。
+        XCTAssertEqual(state.vocabulary.count, 1, "同一 session 重复入库不应新增词汇记录")
+        XCTAssertEqual(state.targets.count, 1, "同一 session 重复入库不应新增重训目标记录")
     }
 
     func testAddsVocabulary() {

@@ -37,6 +37,13 @@ final class CoachStateTests: XCTestCase {
         XCTAssertEqual(state.questions[0].followups, ["Which ones?"])
     }
 
+    func testMigratesSchemaVersionBelow2To3() throws {
+        // schemaVersion < 2 时应被迁移到当前版本 3；删掉这条迁移分支后没有测试变红。
+        let old = #"{"schemaVersion":1,"learner":{"displayName":"","createdAt":"2026-01-01T00:00:00.000Z"}}"#
+        let state = try JSONDecoder().decode(CoachState.self, from: Data(old.utf8))
+        XCTAssertEqual(state.schemaVersion, 3)
+    }
+
     func testMigratesMissingOptionalFields() throws {
         // 上游 ensureWorkspace 会补齐缺失字段，解码必须容忍最小 JSON
         let minimal = #"{"schemaVersion":3,"learner":{"displayName":"","createdAt":"2026-01-01T00:00:00.000Z"}}"#

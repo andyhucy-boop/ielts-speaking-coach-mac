@@ -9,18 +9,25 @@ final class ReviewParserTests: XCTestCase {
     "changes":["补全句子结构"]}],"priority_target":{"id":"expand"}}
     """
 
+    // 诱饵：markers 之外放一个不相关但结构合法的 JSON 对象。若不这样做，marker 正则
+    // 就算完全失效（改成永不匹配），parse() 的「扫全文第一个 { 到最后一个 }」兜底
+    // 照样能把 markers 之间的 reviewJSON 原样抠出来（markers 本身不含大括号），测试
+    // 照样绿，测不出 marker 正则本身有没有起作用。诱饵的 { 会把兜底候选的起点往前拉，
+    // 跨越诱饵、marker 文本和 reviewJSON 产出非法拼接，逼 parse() 真正依赖 marker 正则。
+    private let decoy = #"{"note":"unrelated"}"#
+
     func testParsesIELTSMarkedBlock() throws {
-        let text = "<<<IELTS_REVIEW_JSON>>>\n\(reviewJSON)\n<<<END_IELTS_REVIEW_JSON>>>"
+        let text = "\(decoy)\n<<<IELTS_REVIEW_JSON>>>\n\(reviewJSON)\n<<<END_IELTS_REVIEW_JSON>>>"
         XCTAssertEqual(try ReviewParser.parse(text)["summary"], .string("ok"))
     }
 
     func testParsesStartOfJSONMarker() throws {
-        let text = "<<<START_OF_JSON>>>\n\(reviewJSON)\n<<<END_OF_JSON>>>"
+        let text = "\(decoy)\n<<<START_OF_JSON>>>\n\(reviewJSON)\n<<<END_OF_JSON>>>"
         XCTAssertEqual(try ReviewParser.parse(text)["summary"], .string("ok"))
     }
 
     func testParsesMarkerWithRequestID() throws {
-        let text = "<<<IELTS_REVIEW_JSON:sync-123>>>\n\(reviewJSON)\n<<<END_IELTS_REVIEW_JSON:sync-123>>>"
+        let text = "\(decoy)\n<<<IELTS_REVIEW_JSON:sync-123>>>\n\(reviewJSON)\n<<<END_IELTS_REVIEW_JSON:sync-123>>>"
         XCTAssertEqual(try ReviewParser.parse(text)["summary"], .string("ok"))
     }
 
@@ -37,6 +44,15 @@ final class ReviewParserTests: XCTestCase {
         XCTAssertEqual(try ReviewParser.parse(single)["answer_upgrades"]?.arrayValue?.count, 1)
     }
 
+    // normalize() 对 answer_upgrades 的 default 分支：既不是数组也不是对象（这里是
+    // null）时应规范化成空数组，而不是原样保留 null 往下传。
+    func testNormalizesNullAnswerUpgradesToEmptyArray() throws {
+        let withNullUpgrades =
+            #"{"summary":"ok","must_correct":[],"answer_upgrades":null,"priority_target":{"id":"t"}}"#
+        let parsed = try ReviewParser.parse(withNullUpgrades)
+        XCTAssertEqual(parsed["answer_upgrades"], .array([]))
+    }
+
     func testRepairsSingleQuotesAndTrailingComma() throws {
         let messy = "{'summary':'ok','must_correct':[],'priority_target':{'id':'expand'},}"
         XCTAssertEqual(try ReviewParser.parse(messy)["summary"], .string("ok"))
@@ -45,19 +61,29 @@ final class ReviewParserTests: XCTestCase {
     func testFindsExistingReviewFromLatestAssistantTurn() {
         let turns = [
             ConversationTurn(role: "user", text: "answer"),
-            ConversationTurn(role: "assistant", text: "<<<JSON>>>\(reviewJSON)<<<END_JSON>>>")
+            ConversationTurn(role: "assistant", text: "\(decoy)<<<JSON>>>\(reviewJSON)<<<END_JSON>>>")
         ]
         XCTAssertEqual(ReviewParser.findExisting(turns: turns)?.index, 1)
     }
 
     func testFindsReviewSplitAcrossTurnsAfterRequest() {
+        // 加固两处，缺一都会让这条测试测不到它该测的东西：
+        // 1) markers 外带诱饵——理由同上，防止兜底的大括号扫描绕过 marker 正则。
+        // 2) reviewJSON 真正劈成两半分放两条相邻 assistant turn——原版整段 reviewJSON
+        //    完整落在单条 turn 上，逐条 parse 就能成功，根本走不到 findAfterRequest
+        //    里「拼起来再试」那段 join 逻辑（第 73-78 行），删掉那段代码也不会有测试变红。
+        //    这里在 "answer_upgrades" 键之前切开：前半段不含任何 "}"，单独解析
+        //    （含 JSONRepair 兜底修复）必然失败；后半段不以 "{" 开头，单独解析、
+        //    以及原始大括号扫描都必然失败——两条 turn 单独都过不了，逼真正走到 join。
+        let boundary = reviewJSON.range(of: "\"answer_upgrades\"")!.lowerBound
+        let firstHalf = String(reviewJSON[..<boundary])
+        let secondHalf = String(reviewJSON[boundary...])
         let turns = [
             ConversationTurn(role: "assistant", text: "old reply"),
             ConversationTurn(role: "user", text: "generate report [SYNC_REQUEST_ID:sync-123]"),
             ConversationTurn(role: "assistant", text: "本次训练已结束"),
-            ConversationTurn(role: "assistant", text: "<<<IELTS_REVIEW_JSON:sync-123>>>"),
-            ConversationTurn(role: "assistant", text: reviewJSON),
-            ConversationTurn(role: "assistant", text: "<<<END_IELTS_REVIEW_JSON:sync-123>>>")
+            ConversationTurn(role: "assistant", text: "\(decoy)\n<<<IELTS_REVIEW_JSON:sync-123>>>\n\(firstHalf)"),
+            ConversationTurn(role: "assistant", text: "\(secondHalf)\n<<<END_IELTS_REVIEW_JSON:sync-123>>>")
         ]
         XCTAssertEqual(ReviewParser.findAfterRequest(turns: turns, requestID: "sync-123")?
             .report["summary"], .string("ok"))
@@ -73,6 +99,24 @@ final class ReviewParserTests: XCTestCase {
 
     func testRejectsOrdinaryChatReply() {
         XCTAssertThrowsError(try ReviewParser.parse("普通聊天回复"))
+    }
+
+    // looksLikeReview 有 4 条判据（must_correct / natural_upgrades / logic_feedback /
+    // priority_target），命中任意一条就算复盘。下面 3 条各自只含其中一条判据、且刻意
+    // 不含 must_correct，逼这 3 条判据本身都被真正用到，而不是全指望 must_correct 兜底。
+    func testRecognizesReviewByNaturalUpgradesAlone() throws {
+        let text = #"{"summary":"ok","natural_upgrades":[{"basic":"good","better":"great"}]}"#
+        XCTAssertEqual(try ReviewParser.parse(text)["summary"], .string("ok"))
+    }
+
+    func testRecognizesReviewByLogicFeedbackAlone() throws {
+        let text = #"{"summary":"ok","logic_feedback":["补一个原因和例子"]}"#
+        XCTAssertEqual(try ReviewParser.parse(text)["summary"], .string("ok"))
+    }
+
+    func testRecognizesReviewByPriorityTargetAlone() throws {
+        let text = #"{"summary":"ok","priority_target":{"id":"expand"}}"#
+        XCTAssertEqual(try ReviewParser.parse(text)["summary"], .string("ok"))
     }
 
     func testRejectsReviewMissingAnswerUpgradesWhenRequired() {
@@ -98,21 +142,15 @@ final class ReviewParserTests: XCTestCase {
 
     func testAcceptsRequestIDWithUnderscoreAndUppercase() throws {
         for requestID in ["sync_123", "8B7F2A1C-4D5E-6789-ABCD-EF0123456789"] {
-            let text = "<<<IELTS_REVIEW_JSON:\(requestID)>>>\n\(reviewJSON)\n<<<END_IELTS_REVIEW_JSON:\(requestID)>>>"
+            let text = "\(decoy)\n<<<IELTS_REVIEW_JSON:\(requestID)>>>\n\(reviewJSON)\n<<<END_IELTS_REVIEW_JSON:\(requestID)>>>"
             XCTAssertEqual(try ReviewParser.parse(text)["summary"], .string("ok"),
                            "request-id 未被 marker 正则接受：\(requestID)")
         }
     }
 
-    // 诊断用：上面那条测试其实测不出 marker 正则本身有没有认出下划线，因为 parse()
-    // 还有「扫全文第一个 { 到最后一个 } 」的兜底候选——markers 之间只包着纯净的
-    // reviewJSON、markers 本身不含大括号，所以就算 marker 正则完全没匹配上，
-    // 兜底候选照样能抠出同一段合法 JSON，测试照样绿，掩盖了正则的问题。
-    // 这里在 markers 外面放一个不相关但结构合法的 JSON 对象作诱饵，破坏兜底候选
-    // （首尾大括号之间会把诱饵、marker 文本、reviewJSON 全部囊括进去，不再是合法
-    // JSON），逼 parse() 真正依赖 marker 正则本身取出内容。
+    // 诊断用：验证 marker 正则本身认下划线 request-id，不靠兜底候选救场（原理见
+    // 上面 testAcceptsRequestIDWithUnderscoreAndUppercase 现在共用的 decoy 说明）。
     func testMarkerRegexAloneAcceptsUnderscoreRequestID() throws {
-        let decoy = #"{"note":"unrelated"}"#
         let text = "\(decoy)\n<<<IELTS_REVIEW_JSON:sync_123>>>\n\(reviewJSON)\n<<<END_IELTS_REVIEW_JSON:sync_123>>>"
         XCTAssertEqual(try ReviewParser.parse(text)["summary"], .string("ok"))
     }

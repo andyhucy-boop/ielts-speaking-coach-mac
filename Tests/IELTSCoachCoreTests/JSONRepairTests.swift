@@ -41,9 +41,19 @@ final class JSONRepairTests: XCTestCase {
         XCTAssertEqual(value["a"], .number(1))
     }
 
-    func testDoesNotTouchQuotesInsideStrings() throws {
-        let value = try repaired(#"{"note":"it's fine"}"#)
-        XCTAssertEqual(value["note"], .string("it's fine"))
+    // ⚠️ 原版输入 {"note":"it's fine"} 本就是合法 JSON（单引号出现在双引号字符串内部，
+    // 对 JSON 语法完全无害），repair() 开头「已合法就原样返回」直接短路，根本没有走进
+    // 逐字符扫描循环，跟 testLeavesValidJSONUnchanged 测的是同一件事。换成本来就非法、
+    // 必须靠单引号识别（stringDelimiter == "'" 分支）才能修好的输入：整个对象用单引号
+    // 包裹，值内部还嵌着需要转义的双引号，逼 repair() 真正走进
+    // `character == "\"" && stringDelimiter == "'"` 那条转义分支。
+    func testEscapesDoubleQuotesInsideSingleQuotedStrings() throws {
+        let messy = #"{'note':'it is "fine"'}"#
+        let repairedText = JSONRepair.repair(messy)
+        XCTAssertTrue(repairedText.contains(#"\"fine\""#),
+                      "单引号字符串内部的双引号没有被转义：\(repairedText)")
+        let value = try JSONValue.decode(from: repairedText)
+        XCTAssertEqual(value["note"], .string(#"it is "fine""#))
     }
 
     func testLeavesValidJSONUnchanged() {

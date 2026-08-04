@@ -102,6 +102,19 @@ final class QuestionBankImporterTests: XCTestCase {
                        "在前面插入一个 topic 后，原有题目的 id 变了 —— 二次导入会毁掉练习记录")
     }
 
+    func testWarnsOnMissingID() throws {
+        // 必须让 part 合法（1/2/3），否则「缺少 id」这条警告几乎不可达——
+        // 缺 id 的行通常 part 也是空的，会被 part 分支先拦下（见源码注释）。
+        let csv = """
+        id,part,topic,prompt,followups
+        ,1,Home,A question with no id,
+        """
+        let result = try QuestionBankImporter.importCSV(csv, sourceTitle: "t")
+        XCTAssertTrue(result.warnings.contains { $0.contains("缺少 id") },
+                      "缺少 id 的行没有产生警告，实际警告：\(result.warnings)")
+        XCTAssertTrue(result.questions.isEmpty)
+    }
+
     func testWarnsOnUnterminatedQuote() throws {
         let csv = """
         id,part,topic,prompt,followups

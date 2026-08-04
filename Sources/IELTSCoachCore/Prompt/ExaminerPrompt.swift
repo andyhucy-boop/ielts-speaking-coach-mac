@@ -33,34 +33,42 @@ public enum ExaminerPrompt {
     - Never promise an exact silence threshold; the Voice system controls turn detection.
     """
 
-    private static let partRules: [FocusPart: String] = [
-        .part1: """
-        Section rules (Part 1):
-        - Ask 6–10 short questions across 2–3 everyday topics.
-        - Use limited natural follow-up when an answer contains a useful personal detail.
-        - Keep the section conversational but neutral.
-        """,
-        .part2: """
-        Section rules (Part 2):
-        - Present one cue card.
-        - Announce one minute of preparation and up to two minutes of speaking.
-        - Do not supply content during preparation unless the learner requests practice support.
-        - Ask one brief rounding-off question after the long turn.
-        """,
-        .part3: """
-        Section rules (Part 3):
-        - Start from the Part 2 theme when possible.
-        - Generate follow-ups from the learner's actual claim, not only from a fixed list.
-        - Move through explanation, comparison, causes, consequences, and evaluation.
-        - Increase abstraction gradually.
-        - If an answer is thin, probe with one neutral prompt such as "Why do you think that is?"
-        """,
-        .fullMock: """
-        Section rules (full mock):
-        - Run Part 1, Part 2, and Part 3 in order without pausing for feedback between them.
-        - Apply each part's own timing and questioning rules.
-        """
-    ]
+    // 用 switch 而非字典 + 强制解包：FocusPart 加 case 却忘了给规则时，
+    // 编译期就会因为 switch 不再穷尽而报错，而不是等到运行时才 crash。
+    private static func partRules(for focusPart: FocusPart) -> String {
+        switch focusPart {
+        case .part1:
+            return """
+            Section rules (Part 1):
+            - Ask 6–10 short questions across 2–3 everyday topics.
+            - Use limited natural follow-up when an answer contains a useful personal detail.
+            - Keep the section conversational but neutral.
+            """
+        case .part2:
+            return """
+            Section rules (Part 2):
+            - Present one cue card.
+            - Announce one minute of preparation and up to two minutes of speaking.
+            - Do not supply content during preparation unless the learner requests practice support.
+            - Ask one brief rounding-off question after the long turn.
+            """
+        case .part3:
+            return """
+            Section rules (Part 3):
+            - Start from the Part 2 theme when possible.
+            - Generate follow-ups from the learner's actual claim, not only from a fixed list.
+            - Move through explanation, comparison, causes, consequences, and evaluation.
+            - Increase abstraction gradually.
+            - If an answer is thin, probe with one neutral prompt such as "Why do you think that is?"
+            """
+        case .fullMock:
+            return """
+            Section rules (full mock):
+            - Run Part 1, Part 2, and Part 3 in order without pausing for feedback between them.
+            - Apply each part's own timing and questioning rules.
+            """
+        }
+    }
 
     private static let ending = """
     When the session ends, say exactly:
@@ -70,11 +78,7 @@ public enum ExaminerPrompt {
 
     public static func build(setup: SessionSetup) -> String {
         var blocks: [String] = [contract]
-
-        // focusPart 现在是 FocusPart 枚举，穷尽后不存在未知值：partRules 覆盖了
-        // FocusPart 的全部 case（ExaminerPromptTests 里有一条测试逐 case 验证），
-        // 不再需要运行时兜底或 assertionFailure。
-        blocks.append(partRules[setup.focusPart]!)
+        blocks.append(partRules(for: setup.focusPart))
 
         var questionBlock = """
         Today's question (Part \(setup.question.part), topic: \(setup.question.topic)):

@@ -13,6 +13,14 @@ final class DataDirectoryTests: XCTestCase {
         XCTAssertEqual(directory.root.path, "/tmp/ielts-test")
     }
 
+    func testWhitespaceOnlyEnvironmentOverrideFallsBackToApplicationSupport() {
+        // trim + isEmpty 的回落删掉后没有测试失败：空白字符串会被当成一个合法的
+        // 自定义目录（例如 URL(fileURLWithPath: "   ")），而不是回落到默认目录。
+        let directory = DataDirectory.resolve(environment: ["IELTS_SPEAKING_DATA_DIR": "   "])
+        XCTAssertTrue(directory.root.path.hasSuffix("Application Support/IELTS Speaking Coach"),
+                      "空白环境变量没有回落到默认目录，实际：\(directory.root.path)")
+    }
+
     func testDerivedPaths() {
         let directory = DataDirectory.resolve(
             environment: ["IELTS_SPEAKING_DATA_DIR": "/tmp/ielts-test"])
