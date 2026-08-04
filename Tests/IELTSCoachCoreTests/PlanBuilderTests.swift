@@ -50,7 +50,9 @@ final class PlanBuilderTests: XCTestCase {
     }
 
     func testDayCompletesOnlyWhenAllItsQuestionsDone() throws {
-        var plan = try PlanBuilder.build(questions: questions(4), lengthDays: 2,
+        // 必须用 7/14/30 之一 —— supportedLengths 只接受这三档（上游的产品规则）。
+        // 14 题分 7 天，每天恰好 2 题，同样能验「当天题目全做完才算完成」。
+        var plan = try PlanBuilder.build(questions: questions(14), lengthDays: 7,
                                          createdAt: "2026-08-04T00:00:00Z")
         XCTAssertEqual(plan.days[0].questionIds.count, 2)
         plan = PlanBuilder.markCompleted(plan: plan, questionID: plan.days[0].questionIds[0])
