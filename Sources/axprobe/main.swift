@@ -17,6 +17,12 @@ guard let command = args.first else {
 switch command {
 case "doctor":
     exit(Doctor.run())
+case "deeplink":
+    guard args.count >= 2 else {
+        print("用法：axprobe deeplink <url>")
+        exit(2)
+    }
+    exit(DeepLinkExperiment.run(rawURL: args[1]))
 default:
     print("未知命令：\(command)。运行 axprobe 查看用法。")
     exit(2)
