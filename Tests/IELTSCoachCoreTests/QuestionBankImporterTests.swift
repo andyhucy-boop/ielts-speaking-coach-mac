@@ -68,4 +68,17 @@ final class QuestionBankImporterTests: XCTestCase {
         XCTAssertEqual(merged.count, 2)
         XCTAssertEqual(merged.first { $0.id == "q1" }?.topic, "New")
     }
+
+    func testMergeSurvivesDuplicateIDsWithinIncoming() {
+        let existing = [Question(id: "q1", part: 1, topic: "Old", prompt: "old")]
+        let incoming = [
+            Question(id: "dup", part: 1, topic: "第一次", prompt: "a"),
+            Question(id: "dup", part: 1, topic: "第二次", prompt: "b"),   // 同一批内重复
+            Question(id: "q2", part: 2, topic: "X", prompt: "x")
+        ]
+        let merged = QuestionBankImporter.merge(existing: existing, incoming: incoming)
+        XCTAssertEqual(merged.count, 3, "重复 id 应被去重，不应崩溃")
+        XCTAssertEqual(Set(merged.map(\.id)), ["q1", "dup", "q2"])
+        XCTAssertEqual(merged.first { $0.id == "dup" }?.topic, "第二次", "同 id 应后者覆盖前者")
+    }
 }

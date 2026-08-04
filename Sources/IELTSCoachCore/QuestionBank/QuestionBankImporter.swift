@@ -30,13 +30,15 @@ public enum QuestionBankImporter {
         var warnings: [String] = []
 
         for row in rows.dropFirst() where row.contains(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) {
+            // 先查 id 再查 part：反过来的话「缺少 id」这条警告几乎不可达，
+            // 因为缺 id 的行通常 part 也是空的，会被 part 分支先拦下。
             let id = value(row, "id")
-            guard let part = Int(value(row, "part")), (1...3).contains(part) else {
-                warnings.append("跳过第 \(id.isEmpty ? "(无 id)" : id) 行：part 必须是 1、2 或 3。")
+            guard !id.isEmpty else {
+                warnings.append("跳过一行：缺少 id。下一步：给每道题一个唯一编号，例如 p1-home-001。")
                 continue
             }
-            guard !id.isEmpty else {
-                warnings.append("跳过一行：缺少 id。")
+            guard let part = Int(value(row, "part")), (1...3).contains(part) else {
+                warnings.append("跳过第 \(id) 行：part 必须是 1、2 或 3。下一步：把该行的 part 改成 1、2 或 3。")
                 continue
             }
             let followups = value(row, "followups")
@@ -152,14 +154,22 @@ public enum QuestionBankImporter {
 
     /// 按 id 去重，同 id 时新导入的覆盖旧的；保持「已有在前、新增在后」的稳定顺序。
     public static func merge(existing: [Question], incoming: [Question]) -> [Question] {
-        var byID = Dictionary(uniqueKeysWithValues: incoming.map { ($0.id, $0) })
+        // ⚠️ 不能用 Dictionary(uniqueKeysWithValues:) —— 用户手工拼题库时同一批内
+        // 出现重复 id 极常见（复制粘贴忘改编号），那个构造器遇到重复 key 会直接
+        // fatalError 闪退整个 App，而不是报错。逐个赋值，同 id 后者覆盖前者。
+        var byID: [String: Question] = [:]
+        for question in incoming { byID[question.id] = question }
         var merged: [Question] = []
         for question in existing {
             merged.append(byID.removeValue(forKey: question.id) ?? question)
         }
-        for question in incoming where byID[question.id] != nil {
-            merged.append(question)
-            byID.removeValue(forKey: question.id)
+        // 用 byID.removeValue 取值而不是直接 append 循环变量 question：
+        // incoming 内若有重复 id，循环变量会是「第一次出现的那份」，但
+        // byID 里存的是「同一批内最后一份」。必须取 byID 里的，否则重复 id
+        // 场景下会错误地保留第一份而不是按约定的「后者覆盖前者」。
+        for question in incoming {
+            guard let deduplicated = byID.removeValue(forKey: question.id) else { continue }
+            merged.append(deduplicated)
         }
         return merged
     }

@@ -39,4 +39,11 @@ public struct QuestionSource: Codable, Equatable, Sendable {
     public var importedAt: String
     public var importLevel: String
     public var questionCount: Int
+
+    // 合成的 memberwise init 是 internal 的，App target 与 MCP target 构造不了。
+    public init(title: String, sourceUrl: String, importedAt: String,
+                importLevel: String, questionCount: Int) {
+        self.title = title; self.sourceUrl = sourceUrl; self.importedAt = importedAt
+        self.importLevel = importLevel; self.questionCount = questionCount
+    }
 }
