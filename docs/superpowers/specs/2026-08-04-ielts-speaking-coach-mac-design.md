@@ -92,6 +92,7 @@ IELTSCoach/
 | `State` | `state.json` 的 Swift 模型，`schemaVersion: 3` | `mcp/server.mjs` 的 `emptyState()` 等 |
 | `StateStore` | 原子读写、文件锁、变更通知 | `server.mjs` 数据层 |
 | `ReviewParser` | 定界块提取 → JSON 容错修复 → schema 校验 | `desktop/review-parser.mjs` |
+| `ReviewArchiver` | 复盘入库：归并错题与词汇、提取重训目标、推进计划进度（第 5 节第 12–16 步）| `server.mjs` 的 `save_session_review` |
 | `ExaminerPrompt` | 按 Part/题目/时长/单点目标组装考官提示词 | `references/examiner-protocol.md` |
 | `ReviewRequestPrompt` | 组装「请输出结构化复盘」的追加指令 | 同上 |
 | `QuestionBank` | CSV / JSON 题库解析、校验、去重、来源标记 | `server.mjs` 题库部分 |
