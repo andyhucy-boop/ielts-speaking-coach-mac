@@ -46,7 +46,7 @@ Chromium 的无障碍树是**惰性构建**的。初次探测仅 234 节点、�
 
 | 用途 | 节点 |
 |---|---|
-| 启动语音 | `AXButton desc="New voice chat"` |
+| 启动语音 | `AXButton`，desc 为 `"Start voice chat"` 或 `"Start new voice chat"`（**标签不稳定，见 2.3.1**）|
 | 结束语音 | `AXButton desc="Stop voice chat"` |
 | 语音进行中标志 | `AXImage desc="Voice chat active"` |
 | 静音状态 | `AXCheckBox desc="Mute voice chat"` / `"Unmute microphone"` / `"Mute speakers"` |
@@ -55,6 +55,29 @@ Chromium 的无障碍树是**惰性构建**的。初次探测仅 234 节点、�
 | 对话文本 | `AXStaticText`（考官原话 166 字符逐字读出）|
 
 **输入框可写：** 对 `AXTextArea` 设置 `kAXValueAttribute` 返回码 0，写入即时生效，`AXUIElementIsAttributeSettable` 亦返回 true。
+
+**`kAXPressAction` 可用：** 实测按下语音按钮真实进入语音会话，按下 `Stop voice chat` 真实结束（截图与 AX 树双重确认）。
+
+#### 2.3.1 按标签匹配元素是不安全的 —— 必须结构化判别
+
+实测踩到一次**假阳性**：按 `desc == "New voice chat"` 精确匹配并取深度优先第一个命中，返回成功（`kAXPressAction` 返回 0），但点中的是**侧边栏里一条同名的历史会话**，语音根本没启动。
+
+两个独立的失效原因：
+
+1. **控制按钮自身的标签会变。** 同一台机器上先后观察到 `Start new voice chat` 与 `Start voice chat` 两种 desc，均非最初记录的 `New voice chat`。
+2. **侧边栏会话名会与控制标签撞车，且这个撞车是本产品自己制造的。** ChatGPT 每开一次语音就自动生成一条名为 `New voice chat` 的会话记录，还会自动改名成 `Voice Chat Title Generation` 之类。用得越久，侧边栏里的同名项越多。会话名由用户和 ChatGPT 生成，本质上不可信。
+
+**结构判别规则（稳定，且与标签文字无关）：**
+
+| | 真控制按钮 | 侧边栏会话行 |
+|---|---|---|
+| 子节点 | 恰好一个，且为 `AXImage` | 嵌套 `AXButton`（含 `Pin chat`、`Archive chat`）|
+| 是否含文本后代 | 否（纯图标）| 是（显示会话标题）|
+| 相邻元素 | `AXButton desc="Dictate"` | 会话列表中的其他会话 |
+
+因此 `AXDriver` 查找控制按钮时**必须**同时满足：`role == "AXButton"`、desc 命中候选标签集合、**且唯一子节点为 `AXImage`**。仅凭标签匹配是缺陷。
+
+**由此确立的规则：任何「按标签找元素再操作」的代码，都必须有结构约束兜底，并且在操作后验证预期状态真的发生了**（例如按下启动语音后应能观察到 `Voice chat active` 出现）。返回码为 0 不等于动作生效。
 
 ### 2.4 输入框与语音共存
 
