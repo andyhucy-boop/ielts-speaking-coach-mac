@@ -31,6 +31,7 @@ public enum ReviewParser {
         var candidates: [String] = []
 
         if let marked = firstMarkedBlock(in: source) { candidates.append(marked) }
+        if let fenced = firstFencedBlock(in: source) { candidates.append(fenced) }
         candidates.append(strippingCodeFence(source))
         if let first = source.firstIndex(of: "{"), let last = source.lastIndex(of: "}"), first < last {
             candidates.append(String(source[first...last]))
@@ -93,6 +94,19 @@ public enum ReviewParser {
 
     private static func firstMarkedBlock(in source: String) -> String? {
         guard let regex = try? NSRegularExpression(pattern: markerPattern, options: [.caseInsensitive]),
+              let match = regex.firstMatch(in: source, range: NSRange(source.startIndex..., in: source)),
+              match.numberOfRanges > 1,
+              let range = Range(match.range(at: 1), in: source) else { return nil }
+        return String(source[range]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// 在全文任意位置搜索 ``` 代码围栏并取出其中内容。
+    /// **不能用 hasPrefix/hasSuffix** —— ChatGPT 最常见的输出是「一段说明文字 + 代码围栏」，
+    /// 围栏并不在整段文本的开头，那样写这条路径实际是死的。
+    private static let fencePattern = "```(?:json)?\\s*([\\s\\S]*?)```"
+
+    private static func firstFencedBlock(in source: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: fencePattern, options: [.caseInsensitive]),
               let match = regex.firstMatch(in: source, range: NSRange(source.startIndex..., in: source)),
               match.numberOfRanges > 1,
               let range = Range(match.range(at: 1), in: source) else { return nil }

@@ -36,6 +36,17 @@ final class ReviewParserTests: XCTestCase {
         XCTAssertEqual(try ReviewParser.parse(text)["summary"], .string("ok"))
     }
 
+    // 真实场景：ChatGPT 输出代码围栏前带一段说明文字，且说明文字本身含花括号
+    // （例如解释「格式形如 {...}」）。strippingCodeFence 用 hasPrefix/hasSuffix
+    // 判断整个字符串的头尾，说明文字一旦不在开头，前缀剥离完全不触发；候选 3
+    // （首尾大括号扫描）又会从说明文字里的 "{" 一路扫到围栏内 reviewJSON 的
+    // "}"，跨越两段拼出非法内容。两条路径都救不了，逼 parse() 必须能在全文
+    // 任意位置识别代码围栏才能通过。
+    func testParsesFencedBlockPrecededByProseContainingBrace() throws {
+        let text = "复盘格式形如 {\"summary\":\"...\"}，以下是本次结果：\n```json\n\(reviewJSON)\n```"
+        XCTAssertEqual(try ReviewParser.parse(text)["summary"], .string("ok"))
+    }
+
     func testNormalizesSingleAnswerUpgradeObjectToArray() throws {
         let single = """
         {"summary":"ok","must_correct":[],"answer_upgrades":{"question":"Why?",\
