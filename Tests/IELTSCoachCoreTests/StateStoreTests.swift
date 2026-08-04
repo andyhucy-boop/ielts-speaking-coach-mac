@@ -61,4 +61,15 @@ final class StateStoreTests: XCTestCase {
             XCTAssertTrue("\(error)".contains("训练数据文件已损坏"))
         }
     }
+
+    func testDoesNotLeaveTemporaryFilesAfterSuccessfulWrites() throws {
+        let store = StateStore(directory: directory)
+        for index in 0..<5 {
+            try store.mutate { $0.learner.displayName = "写入\(index)" }
+        }
+        let leftovers = try FileManager.default
+            .contentsOfDirectory(atPath: directory.root.path)
+            .filter { $0.hasSuffix(".tmp") }
+        XCTAssertTrue(leftovers.isEmpty, "残留了临时文件：\(leftovers)")
+    }
 }

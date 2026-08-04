@@ -50,8 +50,12 @@ public final class StateStore: @unchecked Sendable {
         let data = try encoder.encode(state)
 
         let temporary = directory.root.appending(path: ".state.json.\(UUID().uuidString).tmp")
+        // replaceItemAt 成功时临时文件已被移走，这里的清理是 no-op；
+        // 失败时（磁盘满、权限等）则确保不在用户数据目录里留下孤儿 .tmp 文件。
+        defer { try? FileManager.default.removeItem(at: temporary) }
         try data.write(to: temporary, options: .atomic)
-        // rename 是同一卷内的原子操作，读者永远看不到半截文件
+        // rename 是同一卷内的原子操作，读者永远看不到半截文件。
+        // temporary 与 stateFile 同为 directory.root 的直接子项，必然同卷，原子性成立。
         _ = try FileManager.default.replaceItemAt(directory.stateFile, withItemAt: temporary)
     }
 
@@ -67,6 +71,10 @@ public final class StateStore: @unchecked Sendable {
         }
         defer { close(descriptor) }
 
+        // 刻意使用阻塞的 flock（不加 LOCK_NB）。审查裁定：临界区是 KB 级 JSON 的
+        // 毫秒级读改写，持锁进程崩溃时 OS 会自动释放，不存在真死锁；
+        // spec 第 6 节「禁止无限等待」针对的是 AX 树、外部应用那类无界等待，
+        // 本地磁盘 I/O 是有界的。不要改成 LOCK_NB + 超时重试。
         guard flock(descriptor, exclusive ? LOCK_EX : LOCK_SH) == 0 else {
             throw CoachError.stateUnreadable(
                 "训练数据正被另一个进程占用，且等待失败。下一步：关闭其他正在运行的实例后重试。")
