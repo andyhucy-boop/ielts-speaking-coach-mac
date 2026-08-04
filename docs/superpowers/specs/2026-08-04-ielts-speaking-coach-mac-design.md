@@ -75,7 +75,17 @@ Chromium 的无障碍树是**惰性构建**的。初次探测仅 234 节点、�
 | 是否含文本后代 | 否（纯图标）| 是（显示会话标题）|
 | 相邻元素 | `AXButton desc="Dictate"` | 会话列表中的其他会话 |
 
-因此 `AXDriver` 查找控制按钮时**必须**同时满足：`role == "AXButton"`、desc 命中候选标签集合、**且唯一子节点为 `AXImage`**。仅凭标签匹配是缺陷。
+因此 `AXDriver` 查找控制元素时**必须**同时满足：role 为 `AXButton` 或 `AXCheckBox`、desc 命中候选标签集合、**且子节点恰好一个且为 `AXImage`**。仅凭标签匹配是缺陷。
+
+**该结构规则的适用范围已实测验证覆盖全部语音控件**，不止按钮：
+
+| 控件 | role | subrole | 子节点 |
+|---|---|---|---|
+| `Stop voice chat` | `AXButton` | — | 1 × `AXImage` |
+| `Mute speakers` | `AXCheckBox` | `AXToggleButton` | 1 × `AXImage` |
+| `Mute microphone` | `AXCheckBox` | `AXToggleButton` | 1 × `AXImage` |
+
+静音类控件另带 `subrole=AXToggleButton`，可作为额外的判别信号；其 `value` 字段（`0`/`1`）即当前静音状态，无需另找指示器。
 
 **由此确立的规则：任何「按标签找元素再操作」的代码，都必须有结构约束兜底，并且在操作后验证预期状态真的发生了**（例如按下启动语音后应能观察到 `Voice chat active` 出现）。返回码为 0 不等于动作生效。
 
