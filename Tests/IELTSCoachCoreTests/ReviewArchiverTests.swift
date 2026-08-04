@@ -47,6 +47,9 @@ final class ReviewArchiverTests: XCTestCase {
                                            sessionID: "s1", questionID: "q1", at: "t1")
         state = ReviewArchiver.archive(report: report, into: state,
                                        sessionID: "s1", questionID: "q1", at: "t2")
+        // 这条断言不能省：只查 sourceSessionIds 的话，即使归并逻辑退化成
+        // 「每次都新增一条错题记录」，issues[0] 依然是第一条、依然只含 s1，测试照样绿。
+        XCTAssertEqual(state.issues.count, 1, "同一 session 重复入库不应新增错题记录")
         XCTAssertEqual(state.issues[0].sourceSessionIds, ["s1"])
     }
 

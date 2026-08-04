@@ -71,7 +71,16 @@ public enum ExaminerPrompt {
     public static func build(setup: SessionSetup) -> String {
         var blocks: [String] = [contract]
 
-        blocks.append(partRules[setup.focusPart] ?? partRules["full mock"]!)
+        if let rules = partRules[setup.focusPart] {
+            blocks.append(rules)
+        } else {
+            // focusPart 由本 App 自己填（界面上选 Part 1/2/3/full mock），不是用户输入。
+            // 出现未知值意味着调用方把字符串写错了，而静默退回 full mock 会产出一份
+            // 「看起来合理、其实是错的」考官提示词 —— 用户练了一整场才发现 Part 不对。
+            // 发布版仍退回 full mock 保证可用，但调试与测试期必须炸出来。
+            assertionFailure("未知的 focusPart：\(setup.focusPart)。合法值：Part 1 / Part 2 / Part 3 / full mock")
+            blocks.append(partRules["full mock"]!)
+        }
 
         var questionBlock = """
         Today's question (Part \(setup.question.part), topic: \(setup.question.topic)):
