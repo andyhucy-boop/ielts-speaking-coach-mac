@@ -81,4 +81,35 @@ final class QuestionBankImporterTests: XCTestCase {
         XCTAssertEqual(Set(merged.map(\.id)), ["q1", "dup", "q2"])
         XCTAssertEqual(merged.first { $0.id == "dup" }?.topic, "第二次", "同 id 应后者覆盖前者")
     }
+
+    func testJSONImportProducesPositionIndependentIDs() throws {
+        let makeJSON: (Bool) -> String = { withExtraTopicFirst in
+            let extra = withExtraTopicFirst
+                ? #"{"raw":"新插入的话题","questions":["A brand new question?"]},"#
+                : ""
+            return """
+            {"title":"t","sourceUrl":"","importedAt":"2026-08-04T00:00:00.000Z",
+             "importLevel":"full-question",
+             "part1":[\(extra){"raw":"Daily routines","questions":["What part do you enjoy most?"]}]}
+            """
+        }
+        let first = try QuestionBankImporter.importJSON(makeJSON(false), sourceTitle: "t")
+        let second = try QuestionBankImporter.importJSON(makeJSON(true), sourceTitle: "t")
+
+        let originalID = try XCTUnwrap(first.questions.first { $0.topic == "Daily routines" }?.id)
+        let afterInsertID = try XCTUnwrap(second.questions.first { $0.topic == "Daily routines" }?.id)
+        XCTAssertEqual(originalID, afterInsertID,
+                       "在前面插入一个 topic 后，原有题目的 id 变了 —— 二次导入会毁掉练习记录")
+    }
+
+    func testWarnsOnUnterminatedQuote() throws {
+        let csv = """
+        id,part,topic,prompt,followups
+        p1-a-001,1,Home,"这条题干的引号没有闭合,
+        p1-a-002,1,Home,正常的题目,
+        """
+        let result = try QuestionBankImporter.importCSV(csv, sourceTitle: "t")
+        XCTAssertTrue(result.warnings.contains { $0.contains("双引号没有闭合") },
+                      "未闭合引号没有产生警告，题目会静默丢失。实际警告：\(result.warnings)")
+    }
 }
