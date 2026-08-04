@@ -102,4 +102,19 @@ extension AXTree {
         }
         return result
     }
+
+    /// 判断元素是否为"纯图标控制按钮"结构：唯一子节点、且该子节点 role 为 AXImage。
+    /// 背景：真正的语音开关一类控制按钮长这样；而侧边栏会话行、列表项等即使
+    /// description 恰好撞名，结构上也不会是这个形状（比如内部还嵌套着
+    /// "Pin chat"/"Archive chat" 等子按钮）。用结构而不是文字来判定，
+    /// 可以避免把同名的历史记录条目误当成控制按钮按下去。
+    static func isIconOnlyControl(_ element: AXUIElement) -> Bool {
+        let kids = children(element)
+        return kids.count == 1 && string(kids[0], kAXRoleAttribute as String) == "AXImage"
+    }
+
+    /// 返回元素直接子节点的 role 列表，供诊断信息使用。
+    static func childRoles(_ element: AXUIElement) -> [String] {
+        children(element).map { string($0, kAXRoleAttribute as String) }
+    }
 }

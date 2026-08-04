@@ -9,7 +9,6 @@ guard let command = args.first else {
       axprobe doctor              检查环境是否就绪
       axprobe press <desc>        按下指定 description 的按钮（实测用）
       axprobe dump [文件路径]      dump 目标应用（ChatGPT 新版）的完整 AX 树
-      axprobe watch [秒数]         持续观察 AX 树变化（用于语音状态探测）
     """)
     exit(2)
 }
