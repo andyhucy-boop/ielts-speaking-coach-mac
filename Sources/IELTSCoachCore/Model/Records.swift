@@ -39,4 +39,11 @@ public struct VocabularyRecord: Codable, Equatable, Sendable, Identifiable {
     public var collocation: String
     public var priority: String
     public var sourceSessionIds: [String]
+
+    public init(id: String, basicWord: String, betterExpression: String,
+                collocation: String, priority: String, sourceSessionIds: [String]) {
+        self.id = id; self.basicWord = basicWord; self.betterExpression = betterExpression
+        self.collocation = collocation; self.priority = priority
+        self.sourceSessionIds = sourceSessionIds
+    }
 }
