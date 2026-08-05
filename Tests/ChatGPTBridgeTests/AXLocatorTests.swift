@@ -76,4 +76,32 @@ final class AXLocatorTests: XCTestCase {
         XCTAssertGreaterThan(access.snapshotCount, 2,
                              "必须反复取快照，只取一次就等于没有等待重试")
     }
+
+    func testComposerTimeoutDistinguishesAmbiguityFromAbsence() {
+        let access = FakeAXAccess()
+        access.nodes = [
+            AXNodeSnapshot(element: AXElementRef(rawID: 1, epoch: 0), role: "AXTextArea",
+                           descriptionText: "Search"),
+            AXNodeSnapshot(element: AXElementRef(rawID: 2, epoch: 0), role: "AXTextArea",
+                           descriptionText: "Rename chat")
+        ]
+        let locator = AXLocator(access: access, pollInterval: 0.01)
+        XCTAssertThrowsError(try locator.waitForComposer(timeout: 0.1)) { error in
+            let message = "\(error)"
+            XCTAssertTrue(message.contains("2 个文本框"), "应说清有几个候选：\(message)")
+            XCTAssertTrue(message.contains("Search"), "应列出候选的描述，否则用户无从判断：\(message)")
+            XCTAssertTrue(message.contains("下一步"))
+        }
+    }
+
+    func testComposerTimeoutWhenNoTextAreaAtAll() {
+        let access = FakeAXAccess()
+        access.nodes = []
+        let locator = AXLocator(access: access, pollInterval: 0.01)
+        XCTAssertThrowsError(try locator.waitForComposer(timeout: 0.1)) { error in
+            let message = "\(error)"
+            XCTAssertFalse(message.contains("个文本框（"), "没有候选时不该报歧义错误：\(message)")
+            XCTAssertTrue(message.contains("下一步"))
+        }
+    }
 }
