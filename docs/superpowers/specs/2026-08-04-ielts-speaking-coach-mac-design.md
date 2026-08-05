@@ -178,6 +178,31 @@ Chromium 的无障碍树是**惰性构建**的。初次探测仅 234 节点、�
 - 1.5 秒去抖窗口是安全的
 - **不要**把上游的最短时长门槛加回来。它在上游是必需的，因为上游的信号本身不可靠；这里的信号是直接且稳定的，加时长门槛只会让短题目无法正常结束
 
+### 2.3.8 复盘指令必须规定到**每条内部**的字段名
+
+首次真机练习成功后发现：复盘 JSON 完整（6975 字符、标记齐全、七个顶层键全在），但归档进错题本 0 条、词汇本 0 条。
+
+原因是 `ReviewRequestPrompt` **只规定了顶层键名，没规定每条里面的字段名**。实测对照：
+
+| 顶层键 | 指令是否规定了内部结构 | ChatGPT 实际输出 |
+|---|---|---|
+| `answer_upgrades` | ✅ 规定了 | `{question, original_answer, revised_answer, changes}` —— **完全对上** |
+| `priority_target` | ✅ 规定了 | `{id, label, status, evidence}` —— **完全对上** |
+| `must_correct` | ❌ 只写了键名 | `{issue, examples, fix}`（归档代码找的是 `learner_said`/`correction`/`why_it_matters`）|
+| `vocabulary` | ❌ | **对象**而非数组：`{useful_replacements, pronunciation}` |
+| `natural_upgrades` | ❌ | `{area, advice}` |
+| `logic_feedback` | ❌ | `{question_area, feedback}` |
+| `habits` | ❌ | 纯字符串数组 |
+
+**规律：指令规定到哪一层，输出就对齐到哪一层。** 这不是模型不听话，是指令只写了一半。
+
+**后果属于本项目反复出现的那一类：不报错、不崩溃、只是悄悄什么都没归档。** 解析器只校验顶层键是否存在，内部结构不合它一概不管。用户练一场、复盘写得好好的，而错题本永远是空的。
+
+由此确立两条规则：
+
+1. **`ReviewRequestPrompt` 必须把每个数组元素的字段名逐一写死**，与 `ReviewArchiver` 读取的字段严格一一对应。
+2. **`ReviewArchiver` 必须能报告「顶层键存在但一条都没归进去」**。归档 0 条不等于没错题——更可能是字段名对不上。静默的 0 是本项目已知最危险的失败形态。
+
 ### 2.4 输入框与语音共存
 
 `AXTextArea desc="Work with ChatGPT"` 与 `Stop voice chat`、`Mute speakers` 等按钮**位于同一控制条内**——语音进行中依然可以发送文字。
