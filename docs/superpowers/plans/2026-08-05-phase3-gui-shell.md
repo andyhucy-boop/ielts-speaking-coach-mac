@@ -1492,95 +1492,275 @@ git commit -m "feat(ui): 设计令牌与基础组件"
 - Create: `Tests/IELTSCoachCoreTests/PDFQuestionExtractorTests.swift`
 
 **Interfaces:**
-- Consumes: `Question`、`ImportResult`
-- Produces: `PDFQuestionExtractor.extract(plainText:sourceTitle:) throws -> ImportResult`
+- Consumes: `Question`、`QuestionSource`、`ImportResult`
+- Produces: `PDFQuestionExtractor.extract(plainText:sourceTitle:sourceUrl:) throws -> ImportResult`
 
-**为什么必须做：** 用户手上的季度题库是 PDF，已复制到仓库根目录（`2026年5-8月雅思口语题目 5.20(1)(2).pdf`）。当前导入只支持 CSV/JSON，意味着用户得手动把上百道题敲成表格。**不解决它，界面做完了也没题可练。**
+**为什么必须做：** 用户手上的季度题库是 PDF，已在仓库根目录（文件名以 `2026年5-8月雅思口语题目` 开头，
+已进 `.gitignore`）。当前导入只支持 CSV/JSON，意味着要手动把几百道题敲成表格。
+**不解决它，界面做完了也没题可练。**
 
-**分层：** 文本提取（需 PDFKit）与题目解析（纯 Foundation）分开。解析放 Core、只吃纯文本，因此**完全可测**；提取很薄，放 UI 层调 PDFKit。这样 `IELTSCoachCore` 只依赖 Foundation 的约束不被破坏。
+**分层：** 文本提取（需 PDFKit）与题目解析（纯 Foundation）分开。
+解析放 Core、只吃纯文本，因此**完全可测**；提取很薄，放 UI 层调 PDFKit。
+这样 `IELTSCoachCore` 只依赖 Foundation 的约束不被破坏。
 
-雅思题库 PDF 的典型结构：Part 1 是话题 + 若干短问题；Part 2 是 cue card（`Describe…` + `You should say:` + 若干提示点）；Part 3 是话题 + 追问。
+---
+
+### ⚠️ 真实 PDF 的结构（2026-08-06 实测，用 PDFKit 抽出全文后逐段看过）
+
+**这一节是本任务的事实依据。计划的初版按「理想排版」写，与真实文件差得很远，已按实测重写。
+不要按你想象中的雅思题库排版来写解析规则——按下面这个来。**
+
+真实文件：81 页，PDFKit 抽出 2515 行纯文本。
+
+**（1）前 196 行是目录，必须整段丢掉。**
+
+目录行长这样（点号引导 + 页码）：
+
+```
+Websites .................................................................................................. 17
+1- Describe one of your friends who learned a skill from someone (not a
+teacher) ......................................................................................................... 19
+```
+
+注意第二例：**目录项本身就会折行**。所以不能只按「以数字结尾」判断，
+要按「含连续 4 个以上的点」判断——正文里不会出现这种点号引导。
+
+**（2）分区标题带字符间空格。** PDF 抽出来是：
+
+```
+Part 1 T opics          ← 注意 "T opics"
+Part1 必 考 题           ← 注意汉字之间有空格
+Part1 保 留 题
+Part1 新 题
+Part2 & 3 保 留 题
+Part2 & 3 新 题
+```
+
+所以匹配分区标题**必须先把所有空白字符去掉再比**（`必考题` / `保留题` / `新题`）。
+按原样匹配一个都对不上。
+
+**（3）Part 1 的真实形状：**
+
+```
+1-Study and work                                    ← 话题，编号后无空格
+Do you work or are you a student?
+What subject are you studying?
+/                                                    ← 分支分隔符（学生 / 工作者）
+What work do you do?
+Do you like your job?
+6                                                    ← 页码，单独一行
+2-The area you live in
+Are the people in your neighborhood nice and friendly?
+```
+
+**（4）Part 2 & 3 的真实形状：**
+
+```
+人物                                                 ← 中文类别标签
+1-Describe one of your friends who learned a skill from someone
+(not a teacher)                                      ← ⚠️ 题干折行了
+You should say                                       ← ⚠️ 没有冒号
+Who he/she is
+What skill he/she learned
+How he/she learned
+And explain whether it would be easier to learn from a teacher
+Part3                                                ← ⚠️ 没有空格
+What are the main differences between learning from a formal teacher and
+learning from someone like a friend or family member?   ← ⚠️ 追问也折行
+Is it necessary to continue learning after finishing formal education?
+2-Describe a person who solved a problem in a smart way
+```
+
+中文类别标签共四种：`人物` `地点` `物品` `事件`。
+
+**（5）折行是本任务最核心的难点。**
+
+题干、提示点、追问**都会在任意位置断开**，续行不以问号结尾、也没有任何标记。
+不处理折行的话，`(not a teacher)` 会变成一道独立的「题」，
+而真正的题目会缺一截——**提出来的东西看着有几百条，其实大半是残片**。
+
+合并规则：一行如果**不是**分区标题、不是类别标签、不是页码、不是 `You should say`、
+不是 `Part3`、不是新编号项的开头，就把它接到上一行末尾（中间补一个空格）。
+
+---
 
 - [ ] **Step 1: 写失败的测试**
+
+测试数据直接照抄上面实测到的真实片段，**不要自己编一份好解析的**。
 
 ```swift
 import XCTest
 @testable import IELTSCoachCore
 
 final class PDFQuestionExtractorTests: XCTestCase {
-    func testExtractsPart1TopicAndQuestions() throws {
-        let text = [
-            "Part 1",
-            "Home",
-            "Do you live in a house or a flat?",
-            "What do you like about your home?",
-            "",
-            "Work",
-            "What do you do for a living?",
-        ].joined(separator: "\n")
 
-        let result = try PDFQuestionExtractor.extract(plainText: text, sourceTitle: "季度题库")
-        let part1 = result.questions.filter { $0.part == 1 }
-        XCTAssertEqual(part1.count, 3)
-        XCTAssertEqual(part1.first?.topic, "Home")
-        XCTAssertEqual(part1.last?.topic, "Work")
-    }
+    // MARK: - 目录必须被丢掉
 
-    func testExtractsPart2CueCardAsSingleQuestion() throws {
-        let text = [
-            "Part 2",
-            "Describe a useful skill you learned.",
-            "You should say:",
-            "what it is",
-            "how you learned it",
-            "and explain why it is useful.",
-        ].joined(separator: "\n")
-
-        let result = try PDFQuestionExtractor.extract(plainText: text, sourceTitle: "t")
-        let part2 = result.questions.filter { $0.part == 2 }
-        XCTAssertEqual(part2.count, 1, "整张 cue card 是一道题，不能被拆成多道")
-        XCTAssertTrue(part2[0].prompt.contains("Describe a useful skill"))
-        XCTAssertEqual(part2[0].followups.count, 3, "You should say 下面的提示点应进 followups")
-    }
-
-    func testIgnoresPageNumbersAndRunningHeaders() throws {
-        let text = [
-            "Part 1",
-            "Home",
-            "Do you live in a house or a flat?",
-            "1",
-            "第 1 页",
-            "2026年5-8月雅思口语题目",
-            "What do you like about your home?",
-        ].joined(separator: "\n")
-
+    func testTableOfContentsIsDropped() throws {
+        // 目录行的特征是点号引导。第二条目录项自己还折了行——
+        // 只看「以数字结尾」会漏掉 "teacher) ......... 19" 这种。
+        let text = """
+        5-8 月雅思口语题库
+        Websites .................................................................................. 17
+        1- Describe one of your friends who learned a skill from someone (not a
+        teacher) ......................................................................................... 19
+        Part 1 T opics
+        Part1 必 考 题
+        1-Study and work
+        Do you work or are you a student?
+        """
         let result = try PDFQuestionExtractor.extract(
-            plainText: text, sourceTitle: "2026年5-8月雅思口语题目")
-        XCTAssertEqual(result.questions.count, 2, "页码与页眉不能被当成题目")
+            plainText: text, sourceTitle: "题库", sourceUrl: "")
+        XCTAssertEqual(result.questions.count, 1, "目录里的条目不能被当成题目")
+        XCTAssertEqual(result.questions[0].topic, "Study and work")
     }
+
+    // MARK: - 分区标题带字符间空格
+
+    func testSectionHeadersWithInterCharacterSpacingAreRecognised() throws {
+        // PDF 抽出来是「Part1 必 考 题」，汉字之间有空格。
+        // 按原样匹配一个都对不上，必须先去掉全部空白再比。
+        let text = """
+        Part 1 T opics
+        Part1 必 考 题
+        1-Study and work
+        Do you work or are you a student?
+        Part2 & 3 保 留 题
+        人物
+        1-Describe a person who solved a problem in a smart way
+        You should say
+        Who this person is
+        """
+        let result = try PDFQuestionExtractor.extract(
+            plainText: text, sourceTitle: "t", sourceUrl: "")
+        XCTAssertEqual(result.questions.filter { $0.part == 1 }.count, 1)
+        XCTAssertEqual(result.questions.filter { $0.part == 2 }.count, 1,
+                       "没认出 Part2 分区标题的话，cue card 会被算进 Part 1")
+    }
+
+    // MARK: - 折行合并（本任务最核心的一条）
+
+    func testWrappedCueCardTitleIsJoined() throws {
+        let text = """
+        Part2 & 3 保 留 题
+        人物
+        1-Describe one of your friends who learned a skill from someone
+        (not a teacher)
+        You should say
+        Who he/she is
+        And explain whether it would be easier to learn from a teacher
+        """
+        let result = try PDFQuestionExtractor.extract(
+            plainText: text, sourceTitle: "t", sourceUrl: "")
+        let part2 = result.questions.filter { $0.part == 2 }
+        XCTAssertEqual(part2.count, 1, "折行的续行不能变成第二道题")
+        XCTAssertTrue(part2[0].prompt.hasSuffix("(not a teacher)"),
+                      "题干被截断了：\(part2[0].prompt)")
+    }
+
+    func testWrappedFollowupQuestionIsJoined() throws {
+        let text = """
+        Part2 & 3 保 留 题
+        人物
+        1-Describe a person who solved a problem in a smart way
+        You should say
+        Who this person is
+        Part3
+        What are the main differences between learning from a formal teacher and
+        learning from someone like a friend or family member?
+        Is it necessary to continue learning after finishing formal education?
+        """
+        let result = try PDFQuestionExtractor.extract(
+            plainText: text, sourceTitle: "t", sourceUrl: "")
+        let part3 = result.questions.filter { $0.part == 3 }
+        XCTAssertEqual(part3.count, 2, "折行的追问应合成一条，不是两条")
+        XCTAssertTrue(part3[0].prompt.contains("formal teacher and learning from someone"),
+                      "折行处没有合并：\(part3[0].prompt)")
+    }
+
+    // MARK: - Part 2 的提示点与 Part 3 的归属
+
+    func testCueCardBulletsGoToFollowupsAndPart3BecomesOwnQuestions() throws {
+        let text = """
+        Part2 & 3 保 留 题
+        人物
+        1-Describe a person who solved a problem in a smart way
+        You should say
+        Who this person is
+        What the problem was
+        How he/she solved it
+        And explain why you think he/she did it in a smart way
+        Part3
+        What are the qualities of a person who can solve problems in smart ways?
+        """
+        let result = try PDFQuestionExtractor.extract(
+            plainText: text, sourceTitle: "t", sourceUrl: "")
+        let cue = try XCTUnwrap(result.questions.first { $0.part == 2 })
+        XCTAssertEqual(cue.followups.count, 4, "You should say 下面四条提示点都要进 followups")
+        XCTAssertEqual(cue.topic, "人物", "中文类别标签就是 Part 2 的话题")
+
+        let part3 = result.questions.filter { $0.part == 3 }
+        XCTAssertEqual(part3.count, 1)
+        XCTAssertTrue(part3[0].topic.contains("solved a problem"),
+                      "Part 3 追问要能看出它跟着哪张 cue card，否则练的时候不知道上下文")
+    }
+
+    // MARK: - 噪声
+
+    func testPageNumbersAndBranchSeparatorAreNotQuestions() throws {
+        let text = """
+        Part 1 T opics
+        Part1 必 考 题
+        1-Study and work
+        Do you work or are you a student?
+        /
+        What work do you do?
+        6
+        Do you like your job?
+        """
+        let result = try PDFQuestionExtractor.extract(
+            plainText: text, sourceTitle: "t", sourceUrl: "")
+        XCTAssertEqual(result.questions.count, 3, "页码与分支分隔符 / 都不是题目")
+        XCTAssertFalse(result.questions.contains { $0.prompt == "/" || $0.prompt == "6" })
+    }
+
+    // MARK: - 一道题都没提出来必须报警
 
     func testWarnsWhenNothingExtracted() throws {
         let result = try PDFQuestionExtractor.extract(
-            plainText: "完全无关的一段文字", sourceTitle: "t")
+            plainText: "完全无关的一段文字", sourceTitle: "t", sourceUrl: "")
         XCTAssertTrue(result.questions.isEmpty)
         XCTAssertFalse(result.warnings.isEmpty, "一道题都没提出来必须报警，不能静默返回空")
         XCTAssertTrue(result.warnings.joined().contains("下一步"), "警告必须说明下一步做什么")
     }
 
-    func testIDsAreContentBasedSoInsertionDoesNotShiftThem() throws {
-        let onlyHome = ["Part 1", "Home", "Do you live in a house or a flat?"]
-            .joined(separator: "\n")
-        // 在前面插入一个新话题后，原有题目的 id 不能变——
-        // 否则换季重新导入会让历史练习记录全部指错题。
-        let withNewTopicFirst = ["Part 1", "New Topic", "A brand new question?",
-                                 "Home", "Do you live in a house or a flat?"]
-            .joined(separator: "\n")
+    // MARK: - id 必须基于内容
 
-        let first = try PDFQuestionExtractor.extract(plainText: onlyHome, sourceTitle: "t")
-        let second = try PDFQuestionExtractor.extract(plainText: withNewTopicFirst, sourceTitle: "t")
+    func testIDsAreContentBasedSoInsertionDoesNotShiftThem() throws {
+        let onlyHome = """
+        Part 1 T opics
+        Part1 必 考 题
+        1-Accommodation
+        Do you live in a house or a flat?
+        """
+        // 前面插入一个新话题后，原有题目的 id 不能变——
+        // 否则换季重新导入会让历史练习记录全部指错题。
+        let withNewTopicFirst = """
+        Part 1 T opics
+        Part1 必 考 题
+        1-Brand new topic
+        A brand new question?
+        2-Accommodation
+        Do you live in a house or a flat?
+        """
+        let first = try PDFQuestionExtractor.extract(
+            plainText: onlyHome, sourceTitle: "t", sourceUrl: "")
+        let second = try PDFQuestionExtractor.extract(
+            plainText: withNewTopicFirst, sourceTitle: "t", sourceUrl: "")
 
         let originalID = try XCTUnwrap(first.questions.first?.id)
-        let afterInsert = try XCTUnwrap(second.questions.first { $0.topic == "Home" }?.id)
+        let afterInsert = try XCTUnwrap(
+            second.questions.first { $0.topic == "Accommodation" }?.id)
         XCTAssertEqual(originalID, afterInsert)
     }
 }
@@ -1593,16 +1773,39 @@ Expected: 编译失败 —— `PDFQuestionExtractor` 未定义
 
 - [ ] **Step 3: 实现**
 
-`PDFQuestionExtractor` 只依赖 Foundation。要点：
+`PDFQuestionExtractor` 只依赖 Foundation。处理顺序：
 
-- 按行扫描，遇到 `Part 1` / `Part 2` / `Part 3` 之类的行切换当前 Part
-- **过滤噪声行**：纯数字（页码）、含「第 N 页」、与 `sourceTitle` 高度重合的行（页眉）
-- Part 1/3：以问号结尾的行是题目；不以问号结尾且较短的行是话题
-- Part 2：`Describe…` / `Talk about…` 开头的行是题干，`You should say:` 之后到空行之间的每行进 `followups`
-- **id 必须用内容哈希**，复用 `QuestionBankImporter` 已有的做法。位置式编号会在换季重新导入时整体错位，毁掉历史练习记录——**这个坑本项目已经栽过一次**，也是成品标准第 12 条守的东西
-- 一道题都没提出来时，`warnings` 必须给出可执行的下一步，不能静默返回空
+**第一遍——扔垃圾。** 逐行丢掉：
+- 含连续 4 个以上点号的行（目录项）
+- 纯数字行（页码）
+- 只有 `/` 的行（分支分隔符）
+- 空行
 
-`QuestionBankView` 的导入按钮把 `.pdf` 加进可选类型，选中 PDF 后取纯文本再交给 `PDFQuestionExtractor`：
+**第二遍——合并折行。** 用「去掉全部空白后」的形式判断一行是不是「结构行」：
+分区标题（`必考题`/`保留题`/`新题`，含 `Part1`/`Part2&3` 前缀）、
+类别标签（`人物`/`地点`/`物品`/`事件`）、`Youshouldsay`、`Part3`、
+或匹配 `^\d+\s*-` 的编号行。
+**不是结构行的，接到上一行末尾**（中间补一个空格）。
+
+**第三遍——按分区解析。**
+- Part 1 区：`^\d+\s*-\s*(.+)` 且不以 `?` 结尾 → 话题；其余行 → 该话题下的题目
+- Part 2/3 区：类别标签 → 当前类别；`^\d+\s*-\s*(Describe|Talk about)` → cue card 题干；
+  `You should say` 到 `Part3` 之间的每行 → 该 cue card 的 `followups`；
+  `Part3` 之后到下一个编号行之间的每行 → 独立的 Part 3 题目
+
+**字段填法：**
+- Part 1：`part=1`，`topic` = 话题名（去掉编号），`prompt` = 问题
+- Part 2：`part=2`，`topic` = 中文类别，`prompt` = cue card 题干，`followups` = 四条提示点
+- Part 3：`part=3`，`topic` = **所属 cue card 的题干**（这样练的时候知道上下文），`prompt` = 追问
+- 三者的 `source` = `sourceTitle`，`importLevel = "full-question"`，`status = "new"`
+
+**`id` 必须用内容哈希**，复用 `QuestionBankImporter` 已有的做法。
+位置式编号会在换季重新导入时整体错位，毁掉历史练习记录——**这个坑本项目已经栽过一次**，
+也是成品标准第 12 条守的东西。
+
+一道题都没提出来时，`warnings` 必须给出可执行的下一步。
+
+`QuestionBankView` 的导入按钮把 `.pdf` 加进可选类型，选中后取纯文本再交给 `PDFQuestionExtractor`：
 
 ```swift
 import PDFKit
@@ -1612,25 +1815,38 @@ func plainText(ofPDFAt url: URL) -> String? {
 }
 ```
 
-取不到文本时提示：「这份 PDF 里没有可提取的文字，它可能是扫描件。下一步：换一份文字版 PDF，或先用系统「预览」把它转成文字。」
+取不到文本时提示：「这份 PDF 里没有可提取的文字，它可能是扫描件。下一步：换一份文字版 PDF，
+或先用系统「预览」把它转成文字。」
 
 - [ ] **Step 4: 运行，确认通过**
 
 Run: `swift test --filter PDFQuestionExtractorTests`
-Expected: PASS（5 个测试）
+Expected: PASS（8 个测试）
 
-- [ ] **Step 5: 用真实题库验证（必须人工核对）**
+- [ ] **Step 5: 用真实题库验证，对照基准数字**
 
-用户的真实 PDF 在仓库根目录。写一个临时脚本（或用 `swift run`）跑一遍提取，然后**人工核对**：
+**基准数字已经实测统计好了**（2026-08-06，对 PDFKit 抽出的全文做的统计）：
 
-| 核对项 | 判据 |
-|---|---|
-| 题目总数 | 与 PDF 里肉眼可数的题数是否接近（差一两道可接受，差一半不行）|
-| 抽查 5 道题 | Part、话题、题干是否都对 |
-| Part 2 | cue card 是否完整成一道题，提示点是否都进了 followups |
-| 有没有垃圾 | 页码、页眉、目录行有没有混进题目里 |
+| 项 | 基准 | 怎么得到的 |
+|---|---|---|
+| Part 1 话题数 | **59** | 正文区里匹配 `^\d+\s*-` 且不以 `?` 结尾的行 |
+| Part 1 题目数 | **约 279** | 正文区里以 `?` 结尾的行（折行合并后应仍是这个数量级）|
+| Part 2 cue card 数 | **99** | `You should say` 出现 99 次，`Part3` 标记也是 99 次，两者相符 |
+| Part 3 追问数 | **约 891 减去 Part 1 的 279** | Part2/3 区里以 `?` 结尾的行 |
 
-**这一步不能用测试代替。** 测试用的是理想排版，真实 PDF 千奇百怪。把核对结果如实写进报告，包括提取失败的部分——**若真实 PDF 结构与假设差得太远，应当停下来报告，而不是硬调规则去凑**。
+写一个临时脚本跑真实 PDF（不要提交这个脚本），把实际结果与上表对照。
+
+**判据：**
+- Part 2 必须正好是 **99** 张。多了说明折行没合并（残片被当成了新题），
+  少了说明漏掉了某个分区
+- Part 1 话题 59 个，偏差超过 3 个就要查原因
+- **抽查五道题**，原样贴进报告：一道 Part 1、两张 cue card（含那张题干折行的
+  `Describe one of your friends who learned a skill from someone (not a teacher)`）、
+  两条 Part 3 追问（挑一条折行的）
+- 检查有没有垃圾混进来：搜提取结果里有没有出现连续点号、纯数字、单个 `/`
+
+**如实报告，包括提取错的部分。若真实结构与上面描述又有出入，说明 PDF 有本次没覆盖到的形状——
+报告出来，不要硬调规则去凑一个好看的数字。**
 
 - [ ] **Step 6: 提交**
 
