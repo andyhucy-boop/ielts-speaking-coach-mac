@@ -145,6 +145,7 @@ public final class LiveAXAccess: AXAccess, @unchecked Sendable {
             title: string(element, kAXTitleAttribute as String),
             value: string(element, kAXValueAttribute as String),
             descriptionText: string(element, kAXDescriptionAttribute as String),
+            identifier: string(element, kAXIdentifierAttribute as String),
             childCount: kids.count,
             childRoles: kids.map { string($0, kAXRoleAttribute as String) }
         )

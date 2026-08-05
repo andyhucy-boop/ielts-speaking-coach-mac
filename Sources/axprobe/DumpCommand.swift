@@ -36,6 +36,7 @@ enum DumpCommand {
             let indent = String(repeating: "  ", count: depth)
             var parts = ["\(indent)\(node.role)"]
             if !node.subrole.isEmpty { parts.append("subrole=\(node.subrole)") }
+            if !node.identifier.isEmpty { parts.append("id=\(node.identifier)") }
             if !node.title.isEmpty { parts.append("title=\(quoted(node.title))") }
             if !node.descriptionText.isEmpty { parts.append("desc=\(quoted(node.descriptionText))") }
             if !node.value.isEmpty { parts.append("value=\(quoted(node.value))") }
