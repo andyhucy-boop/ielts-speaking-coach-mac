@@ -43,6 +43,10 @@
 
 **统计数字必须用等宽数字**（`.monospacedDigit()`）。否则「本周 3/5 次」跳到「本周 10/5 次」时整行会抖动。
 
+**这张表已落成 `Typography` 令牌**（`Sources/IELTSCoachUI/DesignSystem/Typography.swift`），一行一个令牌。**视图里请引用令牌，不要直接写语义字体，也不要单独加字重。**
+
+理由是这张表的第四列：SwiftUI 只有一部分语义字体自带字重（`.headline` 是 semibold），`.caption`、`.title`、`.largeTitle` 默认都是 regular。写 `.font(.caption)` 编得过也跑得动，只是比表里的 medium 轻一档，而这种差别没人能在截图上指出来——Phase 3 的 `SectionHeader` 就这么掉过一次。现在两条测试守着：`testTypographyTokensMatchTheSpecTable` 逐行比对令牌与本表，`testDesignSystemTakesFontsFromTypographyTokens` 扫 `DesignSystem/` 的源码不许视图自己拼字体。
+
 ---
 
 ## 2. 颜色
