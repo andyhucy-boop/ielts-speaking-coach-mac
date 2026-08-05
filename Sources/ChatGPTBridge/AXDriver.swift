@@ -63,10 +63,33 @@ public final class AXDriver: CoachBridge {
         // AX 读回的值与写入值不可能逐字节相同（换行与空白会被规范化），
         // 后者一开始就成立，等于没验证。这是本项目第二次栽在
         // 「验证只问现在是不是目标态、没问到底变没变」上。
+        //
+        // 「空」不是空字符串（spec 2.3.6，本项目第三次栽在判据与实际观测对不上）：
+        // 实测空态 value 为「换行 + 该元素自己的 description」（如 "\nMessage ChatGPT"）。
+        // 见 AXNodeSnapshot.isEmptyComposer。
         try locator.waitUntil({ nodes in
             guard let composer = ChatGPTLabels.composer(among: nodes) else { return false }
-            return composer.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            return composer.isEmptyComposer
         }, timeout: shortTimeout, describing: "提示词发送到 ChatGPT")
+    }
+
+    /// 新建一个空会话。Live 语音只能在未发送过消息的会话里启动，
+    /// 所以每次练习开始前都要先做这一步，否则 startVoice 会静默失败
+    /// （按钮按得下去，但语音起不来）。
+    public func startNewChat() throws {
+        let button = try locator.waitForControl(ChatGPTLabels.newChat, timeout: shortTimeout)
+        guard access.press(button.element) else {
+            throw BridgeError.actionFailed("按下「新建会话」失败。"
+                + "下一步：在 ChatGPT 里手动开一个新对话，然后重新运行本命令。")
+        }
+    }
+
+    /// 等语音模式的输入框出现。语音输入框和普通聊天输入框走同一套查找逻辑——
+    /// `ChatGPTLabels.composerDescriptions` 已经同时包含两种描述，`locator.waitForComposer`
+    /// 不用改就能处理；单独起名只是让调用处「等的是语音模式那个」这层意图读起来更清楚。
+    @discardableResult
+    public func waitForVoiceComposer(timeout: TimeInterval) throws -> AXNodeSnapshot {
+        try locator.waitForComposer(timeout: timeout)
     }
 
     public func startVoice() throws {

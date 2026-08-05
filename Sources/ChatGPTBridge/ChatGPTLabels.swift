@@ -17,6 +17,11 @@ public enum ChatGPTLabels {
     /// 发送按钮。实测模拟回车不会发送（文字留在输入框里），必须按这个按钮。
     public static let sendMessage = ["Send", "发送"]
 
+    /// 新建会话。**每次练习都要先按它** —— Live 语音只能在还没发送过任何消息的
+    /// 会话里启动，而这一点从 AX 树上看不出来，是用户实际使用时发现的。
+    /// 旧会话仍保留在侧边栏，不丢数据。
+    public static let newChat = ["New chat", "新建对话"]
+
     /// 控制元素的合法 role。静音类是 AXCheckBox（subrole=AXToggleButton），
     /// 启停语音是 AXButton，两者结构判据相同（实测确认）。
     static let controlRoles: Set<String> = ["AXButton", "AXCheckBox"]

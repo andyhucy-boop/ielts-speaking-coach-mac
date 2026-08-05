@@ -102,6 +102,20 @@ final class ChatGPTLabelsTests: XCTestCase {
         XCTAssertEqual(ChatGPTLabels.candidateComposers(among: [search, rename]).count, 2)
     }
 
+    func testNewChatCandidatesCoverAllObservedLabels() {
+        for observed in ["New chat", "新建对话"] {
+            XCTAssertTrue(ChatGPTLabels.newChat.contains(observed), "候选集合缺少标签：\(observed)")
+        }
+    }
+
+    func testMatchesIconOnlyNewChatButton() {
+        // 实测新建会话按钮结构：AXButton desc="New chat"，唯一子节点 AXImage
+        // （spec 2.3.5：Live 语音只能在未发送过消息的会话里启动，所以每次练习前都要按它）。
+        let button = node(6, role: "AXButton", desc: "New chat", childRoles: ["AXImage"])
+        XCTAssertEqual(ChatGPTLabels.matchControl(ChatGPTLabels.newChat, among: [button])?.element,
+                       AXElementRef(rawID: 6, epoch: 0))
+    }
+
     func testStructuralMismatchesReportsWrongRoleWithIconOnlyChild() {
         // label 命中、只有一个 AXImage 子节点、但 role 不是控制类 —— 必须被报告
         let odd = AXNodeSnapshot(element: AXElementRef(rawID: 9, epoch: 0), role: "AXGroup",

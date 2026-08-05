@@ -100,6 +100,24 @@ final class AXDriverTests: XCTestCase {
         }
     }
 
+    // 第 3 次栽在「验证判据与实际观测对不上」（spec 2.3.6）：实测空输入框的 value
+    // 不是空字符串，而是「换行 + 输入框自己的 description」，例如 "\nMessage ChatGPT"。
+    // 上一轮改的判据是「等到 value 变空」，永远等不到——消息明明发出去了也会超时。
+    // 这条测试直接用故障现场实测到的占位符字符串构造场景，是本次故障的直接回归测试。
+    func testSendTextRecognizesObservedPlaceholderValueAsSentState() throws {
+        let access = FakeAXAccess()
+        access.nodes = [composer(1), sendButton(2)]
+        access.onPress = { _, nodes in
+            for i in nodes.indices where nodes[i].role == "AXTextArea" {
+                // 实测：ChatGPT 输入框空态的 value 是这个确切的字符串，不是 ""。
+                nodes[i].value = "\nMessage ChatGPT"
+            }
+        }
+        try driver(access).sendText("你好")
+        XCTAssertEqual(access.pressedElements.map(\.rawID), [2],
+                       "占位符状态必须被识别为「已发送」，不能超时")
+    }
+
     // guard...else { return false } 而不是原来的 `?? true`：输入框从树上找不到时
     // 必须继续等，不能被当成发送成功。
     func testSendTextKeepsWaitingWhenComposerDisappearsFromTree() {
@@ -111,6 +129,47 @@ final class AXDriverTests: XCTestCase {
         XCTAssertThrowsError(try driver(access).sendText("考官提示词")) { error in
             XCTAssertTrue("\(error)".contains("下一步"))
         }
+    }
+
+    // 【流程顺序反了】的修复（spec 2.3.5）：Live 语音只能在还没发送过任何消息的会话里
+    // 启动，这一点从 AX 树上看不出来，是用户实测发现的。每次练习开始前都要先按
+    // 「新建会话」，保证这个前提成立，否则 startVoice 会静默失败——按钮按得下去，
+    // 但语音起不来。
+
+    func testStartNewChatPressesButton() throws {
+        let access = FakeAXAccess()
+        access.nodes = [control(1, "New chat")]
+        try driver(access).startNewChat()
+        XCTAssertEqual(access.pressedElements.map(\.rawID), [1])
+    }
+
+    func testStartNewChatFailsActionablyWhenButtonNotFound() {
+        let access = FakeAXAccess()
+        access.nodes = []   // 界面上完全没有「新建会话」按钮
+        XCTAssertThrowsError(try driver(access).startNewChat()) { error in
+            XCTAssertTrue("\(error)".contains("下一步"))
+        }
+        XCTAssertTrue(access.pressedElements.isEmpty)
+    }
+
+    func testStartNewChatFailsActionablyWhenPressReturnsFalse() {
+        let access = FakeAXAccess()
+        access.nodes = [control(1, "New chat")]
+        access.pressSucceeds = false   // kAXPressAction 本身就失败
+        XCTAssertThrowsError(try driver(access).startNewChat()) { error in
+            XCTAssertTrue("\(error)".contains("下一步"))
+            XCTAssertTrue("\(error)".contains("新建"), "错误信息应指明按的是哪个按钮：\(error)")
+        }
+    }
+
+    // waitForVoiceComposer 是对 locator.waitForComposer 的转发（语音输入框和普通输入框
+    // 走同一套查找逻辑，composerDescriptions 已经同时包含两种描述），这里只验证转发确实
+    // 接上了——真正的查找逻辑已由 AXLocatorTests 的 composer 相关用例覆盖。
+    func testWaitForVoiceComposerFindsComposer() throws {
+        let access = FakeAXAccess()
+        access.nodes = [composer(1)]
+        let found = try driver(access).waitForVoiceComposer(timeout: 0.5)
+        XCTAssertEqual(found.element.rawID, 1)
     }
 
     func testStartVoiceVerifiesIndicatorAppeared() throws {

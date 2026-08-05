@@ -26,8 +26,14 @@ public struct BridgeReadiness: Equatable, Sendable {
 /// App 层只依赖这个 protocol，不感知内部用的是 AX 还是剪贴板。
 public protocol CoachBridge {
     func preflight() -> BridgeReadiness
+    /// 新建一个空会话，见 `AXDriver.startNewChat`。**每次练习前都要先调用它**——
+    /// Live 语音只能在还没发送过任何消息的会话里启动。
+    func startNewChat() throws
     func sendText(_ text: String) throws
     func startVoice() throws
+    /// 等语音模式的输入框出现，见 `AXDriver.waitForVoiceComposer`。
+    @discardableResult
+    func waitForVoiceComposer(timeout: TimeInterval) throws -> AXNodeSnapshot
     func isVoiceActive() -> Bool
     func endVoice() throws
     func captureLatestAssistantMessage(expectedMarker: String?) throws -> String

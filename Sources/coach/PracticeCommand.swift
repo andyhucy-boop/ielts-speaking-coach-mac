@@ -64,14 +64,21 @@ enum PracticeCommand {
                                  feedbackTiming: feedbackTiming, part2PrepMode: prepMode)
 
         do {
-            print("\n▶︎ 正在把考官提示词发给 ChatGPT…")
-            try driver.sendText(ExaminerPrompt.build(setup: setup))
-
-            print("▶︎ 等 ChatGPT 读完考官指令…")
-            try driver.waitForAssistantReply(timeout: 60)
+            // 用户真机联调两次失败后纠正的顺序：Live 语音只能在还没发送过任何消息的
+            // 会话里启动。先按 New chat 保证这个前提成立，再开语音、等语音模式的
+            // 输入框出现，最后才把考官提示词写进去——反过来做（先发提示词）会让
+            // 这个会话直接失去启动 Live 的资格，这一点从 AX 树上完全看不出来。
+            print("\n▶︎ 正在新建会话（Live 语音只能在全新会话里启动）…")
+            try driver.startNewChat()
 
             print("▶︎ 正在启动语音…")
             try driver.startVoice()
+
+            print("▶︎ 等语音模式的输入框出现…")
+            try driver.waitForVoiceComposer(timeout: 15)
+
+            print("▶︎ 正在把考官提示词发给 ChatGPT…")
+            try driver.sendText(ExaminerPrompt.build(setup: setup))
             print("\n✅ 开练了。跟 ChatGPT 说话就行。")
             print("   练完之后在 ChatGPT 里结束通话即可；也可以回到这里按回车。\n")
 
@@ -92,8 +99,8 @@ enum PracticeCommand {
             print("▶︎ 正在请 ChatGPT 生成复盘…")
             try driver.sendText(ReviewRequestPrompt.build(requestID: requestID, focusPart: focusPart))
 
-            print("▶︎ 等 ChatGPT 写完…（约 30 秒）")
-            Thread.sleep(forTimeInterval: 30)
+            print("▶︎ 等 ChatGPT 写完复盘…")
+            try driver.waitForAssistantReply(timeout: 60)
 
             // 必须传 expectedMarker：不传会退回「取界面上最长的静态文本」的旧行为，
             // 用户自己粘贴过的长文、更早轮次残留的消息都可能比真复盘更长，

@@ -44,4 +44,14 @@ public struct AXNodeSnapshot: Equatable, Sendable {
     /// spec 2.3.1 的结构判据：真控制按钮的子节点恰好一个且为 AXImage。
     /// 侧边栏会话行嵌套 AXButton（含 Pin chat / Archive chat），不满足此条件。
     public var isIconOnlyControl: Bool { childRoles == ["AXImage"] }
+
+    /// 输入框是否处于「空」状态。**空态的 value 不是空字符串**（spec 2.3.6，实测）——
+    /// 是「换行 + 该元素自己的 description」，例如 `"\nMessage ChatGPT"`。
+    /// 这是本项目第三次栽在「验证判据与实际观测对不上」，前两次分别是
+    /// 「按下返回成功但点中了别的元素」（2.3.1）和「内容≠写入值永远成立」（2.3.4）。
+    /// 别处若也要判断输入框是否为空，复用这个属性，不要重新发明判据。
+    public var isEmptyComposer: Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty || trimmed == descriptionText
+    }
 }
