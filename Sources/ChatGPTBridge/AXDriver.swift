@@ -8,11 +8,15 @@ public final class AXDriver: CoachBridge {
     // `coach` 可执行 target 从不读取这两个字段，只调用 AXDriver/CoachBridge 的方法。
     let shortTimeout: TimeInterval
     let stateTimeout: TimeInterval
+    /// 决定 preflight 的提示该让用户勾选谁、该拿什么办法收集诊断信息。见 `HostEnvironment`。
+    private let host: HostEnvironment
 
     public init(access: any AXAccess, locator: AXLocator,
-                shortTimeout: TimeInterval = 5.0, stateTimeout: TimeInterval = 25.0) {
+                shortTimeout: TimeInterval = 5.0, stateTimeout: TimeInterval = 25.0,
+                host: HostEnvironment = .current) {
         self.access = access; self.locator = locator
         self.shortTimeout = shortTimeout; self.stateTimeout = stateTimeout
+        self.host = host
     }
 
     public func preflight() -> BridgeReadiness {
@@ -24,8 +28,11 @@ public final class AXDriver: CoachBridge {
             ok = false
         }
         if !access.isAccessibilityTrusted() {
+            // 勾选谁必须跟着宿主变（见 HostEnvironment）：.app 里勾的是本应用，
+            // 终端里跑才是勾终端。给错对象的用户照做一遍回来重试仍然失败，且毫无线索。
             messages.append("❌ 没有辅助功能权限，无法驱动 ChatGPT。"
-                + "下一步：系统设置 › 隐私与安全性 › 辅助功能，把运行本工具的终端加进去并勾选，然后重跑。")
+                + "下一步：系统设置 › 隐私与安全性 › 辅助功能，把\(host.accessibilityGrantee)加进去并勾选，"
+                + "然后\(host.retryInstruction)。")
             ok = false
         }
         guard ok else { return BridgeReadiness(ok: false, messages: messages) }
@@ -39,7 +46,8 @@ public final class AXDriver: CoachBridge {
         }
         if !access.wakeAccessibilityTree(timeout: 8.0) {
             messages.append("⚠️ ChatGPT 的无障碍树没能唤醒，可能读不到对话内容。"
-                + "下一步：把 ChatGPT 窗口切到前台并打开一个会话，然后重跑；仍失败请运行 axprobe dump 收集诊断信息。")
+                + "下一步：把 ChatGPT 窗口切到前台并打开一个会话，然后\(host.retryInstruction)；"
+                + "仍失败请\(host.diagnosticsInstruction)。")
         }
         messages.append("✅ 环境就绪")
         return BridgeReadiness(ok: true, messages: messages)
