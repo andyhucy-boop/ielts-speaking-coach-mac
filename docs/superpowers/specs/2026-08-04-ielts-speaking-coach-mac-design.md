@@ -203,6 +203,40 @@ Chromium 的无障碍树是**惰性构建**的。初次探测仅 234 节点、�
 1. **`ReviewRequestPrompt` 必须把每个数组元素的字段名逐一写死**，与 `ReviewArchiver` 读取的字段严格一一对应。
 2. **`ReviewArchiver` 必须能报告「顶层键存在但一条都没归进去」**。归档 0 条不等于没错题——更可能是字段名对不上。静默的 0 是本项目已知最危险的失败形态。
 
+### 2.3.9 复盘在 AX 树里是碎片；用 ChatGPT 自己的复制按钮取回
+
+首次真机练习中 `captureLatestAssistantMessage(expectedMarker:)` 失败、退回手动 ⌘C。事后 dump 找到原因：
+
+```
+AXStaticText value="}"
+AXStaticText value="<<<END_IELTS_REVIEW_JSON"
+AXStaticText value=":sync-1785940167"
+AXStaticText value=">>>"
+```
+
+**复盘确实在 AX 树里，但被切成了大量碎片节点——连定界标记本身都被拆成三段。** 而读取逻辑找的是「某个 `AXStaticText` 的内容包含完整标记」，这样的节点根本不存在。
+
+**这改变了 spec 假设 5 的性质：** 不是「读不到滚出屏幕的历史」，而是「读到的是碎片」。拼接碎片理论上可行，但依赖节点顺序与拼接规则，ChatGPT 一改版就会崩。
+
+**采用的方案（由用户提出）：按 ChatGPT 自己的复制按钮，然后读剪贴板。**
+
+| | 拼接 AX 碎片 | 点复制按钮 |
+|---|---|---|
+| 可靠性 | 依赖节点顺序与拼接规则 | 用应用自身功能，内容完整性由它保证 |
+| 滚出屏幕的部分 | 不确定 | 无关，它复制整条消息 |
+| 实现复杂度 | 高 | 低 |
+
+**两个复制按钮必须区分清楚**（实测）：
+
+| 节点 | 归属 | 相邻元素 |
+|---|---|---|
+| `AXButton desc="Copy message"` | **用户自己**发的消息 | 挨着 `Edit message` |
+| `AXButton desc="Copy"` | **ChatGPT 的回复** | 紧跟复盘结束标记，挨着 `Good response` |
+
+两者均为单个 `AXImage` 子节点，都能通过 2.3.1 的结构判据，**只能靠标签精确区分**。要的是 `Copy`。
+
+界面上可能有多条助手消息、各带一个 `Copy`。**必须取最后一个**（深度优先顺序 ≈ 文档顺序，最后一个即最新一条），而 `matchControl` 返回的是第一个匹配——不能直接复用。
+
 ### 2.4 输入框与语音共存
 
 `AXTextArea desc="Work with ChatGPT"` 与 `Stop voice chat`、`Mute speakers` 等按钮**位于同一控制条内**——语音进行中依然可以发送文字。
