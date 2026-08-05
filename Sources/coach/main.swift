@@ -10,6 +10,7 @@ guard let command = args.first else {
       coach questions import <文件>  导入题库（CSV 或 JSON）
       coach questions list [part]   列出题库
       coach practice <题目id>        开始一次练习
+      coach reimport                把已保存但未入库的复盘重新归档
     """)
     exit(2)
 }
@@ -21,6 +22,8 @@ case "questions":
     exit(QuestionsCommand.run(Array(args.dropFirst())))
 case "practice":
     exit(PracticeCommand.run(Array(args.dropFirst())))
+case "reimport":
+    exit(ReimportCommand.run())
 default:
     print("未知命令：\(command)。运行 coach 查看用法。")
     exit(2)

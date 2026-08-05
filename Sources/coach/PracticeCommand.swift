@@ -129,15 +129,23 @@ enum PracticeCommand {
                 return 1
             }
 
-            try store.mutate { state in
-                state = ReviewArchiver.archive(report: report, into: state, sessionID: sessionID,
-                                               questionID: question.id,
-                                               at: ISO8601DateFormatter().string(from: Date()))
+            let outcome = try store.mutate { state -> ArchiveOutcome in
+                let result = ReviewArchiver.archive(report: report, into: state, sessionID: sessionID,
+                                                    questionID: question.id,
+                                                    at: ISO8601DateFormatter().string(from: Date()))
+                state = result.state
+                return result
             }
             let state = try store.load()
             print("\n✅ 复盘已存档。")
             print("   错题本 \(state.issues.count) 条，词汇本 \(state.vocabulary.count) 条，"
                 + "重训目标 \(state.targets.count) 个")
+            if !outcome.skipped.isEmpty {
+                print("\n⚠️  复盘里有 \(outcome.skipped.joined(separator: "、"))，但一条都没能归进档案。")
+                print("   这通常意味着 ChatGPT 用的字段名和本工具读的对不上。")
+                print("   下一步：复盘原文已完整保存在上面那个路径；"
+                    + "修好之后可以用 coach reimport 把它重新入库，这次练习不会白费。")
+            }
             return 0
         } catch {
             print("\n❌ \(error.localizedDescription)")

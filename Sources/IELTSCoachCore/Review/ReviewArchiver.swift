@@ -1,26 +1,70 @@
 import Foundation
 
+/// `archive` 的结果：归档后的新 state，加上「静默丢失」诊断。
+public struct ArchiveOutcome: Equatable, Sendable {
+    public let state: CoachState
+    /// 顶层键存在、且非空，但本次一条都没能归进档案的字段名（目前只检查
+    /// must_correct 与 vocabulary，见 ReviewArchiver.archive 内的判定）。
+    ///
+    /// **归档 0 条不等于没错题**——更可能是 ChatGPT 用的字段名（或整个结构的形状，
+    /// 比如把数组写成了对象）与我们读的对不上，而这种失败不报错、不崩溃，
+    /// 只是悄悄什么都不做。静默的 0 是本项目已知最危险的失败形态：用户练了一整场、
+    /// 复盘也写得完整，档案却纹丝不动，且没有任何信号提示哪里错了。
+    public let skipped: [String]
+
+    public init(state: CoachState, skipped: [String]) { self.state = state; self.skipped = skipped }
+}
+
 /// 把一份已解析的复盘并入训练档案。纯函数：吃进旧 state，吐出新 state，不做任何 IO。
 public enum ReviewArchiver {
     public static func archive(report: JSONValue, into state: CoachState,
-                               sessionID: String, questionID: String, at timestamp: String) -> CoachState {
+                               sessionID: String, questionID: String, at timestamp: String) -> ArchiveOutcome {
         var updated = state
-        mergeIssues(from: report, into: &updated, sessionID: sessionID, at: timestamp)
-        mergeVocabulary(from: report, into: &updated, sessionID: sessionID)
+        var skipped: [String] = []
+
+        let issuesMerged = mergeIssues(from: report, into: &updated, sessionID: sessionID, at: timestamp)
+        if isPresentAndNonEmpty(report["must_correct"]) && issuesMerged == 0 {
+            skipped.append("must_correct")
+        }
+
+        let vocabularyMerged = mergeVocabulary(from: report, into: &updated, sessionID: sessionID)
+        if isPresentAndNonEmpty(report["vocabulary"]) && vocabularyMerged == 0 {
+            skipped.append("vocabulary")
+        }
+
         appendTarget(from: report, into: &updated, sessionID: sessionID, at: timestamp)
         advancePlan(in: &updated, questionID: questionID)
         markPracticed(in: &updated, questionID: questionID)
-        return updated
+        return ArchiveOutcome(state: updated, skipped: skipped)
+    }
+
+    /// 「该键在复盘里存在且非空」的判定。刻意不要求特定形状（数组 vs 对象）——
+    /// 实测故障里 vocabulary 曾被 ChatGPT 输出成一个非空对象而不是数组，
+    /// 若这里只认「非空数组」，那次故障反而不会被判定为 skipped（因为 arrayValue
+    /// 直接是 nil，看起来像「键不存在」），恰好漏掉了最该报警的那种情况。
+    private static func isPresentAndNonEmpty(_ value: JSONValue?) -> Bool {
+        guard let value else { return false }
+        switch value {
+        case .null: return false
+        case .array(let items): return !items.isEmpty
+        case .object(let dict): return !dict.isEmpty
+        case .string(let s): return !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .bool, .number: return true
+        }
     }
 
     // MARK: - 错题：按 learner_said 归并并累加出现次数
 
+    /// 返回本次实际归并（新增或命中已有记录）的条数。
+    @discardableResult
     private static func mergeIssues(from report: JSONValue, into state: inout CoachState,
-                                    sessionID: String, at timestamp: String) {
+                                    sessionID: String, at timestamp: String) -> Int {
+        var merged = 0
         for entry in report["must_correct"]?.arrayValue ?? [] {
             let said = (entry["learner_said"]?.stringValue ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard !said.isEmpty else { continue }
+            merged += 1
 
             if let index = state.issues.firstIndex(where: {
                 $0.learnerSaid.trimmingCharacters(in: .whitespacesAndNewlines) == said
@@ -41,16 +85,21 @@ public enum ReviewArchiver {
                     lastSeenAt: timestamp))
             }
         }
+        return merged
     }
 
     // MARK: - 词汇：按 basic 去重
 
+    /// 返回本次实际归并（新增或命中已有记录）的条数。
+    @discardableResult
     private static func mergeVocabulary(from report: JSONValue, into state: inout CoachState,
-                                        sessionID: String) {
+                                        sessionID: String) -> Int {
+        var merged = 0
         for entry in report["vocabulary"]?.arrayValue ?? [] {
             let basic = (entry["basic"]?.stringValue ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard !basic.isEmpty else { continue }
+            merged += 1
 
             if let index = state.vocabulary.firstIndex(where: { $0.basicWord == basic }) {
                 if !state.vocabulary[index].sourceSessionIds.contains(sessionID) {
@@ -66,6 +115,7 @@ public enum ReviewArchiver {
                     sourceSessionIds: [sessionID]))
             }
         }
+        return merged
     }
 
     // MARK: - 重训目标

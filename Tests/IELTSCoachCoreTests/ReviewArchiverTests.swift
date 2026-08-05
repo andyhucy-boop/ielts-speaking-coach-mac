@@ -24,7 +24,7 @@ final class ReviewArchiverTests: XCTestCase {
     func testAddsNewIssue() {
         let state = ReviewArchiver.archive(report: report, into: baseState(),
                                            sessionID: "2026-08-04-001", questionID: "q1",
-                                           at: "2026-08-04T10:00:00Z")
+                                           at: "2026-08-04T10:00:00Z").state
         XCTAssertEqual(state.issues.count, 1)
         XCTAssertEqual(state.issues[0].learnerSaid, "I very like it.")
         XCTAssertEqual(state.issues[0].occurrences, 1)
@@ -33,9 +33,9 @@ final class ReviewArchiverTests: XCTestCase {
 
     func testIncrementsOccurrenceForRepeatedIssue() {
         var state = ReviewArchiver.archive(report: report, into: baseState(),
-                                           sessionID: "s1", questionID: "q1", at: "t1")
+                                           sessionID: "s1", questionID: "q1", at: "t1").state
         state = ReviewArchiver.archive(report: report, into: state,
-                                       sessionID: "s2", questionID: "q1", at: "t2")
+                                       sessionID: "s2", questionID: "q1", at: "t2").state
         XCTAssertEqual(state.issues.count, 1)
         XCTAssertEqual(state.issues[0].occurrences, 2)
         XCTAssertEqual(state.issues[0].sourceSessionIds, ["s1", "s2"])
@@ -44,9 +44,9 @@ final class ReviewArchiverTests: XCTestCase {
 
     func testDoesNotDuplicateSessionIDWhenArchivedTwice() {
         var state = ReviewArchiver.archive(report: report, into: baseState(),
-                                           sessionID: "s1", questionID: "q1", at: "t1")
+                                           sessionID: "s1", questionID: "q1", at: "t1").state
         state = ReviewArchiver.archive(report: report, into: state,
-                                       sessionID: "s1", questionID: "q1", at: "t2")
+                                       sessionID: "s1", questionID: "q1", at: "t2").state
         // 这条断言不能省：只查 sourceSessionIds 的话，即使归并逻辑退化成
         // 「每次都新增一条错题记录」，issues[0] 依然是第一条、依然只含 s1，测试照样绿。
         XCTAssertEqual(state.issues.count, 1, "同一 session 重复入库不应新增错题记录")
@@ -60,7 +60,7 @@ final class ReviewArchiverTests: XCTestCase {
 
     func testAddsVocabulary() {
         let state = ReviewArchiver.archive(report: report, into: baseState(),
-                                           sessionID: "s1", questionID: "q1", at: "t")
+                                           sessionID: "s1", questionID: "q1", at: "t").state
         XCTAssertEqual(state.vocabulary.count, 1)
         XCTAssertEqual(state.vocabulary[0].basicWord, "good")
         XCTAssertEqual(state.vocabulary[0].betterExpression, "rewarding")
@@ -69,7 +69,7 @@ final class ReviewArchiverTests: XCTestCase {
 
     func testAppendsRetrainingTarget() {
         let state = ReviewArchiver.archive(report: report, into: baseState(),
-                                           sessionID: "s1", questionID: "q1", at: "t")
+                                           sessionID: "s1", questionID: "q1", at: "t").state
         XCTAssertEqual(state.targets.count, 1)
         XCTAssertEqual(state.targets[0].targetKey, "logic-explain-example")
         XCTAssertEqual(state.targets[0].sourceSessionId, "s1")
@@ -77,22 +77,65 @@ final class ReviewArchiverTests: XCTestCase {
 
     func testAdvancesPlanProgress() {
         let state = ReviewArchiver.archive(report: report, into: baseState(),
-                                           sessionID: "s1", questionID: "q1", at: "t")
+                                           sessionID: "s1", questionID: "q1", at: "t").state
         XCTAssertEqual(state.plan?.days[0].completedQuestionIds, ["q1"])
     }
 
     func testMarksQuestionPracticed() {
         let state = ReviewArchiver.archive(report: report, into: baseState(),
-                                           sessionID: "s1", questionID: "q1", at: "t")
+                                           sessionID: "s1", questionID: "q1", at: "t").state
         XCTAssertEqual(state.questions[0].status, "practiced")
     }
 
     func testHandlesReportWithNoIssuesOrVocabulary() {
         let sparse = try! JSONValue.decode(from: #"{"must_correct":[],"priority_target":{"id":"t1"}}"#)
-        let state = ReviewArchiver.archive(report: sparse, into: baseState(),
-                                           sessionID: "s1", questionID: "q1", at: "t")
-        XCTAssertTrue(state.issues.isEmpty)
-        XCTAssertTrue(state.vocabulary.isEmpty)
-        XCTAssertEqual(state.targets.count, 1)
+        let outcome = ReviewArchiver.archive(report: sparse, into: baseState(),
+                                             sessionID: "s1", questionID: "q1", at: "t")
+        XCTAssertTrue(outcome.state.issues.isEmpty)
+        XCTAssertTrue(outcome.state.vocabulary.isEmpty)
+        XCTAssertEqual(outcome.state.targets.count, 1)
+        // must_correct 是空数组、vocabulary 键根本不存在：两者都不算「存在且非空但没归进去」，
+        // 不应该报警——报警是留给「有内容却没归进去」这种真正可疑的情况。
+        XCTAssertTrue(outcome.skipped.isEmpty)
+    }
+
+    // MARK: - skipped：归档 0 条时必须报警（spec 2.3.8 的直接现场）
+
+    /// 真机实测到的故障现场：ChatGPT 把 must_correct 的字段名写成了
+    /// issue/examples/fix，而不是 ReviewArchiver 读的 learner_said/correction/why_it_matters。
+    /// 数组本身非空，但一条都识别不出来——这正是「归档 0 条不等于没错题」的典型样本。
+    func testSkippedReportsMustCorrectWhenFieldNamesDoNotMatch() {
+        let mismatched = try! JSONValue.decode(from: """
+        {"summary":"ok",
+         "must_correct":[{"issue":"filler words","examples":["um","like"],"fix":"pause instead"}],
+         "priority_target":{"id":"t1"}}
+        """)
+        let outcome = ReviewArchiver.archive(report: mismatched, into: baseState(),
+                                             sessionID: "s1", questionID: "q1", at: "t")
+        XCTAssertTrue(outcome.skipped.contains("must_correct"))
+        XCTAssertTrue(outcome.state.issues.isEmpty, "字段名对不上时不应该凭空造出一条空白错题记录")
+    }
+
+    /// 同一类故障的 vocabulary 版本：真机实测里 ChatGPT 把 vocabulary 整体输出成了
+    /// 一个对象（{"useful_replacements":...,"pronunciation":...}）而不是数组。
+    func testSkippedReportsVocabularyWhenShapeIsWrong() {
+        let wrongShape = try! JSONValue.decode(from: """
+        {"summary":"ok",
+         "vocabulary":{"useful_replacements":["rewarding"],"pronunciation":"n/a"},
+         "priority_target":{"id":"t1"}}
+        """)
+        let outcome = ReviewArchiver.archive(report: wrongShape, into: baseState(),
+                                             sessionID: "s1", questionID: "q1", at: "t")
+        XCTAssertTrue(outcome.skipped.contains("vocabulary"))
+        XCTAssertTrue(outcome.state.vocabulary.isEmpty)
+    }
+
+    /// 反面对照：字段名正确时不应该报 skipped。
+    func testSkippedIsEmptyWhenFieldNamesMatch() {
+        let outcome = ReviewArchiver.archive(report: report, into: baseState(),
+                                             sessionID: "s1", questionID: "q1", at: "t")
+        XCTAssertTrue(outcome.skipped.isEmpty)
+        XCTAssertEqual(outcome.state.issues.count, 1)
+        XCTAssertEqual(outcome.state.vocabulary.count, 1)
     }
 }
