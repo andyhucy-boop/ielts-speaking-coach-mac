@@ -6,11 +6,16 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .library(name: "IELTSCoachCore", targets: ["IELTSCoachCore"]),
-        .executable(name: "axprobe", targets: ["axprobe"])
+        .library(name: "ChatGPTBridge", targets: ["ChatGPTBridge"]),
+        .executable(name: "axprobe", targets: ["axprobe"]),
+        .executable(name: "coach", targets: ["coach"])
     ],
     targets: [
         .target(name: "IELTSCoachCore"),
-        .executableTarget(name: "axprobe"),
-        .testTarget(name: "IELTSCoachCoreTests", dependencies: ["IELTSCoachCore"])
+        .target(name: "ChatGPTBridge", dependencies: ["IELTSCoachCore"]),
+        .executableTarget(name: "axprobe", dependencies: ["ChatGPTBridge"]),
+        .executableTarget(name: "coach", dependencies: ["IELTSCoachCore", "ChatGPTBridge"]),
+        .testTarget(name: "IELTSCoachCoreTests", dependencies: ["IELTSCoachCore"]),
+        .testTarget(name: "ChatGPTBridgeTests", dependencies: ["ChatGPTBridge"])
     ]
 )

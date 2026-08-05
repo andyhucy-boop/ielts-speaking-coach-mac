@@ -1,4 +1,4 @@
-import ApplicationServices
+import ChatGPTBridge
 import Foundation
 
 enum PressCommand {
@@ -10,29 +10,35 @@ enum PressCommand {
     static let stopVoiceLabels: Set<String> = ["Stop voice chat"]
 
     static func run(description: String) -> Int32 {
-        guard let app = AXTree.appElement(bundleID: Doctor.targetBundleID) else {
+        let access = LiveAXAccess()
+        guard access.isTargetRunning() else {
             print("❌ 目标应用未运行。")
             print("   下一步：打开 ChatGPT 后重跑本命令。")
             return 1
         }
-        AXTree.wake(app)
+        _ = access.wakeAccessibilityTree(timeout: 8.0)
 
-        var target: AXUIElement?
+        // 一次性快照：目标按钮的 AXElementRef 只在这次快照的映射里有效，
+        // 按下前绝不能再调用 snapshotTree()（它会清空并重建映射，
+        // 使之前拿到的 AXElementRef 失效——这正是「按钮明明在，按下去没反应」的坑）。
+        let nodes = access.snapshotTree()
+
+        var target: AXElementRef?
         var candidates: [String] = []
         // 标签对上了、但结构不是"纯图标控制按钮"的元素——多半是撞名的历史记录/列表项。
         var structMismatches: [(role: String, childRoles: [String])] = []
 
-        AXTree.walk(app) { node, element in
-            guard node.role == "AXButton" || node.role == "AXCheckBox" else { return }
-            let label = node.descriptionText.isEmpty ? node.title : node.descriptionText
-            guard !label.isEmpty else { return }
+        for node in nodes {
+            guard node.role == "AXButton" || node.role == "AXCheckBox" else { continue }
+            let label = node.label
+            guard !label.isEmpty else { continue }
             candidates.append(label)
-            guard label == description else { return }
+            guard label == description else { continue }
 
-            if AXTree.isIconOnlyControl(element) {
-                if target == nil { target = element }
+            if node.isIconOnlyControl {
+                if target == nil { target = node.element }
             } else {
-                structMismatches.append((node.role, AXTree.childRoles(element)))
+                structMismatches.append((node.role, node.childRoles))
             }
         }
 
@@ -53,11 +59,12 @@ enum PressCommand {
         }
 
         // 操作前先记一笔"语音是否激活"的现状，方便按下后对比。
-        let activeBefore = AXTree.findElement(role: "AXImage", description: "Voice chat active") != nil
+        // 复用刚才那次快照（此刻界面还没被按下操作改变，状态与再拍一次等价），
+        // 避免为了这一步而重新 snapshotTree() 使 button 的引用失效。
+        let activeBefore = nodes.contains { $0.role == "AXImage" && $0.descriptionText == "Voice chat active" }
 
-        let result = AXUIElementPerformAction(button, kAXPressAction as CFString)
-        guard result == .success else {
-            print("❌ 按下「\(description)」失败，AX 返回码 \(result.rawValue)。")
+        guard access.press(button) else {
+            print("❌ 按下「\(description)」失败，AX 返回码非 0。")
             print("   下一步：确认 ChatGPT 窗口在前台且该按钮当前可点击，然后重试。")
             return 1
         }
@@ -65,7 +72,8 @@ enum PressCommand {
         // kAXPressAction 返回成功只代表"AX 层认为点击动作发出去了"，不代表应用真的响应了——
         // 这正是最初把侧边栏历史项误判为"按下成功"的原因。所以必须回头看真实状态是否变化。
         Thread.sleep(forTimeInterval: 1.5)
-        let activeAfter = AXTree.findElement(role: "AXImage", description: "Voice chat active") != nil
+        let afterNodes = access.snapshotTree()
+        let activeAfter = afterNodes.contains { $0.role == "AXImage" && $0.descriptionText == "Voice chat active" }
 
         let changeText: String
         switch (activeBefore, activeAfter) {
