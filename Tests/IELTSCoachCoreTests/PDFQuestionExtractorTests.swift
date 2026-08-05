@@ -211,6 +211,13 @@ final class PDFQuestionExtractorTests: XCTestCase {
 
     // MARK: - 噪声
 
+    /// ⚠️ 这条断言原本写的是「题数等于 3」加「没有哪道题的 prompt 恰好是 `/` 或 `6`」，
+    /// 那两条把 `/` 这一半漏空了：把「丢掉 `/`」整条规则删掉，`/` 并不会变成一道独立的题，
+    /// 而是被折行合并器当成续行粘到上一句尾巴上，产出是
+    /// 「Do you work or are you a student? /」——题数仍是 3，也没有哪道 prompt 恰好等于 `/`，
+    /// 两条断言双双照绿。名字和注释都写着「分支分隔符 /」，实际只守住了页码那一半。
+    ///
+    /// 所以改成逐条比对完整的 prompt 列表：粘到句尾也好、单独成题也好，一律红。
     func testPageNumbersAndBranchSeparatorAreNotQuestions() throws {
         let text = """
         Part 1 T opics
@@ -224,8 +231,11 @@ final class PDFQuestionExtractorTests: XCTestCase {
         """
         let result = try PDFQuestionExtractor.extract(
             plainText: text, sourceTitle: "t", sourceUrl: "")
-        XCTAssertEqual(result.questions.count, 3, "页码与分支分隔符 / 都不是题目")
-        XCTAssertFalse(result.questions.contains { $0.prompt == "/" || $0.prompt == "6" })
+        XCTAssertEqual(result.questions.map(\.prompt), [
+            "Do you work or are you a student?",
+            "What work do you do?",
+            "Do you like your job?"
+        ], "页码与分支分隔符 / 都不是题目，也不许被当成续行粘到上一道题的尾巴上")
     }
 
     // MARK: - 一道题都没提出来必须报警

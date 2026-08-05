@@ -52,6 +52,9 @@ public enum PDFQuestionExtractor {
             // 页码：整行只有数字。
             if line.allSatisfy(\.isNumber) { continue }
             // Part 1 里学生 / 工作者两条分支之间的分隔符。
+            // 删掉这一行 `/` 不会变成独立的题，而是被折行合并器当成续行粘成
+            // 「Do you work or are you a student? /」——`testPageNumbersAndBranchSeparatorAreNotQuestions`
+            // 逐条比对完整 prompt 列表，正是为了让这种「粘到句尾」也照样红。
             if line == "/" { continue }
             kept.append(line)
         }

@@ -45,6 +45,40 @@ final class QuestionBankViewTests: XCTestCase {
                 + "下一步：确认导入结果确实是由这个类型驱动呈现的。")
     }
 
+    /// 同一招守另一条也「只有一根线、断了功能就整个废掉」的东西：
+    /// 用户选完文件之后，这一页走的必须是 `QuestionBankImport.importFile(at:)` 那一条收口过的路。
+    ///
+    /// 背景：认格式、取文字、解析这三步各自都有测试，但「三步在界面里有没有真的串起来」
+    /// 一度无人守——把取文字那一步换回 `String(contentsOf:encoding:.utf8)`，
+    /// 真实 PDF 必然读不出来、导入功能整个废掉，而全部测试一条都不红。
+    /// 三步已收进 `importFile`，`QuestionBankPDFImportTests` 守着它本身；
+    /// 这里守的是最后那一段——视图确实调的是它，而不是自己另拼一条。
+    ///
+    /// 边界同上：扫源码证明不了运行时行为，只能证明这一页没有绕开那个入口。
+    func testTheImportPathGoesThroughTheOneComposedEntryPoint() throws {
+        let source = try String(contentsOf: Self.viewSource, encoding: .utf8)
+        let code = DesignSystemTests.strippingLineComments(source)
+
+        XCTAssertTrue(
+            code.contains("struct QuestionBankView"),
+            "没扫到 QuestionBankView 的源码，这条测试等于空转。下一步：确认文件还在——"
+                + Self.viewSource.path)
+
+        XCTAssertTrue(
+            code.contains("QuestionBankImport.importFile(at:"),
+            "这一页没有走 `QuestionBankImport.importFile(at:)`。认格式、取文字、解析三步"
+                + "在界面里自己拼一遍的话，取文字那一步一旦写成按 UTF-8 读文件，"
+                + "真实 PDF 就再也导不进来，而没有任何一条测试会红。"
+                + "下一步：把导入改回调 `QuestionBankImport.importFile(at:)`（它已被"
+                + "`QuestionBankPDFImportTests` 覆盖），或换一种同样可测的收口方式并同步改这条测试。")
+
+        XCTAssertFalse(
+            code.contains("String(contentsOf: url"),
+            "这一页又开始自己按文本读用户选中的文件了。PDF 不是文本文件，这样读必然失败，"
+                + "而报出来的「另存为 UTF-8」对一份 PDF 是做不到的事。"
+                + "下一步：读文件交给 `QuestionBankFileReader.text(at:format:)`（`importFile` 已经在用）。")
+    }
+
     /// 被扫的文件。
     static var viewSource: URL {
         URL(fileURLWithPath: #filePath)

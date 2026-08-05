@@ -234,6 +234,30 @@ public enum QuestionBankImport {
             .makeImportResult(text: text, sourceTitle: sourceTitle(ofFileName: fileName))
     }
 
+    /// **用户选中一个文件之后，从这里到题目只有这一条路。**
+    ///
+    /// 认格式 → 取文字 → 解析。三步的顺序不能换：PDF 不能按 UTF-8 文本读
+    /// （见 `QuestionBankFileReader`），而「这是不是 PDF」只有认完格式才知道。
+    ///
+    /// 收成一个函数，是因为三步各自都有测试、唯独「三步在界面里有没有真的串起来」测不到——
+    /// 而那恰恰是决定用户选完 PDF 之后到底有没有题的那一根线。散在 `View` 里时，
+    /// 把取文字那一步换回 `String(contentsOf:encoding:.utf8)`（PDF 支持之前的读法），
+    /// 真实 PDF 必然读不出来、导入功能整个废掉，却没有任何一条测试会红。
+    /// 收到这儿之后，`QuestionBankPDFImportTests` 从一头进、断言另一头出来的是
+    /// `PDFQuestionExtractor` 的产物，那条线就被守住了。
+    ///
+    /// `pdfText` 默认走 PDFKit，测试里注入假实现——单元测试里造不出一份真 PDF。
+    public static func importFile(
+        at url: URL,
+        pdfText: (URL) -> String? = QuestionBankFileReader.pdfPlainText
+    ) throws -> ImportResult {
+        let fileName = url.lastPathComponent
+        let format = try format(ofFileName: fileName)
+        let text = try QuestionBankFileReader.text(at: url, format: format, pdfText: pdfText)
+        return try format.makeImportResult(text: text,
+                                           sourceTitle: sourceTitle(ofFileName: fileName))
+    }
+
     /// 把导入过程中的任何失败翻译成用户能照做的一句话。
     ///
     /// `CoachError` 的文案本来就按铁律 6 写好了，原样透传；

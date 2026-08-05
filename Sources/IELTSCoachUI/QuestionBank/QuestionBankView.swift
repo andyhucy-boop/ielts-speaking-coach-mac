@@ -237,18 +237,19 @@ struct QuestionBankView: View {
         runImport(from: url)
     }
 
-    /// **先认格式、再读文字、最后解析。** 三步的顺序不能换：PDF 不能按 UTF-8 文本读，
-    /// 而「这是不是 PDF」只有认完格式才知道（`QuestionBankFileReader` 里有完整说明）。
+    /// 认格式、取文字、解析这三步**不在这里各写一遍**，全部收在
+    /// `QuestionBankImport.importFile(at:)` 里——`View` 写不了单元测试，三步散在这儿时，
+    /// 取文字那一步一旦被改回按 UTF-8 读文件，真实 PDF 就再也导不进来，
+    /// 而三步各自的测试全都照绿。收口之后那条线由 `QuestionBankPDFImportTests` 守着，
+    /// 「这一页确实调的是它」由 `QuestionBankViewTests` 扫源码守着。
     private func runImport(from url: URL) {
-        let fileName = url.lastPathComponent
         do {
-            let format = try QuestionBankImport.format(ofFileName: fileName)
-            let text = try QuestionBankFileReader.text(at: url, format: format)
-            let result = try QuestionBankImport.parse(fileName: fileName, text: text)
+            let result = try QuestionBankImport.importFile(at: url)
             feedback = QuestionBankImportFeedback(outcome: try app.applyImport(result))
         } catch {
             feedback = QuestionBankImportFeedback(
-                failureMessage: QuestionBankImport.describeFailure(error, fileName: fileName))
+                failureMessage: QuestionBankImport.describeFailure(
+                    error, fileName: url.lastPathComponent))
         }
     }
 }
