@@ -1340,7 +1340,10 @@ import IELTSCoachCore
 
 enum PracticeCommand {
     static func run(_ args: [String]) -> Int32 {
-        guard let questionID = args.first, !questionID.hasPrefix("--") else {
+        // 题号可以出现在任意位置——不能只看 args.first，
+        // 否则 `coach practice --immediate p1-home-001` 会被误判成「没指定题目」。
+        guard let questionID = args.first(where: { !$0.hasPrefix("--") }),
+              !isFlagValue(questionID, in: args) else {
             print("❌ 没有指定题目。下一步：先 coach questions list 看有哪些题，再 coach practice <题目id>")
             return 2
         }
@@ -1400,11 +1403,25 @@ enum PracticeCommand {
             let raw = captureReview(driver: driver)
             guard let raw else { return 1 }
 
-            let report = try ReviewParser.parse(raw, requireAnswerUpgrades: false)
+            // ⚠️ 必须先落盘再解析。spec 第 5 节的原话是「复盘先落盘再入库，
+            // 中途崩溃或误关窗口都不丢数据」。反过来写的话，解析一抛错，
+            // 用户练了一整场换来的复盘原文就没了，只能从头再练一次。
             let sessionID = ISO8601DateFormatter().string(from: Date())
             try directory.createIfNeeded()
-            try raw.write(to: directory.pendingReviewsDirectory.appending(path: "\(requestID).txt"),
-                          atomically: true, encoding: .utf8)
+            let pendingPath = directory.pendingReviewsDirectory.appending(path: "\(requestID).txt")
+            try raw.write(to: pendingPath, atomically: true, encoding: .utf8)
+            print("▶︎ 复盘原文已存到 \(pendingPath.path)")
+
+            let report: JSONValue
+            do {
+                report = try ReviewParser.parse(raw, requireAnswerUpgrades: false)
+            } catch {
+                print("\n❌ \(error.localizedDescription)")
+                print("   好消息是原文没丢，就在 \(pendingPath.path)")
+                print("   下一步：打开这个文件看看 ChatGPT 到底输出了什么；"
+                    + "若格式确实不对，回 ChatGPT 里让它按要求重新输出一次，再用 ⌘C 复制。")
+                return 1
+            }
 
             try store.mutate { state in
                 state = ReviewArchiver.archive(report: report, into: state, sessionID: sessionID,
@@ -1426,15 +1443,11 @@ enum PracticeCommand {
     /// 后台线程读一行 stdin 作为手动兜底，主循环用 VoiceEndPolicy 判断语音是否已结束。
     /// 只做手动那一半的话，Phase 1 造的 VoiceEndPolicy 就成了死代码；
     /// 只做自动那一半的话，AX 万一失灵用户就卡住了。
-    private static func waitForSessionEnd(driver: AXDriver) {
-        let manualStop = ManualStopFlag()
-        Thread.detachNewThread {
-            _ = readLine()
-            manualStop.set()
-        }
+    private static func waitForSessionEnd(driver: AXDriver, enter: EnterWaiter) {
+        enter.arm()
 
         var state = VoiceEndState()
-        while !manualStop.isSet {
+        while !enter.isPressed {
             state = VoiceEndPolicy.advance(previous: state,
                                            voiceActive: driver.isVoiceActive(),
                                            busy: false)
@@ -1447,20 +1460,44 @@ enum PracticeCommand {
         print("▶︎ 已手动结束")
     }
 
-    /// 跨线程的一次性标志。用类而非局部 var，因为要被后台线程写。
-    private final class ManualStopFlag: @unchecked Sendable {
+    /// **独占 stdin 的读取器。整个流程只能有一个线程在读。**
+    ///
+    /// 两个线程同时等回车时，内核只会唤醒其中一个，另一个永远阻塞——
+    /// 这正是「AX 自动探测到语音结束（手动线程仍挂着）→ 取复盘失败 → 剪贴板兜底
+    /// 又调一次 readLine」这条路径上会发生的事，直接违反「禁止无限等待」。
+    private final class EnterWaiter: @unchecked Sendable {
         private let lock = NSLock()
-        private var value = false
-        var isSet: Bool { lock.lock(); defer { lock.unlock() }; return value }
-        func set() { lock.lock(); value = true; lock.unlock() }
+        private var pressed = false
+        private var reading = false
+
+        /// 确保有且只有一个后台线程在读 stdin。已在读或已按下时不再新起线程。
+        func arm() {
+            lock.lock(); defer { lock.unlock() }
+            guard !reading, !pressed else { return }
+            reading = true
+            Thread.detachNewThread { [self] in
+                _ = readLine()
+                lock.lock(); pressed = true; reading = false; lock.unlock()
+            }
+        }
+
+        var isPressed: Bool { lock.lock(); defer { lock.unlock() }; return pressed }
+
+        /// 阻塞直到用户按回车，并消费掉这次按键。
+        func waitForPress() {
+            arm()
+            while !isPressed { Thread.sleep(forTimeInterval: 0.1) }
+            lock.lock(); pressed = false; lock.unlock()
+        }
     }
 
     /// 先试 AX 自动读，失败则降级到剪贴板。两条路都失败时给出可执行的下一步。
-    private static func captureReview(driver: AXDriver) -> String? {
-        do { return try driver.captureLatestAssistantMessage() } catch {
+    private static func captureReview(driver: AXDriver, marker: String,
+                                      enter: EnterWaiter) -> String? {
+        do { return try driver.captureLatestAssistantMessage(expectedMarker: marker) } catch {
             print("⚠️  \(error.localizedDescription)")
             print("\n请在 ChatGPT 里选中整段复盘按 ⌘C，然后回到这里按回车。")
-            _ = readLine()
+            enter.waitForPress()
             do { return try ClipboardFallback.readReview(from: SystemPasteboard()) } catch {
                 print("❌ \(error.localizedDescription)")
                 return nil
