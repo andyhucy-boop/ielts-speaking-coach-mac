@@ -14,12 +14,15 @@ public protocol AXAccess: Sendable {
     func launchTarget() throws
     /// 唤醒 Chromium 的惰性无障碍树。返回是否观察到 AXWebArea。
     func wakeAccessibilityTree(timeout: TimeInterval) -> Bool
-    /// 深度优先遍历当前树，返回全部节点快照
+    /// 深度优先遍历当前树，返回全部节点快照。
+    /// **每次调用都会开启新的代次，此前取得的 `AXElementRef` 随即失效。**
     func snapshotTree() -> [AXNodeSnapshot]
     /// 设置元素的 kAXValueAttribute。返回是否成功。
+    /// **元素来自过期代次时必须返回 false，不得操作任何元素。**
     func setValue(_ text: String, on element: AXElementRef) -> Bool
     /// 对元素执行 kAXPressAction。返回是否成功。
     /// **注意：返回 true 不等于动作生效**（spec 2.3.1），调用方必须另行验证状态变化。
+    /// **元素来自过期代次时必须返回 false，不得操作任何元素。**
     func press(_ element: AXElementRef) -> Bool
     /// 向目标应用发送回车键
     func sendReturnKey() -> Bool

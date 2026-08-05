@@ -3,14 +3,14 @@ import XCTest
 
 final class ChatGPTLabelsTests: XCTestCase {
     private func node(_ id: Int, role: String, desc: String, childRoles: [String]) -> AXNodeSnapshot {
-        AXNodeSnapshot(element: AXElementRef(rawID: id), role: role, descriptionText: desc,
+        AXNodeSnapshot(element: AXElementRef(rawID: id, epoch: 0), role: role, descriptionText: desc,
                        childCount: childRoles.count, childRoles: childRoles)
     }
 
     func testMatchesIconOnlyStartVoiceButton() {
         let button = node(1, role: "AXButton", desc: "Start voice chat", childRoles: ["AXImage"])
         XCTAssertEqual(ChatGPTLabels.matchControl(ChatGPTLabels.startVoice, among: [button])?.element,
-                       AXElementRef(rawID: 1))
+                       AXElementRef(rawID: 1, epoch: 0))
     }
 
     func testRejectsSidebarRowWithSameLabel() {
@@ -22,19 +22,23 @@ final class ChatGPTLabelsTests: XCTestCase {
     }
 
     func testPrefersControlButtonWhenSidebarRowComesFirst() {
-        // 深度优先遍历里侧边栏常常排在前面 —— 不能取第一个命中
-        let row = node(2, role: "AXButton", desc: "New voice chat",
+        // ⚠️ 两者标签必须**相同**，否则这条测试是装饰性的：
+        // matchControl 按候选集合顺序查找，标签不同时靠优先级就能选对，
+        // 结构判据根本不会被执行，删掉它这条测试照样绿。
+        // 标签相同时，唯一的区分依据才是结构。
+        let row = node(2, role: "AXButton", desc: "Start voice chat",
                        childRoles: ["AXGroup", "AXButton", "AXButton"])
         let button = node(3, role: "AXButton", desc: "Start voice chat", childRoles: ["AXImage"])
         XCTAssertEqual(ChatGPTLabels.matchControl(ChatGPTLabels.startVoice, among: [row, button])?.element,
-                       AXElementRef(rawID: 3))
+                       AXElementRef(rawID: 3, epoch: 0),
+                       "侧边栏行排在前面时仍必须选中结构合法的那个")
     }
 
     func testAcceptsCheckBoxControls() {
         // 静音类控件是 AXCheckBox subrole=AXToggleButton，同样单个 AXImage 子节点
         let mute = node(4, role: "AXCheckBox", desc: "Mute microphone", childRoles: ["AXImage"])
         XCTAssertEqual(ChatGPTLabels.matchControl(["Mute microphone"], among: [mute])?.element,
-                       AXElementRef(rawID: 4))
+                       AXElementRef(rawID: 4, epoch: 0))
     }
 
     func testStartVoiceCandidatesCoverAllObservedLabels() {

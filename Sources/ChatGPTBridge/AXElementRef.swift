@@ -4,7 +4,14 @@ import Foundation
 /// 这样上层逻辑不直接接触 AXUIElement，才能在没有 ChatGPT 的情况下被测试。
 public struct AXElementRef: Hashable, Sendable {
     public let rawID: Int
-    public init(rawID: Int) { self.rawID = rawID }
+    /// 快照代次，每次 `snapshotTree()` 递增。
+    ///
+    /// **不能省。** rawID 每次快照都从 0 重新编号，若不校验代次，跨快照复用旧引用时
+    /// `press`/`setValue` 不会安全失败，而会**静默命中新树里编号相同的另一个元素** ——
+    /// 比「找不到」危险得多。而 AXLocator/AXDriver 的核心就是轮询（反复取快照），
+    /// 「拿到元素 → 等某个状态 → 按下它」是极自然的写法，正好会踩中。
+    public let epoch: Int
+    public init(rawID: Int, epoch: Int) { self.rawID = rawID; self.epoch = epoch }
 }
 
 /// 元素在某一时刻的属性快照。

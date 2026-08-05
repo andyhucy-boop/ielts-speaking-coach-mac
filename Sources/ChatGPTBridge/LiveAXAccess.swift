@@ -25,6 +25,10 @@ public final class LiveAXAccess: AXAccess, @unchecked Sendable {
     /// 症状是「按钮明明在，按下去没反应」，且极难排查。
     private var elementMap: [Int: AXUIElement] = [:]
     private var nextID = 0
+    /// 当前代次。**只递增，从不重置**——`snapshotTree()` 每次调用都 +1，
+    /// 并把新值盖到本次遍历产生的所有 `AXElementRef` 上。`press`/`setValue`
+    /// 拒绝任何代次不匹配的引用，防止跨快照复用旧引用时静默命中新树里同编号的另一个元素。
+    private var currentEpoch = 0
 
     public init() {}
 
@@ -67,10 +71,12 @@ public final class LiveAXAccess: AXAccess, @unchecked Sendable {
         return containsWebArea(app)
     }
 
-    /// 深度优先遍历当前树，返回全部节点快照。**每次调用都清空并重建 rawID 映射**。
+    /// 深度优先遍历当前树，返回全部节点快照。
+    /// **每次调用都清空并重建 rawID 映射，并开启新的代次**——此前取得的 `AXElementRef` 随即失效。
     public func snapshotTree() -> [AXNodeSnapshot] {
         elementMap.removeAll()
         nextID = 0
+        currentEpoch += 1
         guard let app = appElement() else { return [] }
         var result: [AXNodeSnapshot] = []
         walk(app, depth: 0, into: &result)
@@ -78,12 +84,14 @@ public final class LiveAXAccess: AXAccess, @unchecked Sendable {
     }
 
     public func setValue(_ text: String, on element: AXElementRef) -> Bool {
+        guard element.epoch == currentEpoch else { return false }
         guard let axElement = elementMap[element.rawID] else { return false }
         return AXUIElementSetAttributeValue(axElement, kAXValueAttribute as CFString, text as CFTypeRef) == .success
     }
 
     /// **注意：返回 true 不等于动作生效**，调用方必须另行验证状态变化。
     public func press(_ element: AXElementRef) -> Bool {
+        guard element.epoch == currentEpoch else { return false }
         guard let axElement = elementMap[element.rawID] else { return false }
         return AXUIElementPerformAction(axElement, kAXPressAction as CFString) == .success
     }
@@ -139,7 +147,7 @@ public final class LiveAXAccess: AXAccess, @unchecked Sendable {
 
         let kids = children(element)
         let snapshot = AXNodeSnapshot(
-            element: AXElementRef(rawID: id),
+            element: AXElementRef(rawID: id, epoch: currentEpoch),
             role: string(element, kAXRoleAttribute as String),
             subrole: string(element, kAXSubroleAttribute as String),
             title: string(element, kAXTitleAttribute as String),
