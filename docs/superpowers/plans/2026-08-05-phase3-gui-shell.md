@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 交付一个能双击打开的 `.app`，用户可以在界面里导入题库、选题开练、看复盘报告——不再需要敲命令。
+**Goal:** 交付一个能双击打开的 `.app`，用户可以在界面里导入题库（含 PDF）、**点一下真的开始练习**、看复盘报告——全程不需要打开终端。
 
 **Architecture:** 保持 SPM 单一构建系统。界面代码放在 library target `IELTSCoachUI` 里（可在 Xcode 打开 `Package.swift` 用 SwiftUI 预览，也可单元测试），可执行 target `IELTSCoachApp` 只负责组装 Scene。`.app` 包由 `scripts/build-app.sh` 组装并用固定的自签名证书签名——签名稳定是辅助功能授权不反复失效的前提。
 
@@ -19,6 +19,7 @@
 - 目标 ChatGPT 应用固定 `com.openai.codex`
 - 测试用 XCTest
 - 涉及外部应用能力的判断，一律以**在运行中的应用上实测**为准
+- **界面必须遵循 `docs/superpowers/DESIGN-SYSTEM.md`。视图里不得出现字面颜色、字号、圆角——全部走令牌**
 
 ## 前置条件（已实测确认，2026-08-05）
 
@@ -54,9 +55,17 @@ Sources/
 │   ├── Review/
 │   │   ├── ReviewReportViewModel.swift   把复盘 JSON 拆成可显示的分区（纯逻辑，可测）
 │   │   └── ReviewReportView.swift
-│   └── Today/
-│       ├── TodayViewModel.swift          四条路线、本周进度、最近练习（纯逻辑，可测）
-│       └── TodayView.swift
+│   ├── Today/
+│   │   ├── TodayViewModel.swift          四条路线、本周进度、最近练习（纯逻辑，可测）
+│   │   └── TodayView.swift
+│   ├── DesignSystem/
+│   │   ├── Palette.swift                 颜色令牌
+│   │   ├── Metrics.swift                 间距与圆角令牌
+│   │   └── Components.swift              CoachCard / PrimaryActionCard / SectionHeader / EmptyStateView
+│   └── Session/
+│       ├── PracticeStage.swift           练习阶段与给用户看的文案（纯逻辑，可测）
+│       ├── PracticeRunner.swift          把一场练习包成可观察的状态流（只依赖 CoachBridge，可测）
+│       └── PracticeSheet.swift           练习进行中的界面
 └── IELTSCoachApp/
     └── main.swift           只组装 Scene，不含业务逻辑
 scripts/
@@ -71,7 +80,7 @@ Tests/
 
 **视图模型给完整代码，`View` 只给要求不给代码——这是刻意的，不是省略。**
 
-理由：布局是需要看着调的东西，把一份没人看过的 SwiftUI 布局逐字写进计划，实现者照抄之后大概率还要推翻重来，等于两遍工。所以每个 `View` 的任务里写明「必须显示什么、空状态说什么、失败时说什么」，具体怎么摆由实现者定，**由 Task 8 的人工验收把关**。
+理由：布局是需要看着调的东西，把一份没人看过的 SwiftUI 布局逐字写进计划，实现者照抄之后大概率还要推翻重来，等于两遍工。所以每个 `View` 的任务里写明「必须显示什么、空状态说什么、失败时说什么」，具体怎么摆由实现者定，**由 Task 7 的令牌与组件约束，再由 Task 11 的人工验收把关**。
 
 这与「禁止占位符」不冲突：占位符是「TBD、以后再说」，而这里给的是明确的验收标准。若实现者认为某处要求不清楚到无法动手，应当停下来问，而不是猜。
 
@@ -1148,7 +1157,431 @@ git commit -m "feat(ui): 今日训练页"
 
 ---
 
-## Task 7: 修掉测试套件的耗时回归
+## Task 7: 设计令牌与基础组件
+
+**Files:**
+- Create: `Sources/IELTSCoachUI/DesignSystem/Palette.swift`
+- Create: `Sources/IELTSCoachUI/DesignSystem/Metrics.swift`
+- Create: `Sources/IELTSCoachUI/DesignSystem/Components.swift`
+- Create: `Tests/IELTSCoachUITests/DesignSystemTests.swift`
+
+**Interfaces:**
+- Consumes: 无
+- Produces: `Palette`、`Spacing`、`Radius`、`CoachCard`、`PrimaryActionCard`、`SectionHeader`、`EmptyStateView`
+
+**取值全部见 `docs/superpowers/DESIGN-SYSTEM.md`，逐字照抄，不要自行调色。**
+
+**本任务实际应在 Task 4–6 之前完成**（编号排在这里只是为了不打乱既有任务号）。三个页面必须用这套组件搭，否则会出现三种不同的卡片样式——那正是界面显得业余的头号原因。
+
+- [ ] **Step 1: 写失败的测试**
+
+对比度是能算的，因此能测。这是设计规范里唯一可自动验证的部分，务必测。
+
+```swift
+import SwiftUI
+import XCTest
+@testable import IELTSCoachUI
+
+final class DesignSystemTests: XCTestCase {
+    /// WCAG 相对亮度
+    private func luminance(_ color: Color) -> Double {
+        let ns = NSColor(color).usingColorSpace(.sRGB)!
+        func channel(_ v: CGFloat) -> Double {
+            let c = Double(v)
+            return c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * channel(ns.redComponent)
+             + 0.7152 * channel(ns.greenComponent)
+             + 0.0722 * channel(ns.blueComponent)
+    }
+
+    private func contrast(_ a: Color, _ b: Color) -> Double {
+        let (l1, l2) = (luminance(a), luminance(b))
+        return (max(l1, l2) + 0.05) / (min(l1, l2) + 0.05)
+    }
+
+    func testPrimaryTextMeetsAA() {
+        XCTAssertGreaterThanOrEqual(contrast(Palette.textPrimary, Palette.canvas), 4.5)
+        XCTAssertGreaterThanOrEqual(contrast(Palette.textPrimary, Palette.card), 4.5)
+    }
+
+    func testSecondaryTextAlsoMeetsAA() {
+        // 次要文字仍然是要读的，不能降到 3:1。
+        // 灰上加灰是让界面显廉价的头号原因。
+        XCTAssertGreaterThanOrEqual(contrast(Palette.textSecondary, Palette.card), 4.5)
+    }
+
+    func testTextOnAccentMeetsAA() {
+        XCTAssertGreaterThanOrEqual(contrast(Palette.textOnAccent, Palette.accent), 4.5)
+    }
+
+    func testSidebarTextMeetsAA() {
+        XCTAssertGreaterThanOrEqual(contrast(Palette.sidebarText, Palette.sidebarBackground), 4.5)
+        XCTAssertGreaterThanOrEqual(contrast(Palette.sidebarTextSelected, Palette.sidebarBackground), 4.5)
+    }
+
+    func testSpacingScaleIsMultiplesOfFour() {
+        for value in [Spacing.xs, Spacing.sm, Spacing.md, Spacing.lg, Spacing.xl, Spacing.section] {
+            XCTAssertEqual(value.truncatingRemainder(dividingBy: 4), 0, "\(value) 不是 4 的倍数")
+        }
+    }
+}
+```
+
+- [ ] **Step 2: 运行，确认失败**
+
+Run: `swift test --filter DesignSystemTests`
+Expected: 编译失败 —— `Palette` 未定义
+
+- [ ] **Step 3: 实现**
+
+按 `DESIGN-SYSTEM.md` 第 2、3 节逐字实现 `Palette`、`Spacing`、`Radius`。
+
+`Components.swift` 实现四个组件，规范见 `DESIGN-SYSTEM.md` 第 4 节：
+
+- `CoachCard`：白底、圆角 `Radius.card`、发丝边框、**不加投影**（设计稿靠边框和留白分层，不靠阴影）
+- `PrimaryActionCard`：`Palette.accent` 填充 + `Palette.textOnAccent` 文字
+- `SectionHeader(number:label:title:)`：小号编号 + 大写英文标签 + 中文标题，形如 `01 / PRACTICE ROUTES / 今天练什么？`
+- `EmptyStateView(message:hint:actionTitle:action:)`：**说明现状 + 说明下一步 + 一个能直接点的按钮**，三样缺一不可
+
+若某组件的视觉细节在规范里没写死，按规范的原则自行决定，但**不得引入字面颜色值、字号或圆角**——一律走令牌。
+
+- [ ] **Step 4: 运行，确认通过**
+
+Run: `swift test --filter DesignSystemTests`
+Expected: PASS（5 个测试）
+
+- [ ] **Step 5: 突变验证**
+
+把 `Palette.textSecondary` 的不透明度从 0.56 改成 0.40（这是很多人会「顺手调淡一点」的值），重跑：`testSecondaryTextAlsoMeetsAA` 必须变红。改回后确认全绿。
+
+**这条守的正是「界面显廉价」最常见的成因**，而它平时没人能一眼指出来——只会觉得「有点糊但说不上哪儿不对」。
+
+- [ ] **Step 6: 提交**
+
+```bash
+git add Sources/IELTSCoachUI/DesignSystem/ Tests/IELTSCoachUITests/
+git commit -m "feat(ui): 设计令牌与基础组件"
+```
+
+---
+
+## Task 8: 题库 PDF 导入
+
+**Files:**
+- Create: `Sources/IELTSCoachCore/QuestionBank/PDFQuestionExtractor.swift`
+- Modify: `Sources/IELTSCoachUI/QuestionBank/QuestionBankView.swift`
+- Create: `Tests/IELTSCoachCoreTests/PDFQuestionExtractorTests.swift`
+
+**Interfaces:**
+- Consumes: `Question`、`ImportResult`
+- Produces: `PDFQuestionExtractor.extract(plainText:sourceTitle:) throws -> ImportResult`
+
+**为什么必须做：** 用户手上的季度题库是 PDF，已复制到仓库根目录（`2026年5-8月雅思口语题目 5.20(1)(2).pdf`）。当前导入只支持 CSV/JSON，意味着用户得手动把上百道题敲成表格。**不解决它，界面做完了也没题可练。**
+
+**分层：** 文本提取（需 PDFKit）与题目解析（纯 Foundation）分开。解析放 Core、只吃纯文本，因此**完全可测**；提取很薄，放 UI 层调 PDFKit。这样 `IELTSCoachCore` 只依赖 Foundation 的约束不被破坏。
+
+雅思题库 PDF 的典型结构：Part 1 是话题 + 若干短问题；Part 2 是 cue card（`Describe…` + `You should say:` + 若干提示点）；Part 3 是话题 + 追问。
+
+- [ ] **Step 1: 写失败的测试**
+
+```swift
+import XCTest
+@testable import IELTSCoachCore
+
+final class PDFQuestionExtractorTests: XCTestCase {
+    func testExtractsPart1TopicAndQuestions() throws {
+        let text = [
+            "Part 1",
+            "Home",
+            "Do you live in a house or a flat?",
+            "What do you like about your home?",
+            "",
+            "Work",
+            "What do you do for a living?",
+        ].joined(separator: "\n")
+
+        let result = try PDFQuestionExtractor.extract(plainText: text, sourceTitle: "季度题库")
+        let part1 = result.questions.filter { $0.part == 1 }
+        XCTAssertEqual(part1.count, 3)
+        XCTAssertEqual(part1.first?.topic, "Home")
+        XCTAssertEqual(part1.last?.topic, "Work")
+    }
+
+    func testExtractsPart2CueCardAsSingleQuestion() throws {
+        let text = [
+            "Part 2",
+            "Describe a useful skill you learned.",
+            "You should say:",
+            "what it is",
+            "how you learned it",
+            "and explain why it is useful.",
+        ].joined(separator: "\n")
+
+        let result = try PDFQuestionExtractor.extract(plainText: text, sourceTitle: "t")
+        let part2 = result.questions.filter { $0.part == 2 }
+        XCTAssertEqual(part2.count, 1, "整张 cue card 是一道题，不能被拆成多道")
+        XCTAssertTrue(part2[0].prompt.contains("Describe a useful skill"))
+        XCTAssertEqual(part2[0].followups.count, 3, "You should say 下面的提示点应进 followups")
+    }
+
+    func testIgnoresPageNumbersAndRunningHeaders() throws {
+        let text = [
+            "Part 1",
+            "Home",
+            "Do you live in a house or a flat?",
+            "1",
+            "第 1 页",
+            "2026年5-8月雅思口语题目",
+            "What do you like about your home?",
+        ].joined(separator: "\n")
+
+        let result = try PDFQuestionExtractor.extract(
+            plainText: text, sourceTitle: "2026年5-8月雅思口语题目")
+        XCTAssertEqual(result.questions.count, 2, "页码与页眉不能被当成题目")
+    }
+
+    func testWarnsWhenNothingExtracted() throws {
+        let result = try PDFQuestionExtractor.extract(
+            plainText: "完全无关的一段文字", sourceTitle: "t")
+        XCTAssertTrue(result.questions.isEmpty)
+        XCTAssertFalse(result.warnings.isEmpty, "一道题都没提出来必须报警，不能静默返回空")
+        XCTAssertTrue(result.warnings.joined().contains("下一步"), "警告必须说明下一步做什么")
+    }
+
+    func testIDsAreContentBasedSoInsertionDoesNotShiftThem() throws {
+        let onlyHome = ["Part 1", "Home", "Do you live in a house or a flat?"]
+            .joined(separator: "\n")
+        // 在前面插入一个新话题后，原有题目的 id 不能变——
+        // 否则换季重新导入会让历史练习记录全部指错题。
+        let withNewTopicFirst = ["Part 1", "New Topic", "A brand new question?",
+                                 "Home", "Do you live in a house or a flat?"]
+            .joined(separator: "\n")
+
+        let first = try PDFQuestionExtractor.extract(plainText: onlyHome, sourceTitle: "t")
+        let second = try PDFQuestionExtractor.extract(plainText: withNewTopicFirst, sourceTitle: "t")
+
+        let originalID = try XCTUnwrap(first.questions.first?.id)
+        let afterInsert = try XCTUnwrap(second.questions.first { $0.topic == "Home" }?.id)
+        XCTAssertEqual(originalID, afterInsert)
+    }
+}
+```
+
+- [ ] **Step 2: 运行，确认失败**
+
+Run: `swift test --filter PDFQuestionExtractorTests`
+Expected: 编译失败 —— `PDFQuestionExtractor` 未定义
+
+- [ ] **Step 3: 实现**
+
+`PDFQuestionExtractor` 只依赖 Foundation。要点：
+
+- 按行扫描，遇到 `Part 1` / `Part 2` / `Part 3` 之类的行切换当前 Part
+- **过滤噪声行**：纯数字（页码）、含「第 N 页」、与 `sourceTitle` 高度重合的行（页眉）
+- Part 1/3：以问号结尾的行是题目；不以问号结尾且较短的行是话题
+- Part 2：`Describe…` / `Talk about…` 开头的行是题干，`You should say:` 之后到空行之间的每行进 `followups`
+- **id 必须用内容哈希**，复用 `QuestionBankImporter` 已有的做法。位置式编号会在换季重新导入时整体错位，毁掉历史练习记录——**这个坑本项目已经栽过一次**，也是成品标准第 12 条守的东西
+- 一道题都没提出来时，`warnings` 必须给出可执行的下一步，不能静默返回空
+
+`QuestionBankView` 的导入按钮把 `.pdf` 加进可选类型，选中 PDF 后取纯文本再交给 `PDFQuestionExtractor`：
+
+```swift
+import PDFKit
+
+func plainText(ofPDFAt url: URL) -> String? {
+    PDFDocument(url: url)?.string
+}
+```
+
+取不到文本时提示：「这份 PDF 里没有可提取的文字，它可能是扫描件。下一步：换一份文字版 PDF，或先用系统「预览」把它转成文字。」
+
+- [ ] **Step 4: 运行，确认通过**
+
+Run: `swift test --filter PDFQuestionExtractorTests`
+Expected: PASS（5 个测试）
+
+- [ ] **Step 5: 用真实题库验证（必须人工核对）**
+
+用户的真实 PDF 在仓库根目录。写一个临时脚本（或用 `swift run`）跑一遍提取，然后**人工核对**：
+
+| 核对项 | 判据 |
+|---|---|
+| 题目总数 | 与 PDF 里肉眼可数的题数是否接近（差一两道可接受，差一半不行）|
+| 抽查 5 道题 | Part、话题、题干是否都对 |
+| Part 2 | cue card 是否完整成一道题，提示点是否都进了 followups |
+| 有没有垃圾 | 页码、页眉、目录行有没有混进题目里 |
+
+**这一步不能用测试代替。** 测试用的是理想排版，真实 PDF 千奇百怪。把核对结果如实写进报告，包括提取失败的部分——**若真实 PDF 结构与假设差得太远，应当停下来报告，而不是硬调规则去凑**。
+
+- [ ] **Step 6: 提交**
+
+```bash
+git add Sources/IELTSCoachCore/QuestionBank/ Sources/IELTSCoachUI/QuestionBank/ Tests/IELTSCoachCoreTests/
+git commit -m "feat(core): 题库 PDF 导入"
+```
+
+---
+
+## Task 9: 把练习驱动接进界面
+
+**Files:**
+- Create: `Sources/IELTSCoachUI/Session/PracticeStage.swift`
+- Create: `Sources/IELTSCoachUI/Session/PracticeRunner.swift`
+- Create: `Sources/IELTSCoachUI/Session/PracticeSheet.swift`
+- Modify: `Sources/IELTSCoachUI/Today/TodayView.swift`
+- Create: `Tests/IELTSCoachUITests/PracticeRunnerTests.swift`
+
+**Interfaces:**
+- Consumes: `CoachBridge`（全部方法）、`ExaminerPrompt.build`、`ReviewRequestPrompt`、`ReviewParser`、`ReviewArchiver`、`StateStore`
+- Produces:
+  - `enum PracticeStage: Equatable { case idle, newChat, startingVoice, waitingComposer, sendingPrompt, practicing, endingVoice, requestingReview, capturingReview, archiving, done, failed(String) }`
+  - `PracticeStage.userFacingText: String`
+  - `@MainActor @Observable final class PracticeRunner`，含 `stage`、`start(setup:)`、`finishPractice()`、`cancel()`
+
+**这一条兑现成品标准第 2 条：全程不需要打开终端。** 初版计划把驱动接入推到 Phase 4，那意味着 Phase 3 交付一个点了只会说「请去终端敲命令」的按钮——不算做完。
+
+**设计要点：** `PracticeRunner` 只依赖 `CoachBridge` protocol，**不依赖 `AXDriver`**。因此可以用假实现完整测试整条状态流转，不碰真的 ChatGPT。这正是 Phase 2 花力气做 `AXAccess` 接缝换来的红利。
+
+- [ ] **Step 1: 写失败的测试**
+
+```swift
+import XCTest
+import ChatGPTBridge
+import IELTSCoachCore
+@testable import IELTSCoachUI
+
+/// 可编程的假 Bridge，用于测试状态流转。
+final class FakeBridge: CoachBridge, @unchecked Sendable {
+    var failAt: PracticeStage?
+    private(set) var calls: [String] = []
+
+    private func step(_ name: String, _ stage: PracticeStage) throws {
+        calls.append(name)
+        if failAt == stage {
+            throw BridgeError.actionFailed("假装失败。下一步：这是测试用的。")
+        }
+    }
+
+    func preflight() -> BridgeReadiness { BridgeReadiness(ok: true, messages: []) }
+    func startNewChat() throws { try step("newChat", .newChat) }
+    func startVoice() throws { try step("startVoice", .startingVoice) }
+    func waitForVoiceComposer(timeout: TimeInterval) throws -> AXNodeSnapshot {
+        try step("waitComposer", .waitingComposer)
+        return AXNodeSnapshot(element: AXElementRef(rawID: 1, epoch: 0), role: "AXTextArea")
+    }
+    func sendText(_ text: String) throws { try step("sendText", .sendingPrompt) }
+    func isVoiceActive() -> Bool { false }
+    func endVoice() throws { try step("endVoice", .endingVoice) }
+    func waitForAssistantReply(timeout: TimeInterval, minimumLength: Int) throws {}
+    func captureLatestAssistantMessage(expectedMarker: String?) throws -> String { "" }
+    func copyLatestAssistantMessage(pasteboard: any PasteboardAccess,
+                                    timeout: TimeInterval) throws -> String {
+        try step("copy", .capturingReview)
+        return #"<<<IELTS_REVIEW_JSON:x>>>{"must_correct":[]}<<<END_IELTS_REVIEW_JSON:x>>>"#
+    }
+}
+
+@MainActor
+final class PracticeRunnerTests: XCTestCase {
+    func testEveryStageHasUserFacingChineseText() {
+        let stages: [PracticeStage] = [.newChat, .startingVoice, .waitingComposer,
+                                       .sendingPrompt, .practicing, .endingVoice,
+                                       .requestingReview, .capturingReview, .archiving]
+        for stage in stages {
+            XCTAssertFalse(stage.userFacingText.isEmpty, "\(stage) 没有给用户看的说明")
+        }
+    }
+
+    func testStartingVoiceTextWarnsAboutTheWait() {
+        // 实测启动语音约需 9 秒（spec 2.3.7）。这 9 秒里界面必须说明它在等什么，
+        // 否则用户会以为程序卡死了。
+        XCTAssertTrue(PracticeStage.startingVoice.userFacingText.contains("秒"),
+                      "启动语音耗时较长，提示必须写明大约要等多久")
+    }
+
+    func testFailureCarriesActionableChineseMessage() {
+        guard case .failed(let message) = PracticeStage.failed("出事了。下一步：重试。") else {
+            return XCTFail("构造失败")
+        }
+        XCTAssertTrue(message.contains("下一步"))
+    }
+
+    func testStagesRunInOrderUpToPracticing() async throws {
+        let bridge = FakeBridge()
+        let runner = PracticeRunner(bridge: bridge, pasteboard: FakePasteboard(contents: ""))
+        try await runner.start(setup: Self.setup())
+        XCTAssertEqual(bridge.calls, ["newChat", "startVoice", "waitComposer", "sendText"],
+                       "必须先新建会话、再启动语音、等语音输入框出现，最后才发提示词")
+        XCTAssertEqual(runner.stage, .practicing)
+    }
+
+    func testFailureStopsTheChain() async {
+        let bridge = FakeBridge()
+        bridge.failAt = .startingVoice
+        let runner = PracticeRunner(bridge: bridge, pasteboard: FakePasteboard(contents: ""))
+        try? await runner.start(setup: Self.setup())
+        guard case .failed = runner.stage else { return XCTFail("应当停在失败态") }
+        XCTAssertFalse(bridge.calls.contains("sendText"), "前一步失败后不能继续往下走")
+    }
+
+    private static func setup() -> SessionSetup {
+        SessionSetup(question: Question(id: "q1", part: 1, topic: "Home", prompt: "P"),
+                     focusPart: .part1, durationMinutes: 5, goal: "")
+    }
+}
+```
+
+`FakePasteboard` 已存在于 `Tests/ChatGPTBridgeTests/`。本处需要一个同等实现——**在 `Tests/IELTSCoachUITests/` 下另建一个，不要跨测试 target 引用**。
+
+`SessionSetup` 的真实签名以 Core 里既有定义为准；若与此处不符，以 Core 为准并相应改测试。
+
+- [ ] **Step 2: 运行，确认失败**
+
+Run: `swift test --filter PracticeRunnerTests`
+Expected: 编译失败 —— `PracticeRunner`、`PracticeStage` 未定义
+
+- [ ] **Step 3: 实现**
+
+`PracticeStage.userFacingText` 逐条给中文说明。**`startingVoice` 必须写明大约要等 10 秒**（实测 9 秒，见 spec 2.3.7）。
+
+`PracticeRunner.start(setup:)` 严格按 spec 2.3.5 的顺序：
+
+新建会话 → 启动语音 → 等语音输入框出现 → 发考官提示词 → 停在 `.practicing`
+
+**顺序不能改。** Live 模式只能在一条还没发过任何消息的会话里启动，先发消息就再也点不动 Live 了。
+
+`finishPractice()`：结束语音（若仍在）→ 发复盘请求 → 等回复 → 取复盘（**先按 ChatGPT 自己的复制按钮，失败降级 AX 读取，再失败提示用户手动 ⌘C**）→ **先落盘再解析** → 归档 → `.done`。
+
+「先落盘再解析」不能省：练了半小时换来的复盘，不能因为解析出错就没了（成品标准第 7 条）。
+
+任何一步抛错都转入 `.failed(错误信息)`，**不得继续往下走**。
+
+`PracticeSheet` 显示 `stage.userFacingText` 与进度指示；`.practicing` 时显示「我练完了」按钮；`.failed` 时显示错误全文与「重试」。用 Task 7 的组件与令牌，不要自己写样式。
+
+`TodayView` 的「开始」按钮改为弹出 `PracticeSheet` 并调 `runner.start(setup:)`。
+
+- [ ] **Step 4: 运行，确认通过**
+
+Run: `swift test --filter PracticeRunnerTests`
+Expected: PASS（5 个测试）
+
+- [ ] **Step 5: 突变验证**
+
+把 `start` 里「前一步失败就停」的逻辑改成忽略错误继续往下走，重跑：`testFailureStopsTheChain` 必须变红。改回后确认全绿。
+
+**这条守的是：一步失败后继续往下走，会让用户对着一个根本没收到考官提示词的 ChatGPT 练完整整一场。** Phase 2 真实发生过一次。
+
+- [ ] **Step 6: 提交**
+
+```bash
+git add Sources/IELTSCoachUI/Session/ Sources/IELTSCoachUI/Today/ Tests/IELTSCoachUITests/
+git commit -m "feat(ui): 把练习驱动接进界面"
+```
+
+---
+
+## Task 10: 修掉测试套件的耗时回归
 
 **Files:**
 - Modify: `Tests/ChatGPTBridgeTests/AXDriverTests.swift`
@@ -1182,7 +1615,7 @@ git commit -m "test: 修掉测试套件的耗时回归"
 
 ---
 
-## Task 8: 真机验收（人工，不可由子代理代劳）
+## Task 11: 真机验收（人工，不可由子代理代劳）
 
 **Files:** 无代码改动。产出 `docs/phase3-acceptance.md`
 
@@ -1211,9 +1644,29 @@ Expected: 仍然显示「环境就绪」。**若又要求重新授权，说明�
 | 复盘报告 | 之前那次练习的复盘能显示吗？分区顺序合理吗？NEXT SINGLE TARGET 醒目吗？ |
 | 未实现的七页 | 占位文字说清「还没做」和「将来会有什么」了吗？ |
 
-- [ ] **Step 4: 记录并提交**
+- [ ] **Step 4: 走一遍完整练习（本阶段的成败判据）**
 
-把每项的实际结果写进 `docs/phase3-acceptance.md`，含截图或原文描述。
+**把终端关掉**，只用 App：
+
+1. 导入真实的 PDF 题库 → 题目数量和内容是否正确
+2. 在今日训练页点「开始」→ **数一下从双击图标到 ChatGPT 开口，一共点了几次**（目标 ≤ 3）
+3. 等待期间盯着界面：**9 秒的语音启动过程中，界面有没有一直在说它在干什么**
+4. 真的练一场，练完点「我练完了」
+5. 复盘有没有自动取回并归档？错题本、词汇本、重训目标三处数字有没有从 0 变正？
+
+**这一步一旦走通，成品标准第 1、2、3、4 条就同时达成了**——这是 Phase 3 真正的交付物，不是三个页面。
+
+- [ ] **Step 5: 界面验收（对照 DESIGN-SYSTEM.md 第 6 节）**
+
+逐条走那十条清单。其中三条最容易被忽略、也最影响观感：
+
+- 系统「减弱动态效果」打开后，界面是否无动画且功能正常
+- 系统文字调到最大时，是否不截断、不重叠
+- 统计数字变化时是否不抖动（等宽数字）
+
+- [ ] **Step 6: 记录并提交**
+
+把每项的实际结果写进 `docs/phase3-acceptance.md`，含截图或原文描述。**包括不好的部分**——「哪里让我不想用」这类信息只有你有（成品标准第 5 节）。
 
 ```bash
 git add docs/
@@ -1231,5 +1684,10 @@ git commit -m "docs: Phase 3 真机验收结果"
 - [ ] 今日训练、训练题库、复盘报告三页可用
 - [ ] 未实现的七页显示有意义的占位，而非空白
 - [ ] 每个视图模型的关键逻辑都经突变验证确认测试有约束力
+- [ ] **PDF 题库能导入，题目数量与内容经人工核对**
+- [ ] **关掉终端，只用界面就能完整练一场并自动归档**
+- [ ] **`DESIGN-SYSTEM.md` 第 6 节十条验收清单全部通过**
 
 达成后进 Phase 4：逐字稿采集 + 训练记录页。
+
+**Phase 3 与初版计划的差别：** 驱动接入（Task 9）本来排在 Phase 4，PDF 导入（Task 8）本来没排。这两条不做，Phase 3 交付的是「三个好看但点了没用的页面」，且用户连题都没得练。设计令牌（Task 7）是把「界面要美丽」变成可验证的东西——十条清单、五个可自动跑的对比度测试，而不是一句主观评价。
