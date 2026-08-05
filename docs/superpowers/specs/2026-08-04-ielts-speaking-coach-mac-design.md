@@ -13,41 +13,125 @@
 
 ## 2. 实测前提
 
-以下结论来自 2026-08-04 在目标机器（macOS 26 / Darwin 25.5.0，Apple Silicon）上对已安装应用的静态检查，非推测。
+以下结论来自 2026-08-04 在目标机器（macOS 26.5.2，Apple Silicon）上的**动态实测**——在真实运行的应用上、在真实的语音会话进行中采集，非静态推断。
+
+> **本节初稿的结论是错的，且错得很彻底。** 保留纠错记录见 2.5，因为那个错误的推理方式比结论本身更值得记住。
 
 ### 2.1 本机存在两个 ChatGPT 应用
 
-| | `/Applications/ChatGPT Classic.app` | `/Applications/ChatGPT.app` |
+| | `/Applications/ChatGPT.app` | `/Applications/ChatGPT Classic.app` |
 |---|---|---|
-| Bundle ID | `com.openai.chat` | `com.openai.codex` |
-| 版本 | 1.2026.160 | 26.727.51351 |
-| 实现 | 原生 Swift | Chromium 壳（Codex 桌面版）|
-| 语音能力 | 含 `LiveKitWebRTC.framework` | 无 |
-| `LSMinimumSystemVersion` | 14.0 | — |
-| AppleScript 字典 | 无（`NSAppleScriptEnabled` 未声明）| 有，但是 Chrome 的通用字典 |
+| Bundle ID | **`com.openai.codex`** | `com.openai.chat` |
+| 版本 | 26.727.51351（Chromium 150.0.7871.182）| 1.2026.160 |
+| 实现 | Chromium 壳（Codex Framework）| 原生 Swift |
+| **live 语音** | ✅ **有**（实测语音会话）| ❌ **无**（输入区无任何语音按钮）|
+| Info.plist 麦克风声明 | `for voice input` + 摄像头 + `NSAudioCaptureUsageDescription` + `audio/ogg`、`audio/webm` | `for voice mode, dictation, and meeting recordings`（措辞如此，但界面无对应功能）|
+| URL scheme | `codex://`（二进制内搜不到任何可用路径）| `chatgpt://`、`openai://`（路径丰富，但无语音）|
+| AppleScript | 继承 Chrome 完整 sdef（含 `execute javascript`），**但是空壳** | 无 sdef |
+| AX 内容树 | ✅ 完整暴露（见 2.3）| 对话列表为 `AXCollectionList children=0` |
 
-**结论：本项目驱动的目标是 `com.openai.chat`（ChatGPT Classic）**，因为语音能力在它这边。
+**结论：本项目驱动的目标是 `com.openai.codex`（新 ChatGPT.app）。**
 
-### 2.2 ChatGPT Classic 注册的 deep link
+### 2.2 两条已排除的路径
 
-从 `ChatGPT.framework` 二进制中提取：
+**deep link —— 不适用。** `chatgpt://new-conversation` / `new-voice-conversation` / `end-voice-conversation` / `pause-voice-conversation` / `followup-prompt` 这批链接确实存在，但它们属于 **ChatGPT Classic**，而 Classic 没有语音。新目标只注册 `codex://` scheme，其 255MB 主二进制内**搜不到任何 `codex://` 路径字符串**。
+
+**AppleScript 注入 JavaScript —— 不可用。** 新目标继承了 Chrome 的完整 AppleScript 字典，含 `execute … javascript`，一度看起来是比 AX 更强的通道。实测否定：System Events 报告该进程有 1 个可见窗口，而应用自己的 AppleScript 报 `windows=0`，取不到任何 tab。字典是继承来的空壳，窗口/标签模型未接线。
+
+### 2.3 新目标的 AX 能力（实测通过）
+
+Chromium 的无障碍树是**惰性构建**的。初次探测仅 234 节点、深度 7、无 `AXWebArea`；对 application 元素尝试设置 `AXManualAccessibility` / `AXEnhancedUserInterface`（两者均返回错误码）并等待约 3 秒后，树扩展到 **675 节点、深度 34、`AXWebArea`×12**。
+
+在真实语音会话进行中采集到的关键节点：
+
+| 用途 | 节点 |
+|---|---|
+| 启动语音 | `AXButton`，desc 为 `"Start voice chat"` 或 `"Start new voice chat"`（**标签不稳定，见 2.3.1**）|
+| 结束语音 | `AXButton desc="Stop voice chat"` |
+| 语音进行中标志 | `AXImage desc="Voice chat active"` |
+| 静音状态 | `AXCheckBox desc="Mute voice chat"` / `"Unmute microphone"` / `"Mute speakers"` |
+| 语音控制浮层 | `AXWindow title="Codex Pet Voice Controls Glass"` |
+| 输入框 | `AXTextArea desc="Work with ChatGPT"` |
+| 对话文本 | `AXStaticText`（考官原话 166 字符逐字读出）|
+
+**输入框可写：** 对 `AXTextArea` 设置 `kAXValueAttribute` 返回码 0，写入即时生效，`AXUIElementIsAttributeSettable` 亦返回 true。
+
+**`kAXPressAction` 可用：** 实测按下语音按钮真实进入语音会话，按下 `Stop voice chat` 真实结束（截图与 AX 树双重确认）。
+
+#### 2.3.1 按标签匹配元素是不安全的 —— 必须结构化判别
+
+实测踩到一次**假阳性**：按 `desc == "New voice chat"` 精确匹配并取深度优先第一个命中，返回成功（`kAXPressAction` 返回 0），但点中的是**侧边栏里一条同名的历史会话**，语音根本没启动。
+
+两个独立的失效原因：
+
+1. **控制按钮自身的标签会变。** 同一台机器上先后观察到 `Start new voice chat` 与 `Start voice chat` 两种 desc，均非最初记录的 `New voice chat`。
+2. **侧边栏会话名会与控制标签撞车，且这个撞车是本产品自己制造的。** ChatGPT 每开一次语音就自动生成一条名为 `New voice chat` 的会话记录，还会自动改名成 `Voice Chat Title Generation` 之类。用得越久，侧边栏里的同名项越多。会话名由用户和 ChatGPT 生成，本质上不可信。
+
+**结构判别规则（稳定，且与标签文字无关）：**
+
+| | 真控制按钮 | 侧边栏会话行 |
+|---|---|---|
+| 子节点 | 恰好一个，且为 `AXImage` | 嵌套 `AXButton`（含 `Pin chat`、`Archive chat`）|
+| 是否含文本后代 | 否（纯图标）| 是（显示会话标题）|
+| 相邻元素 | `AXButton desc="Dictate"` | 会话列表中的其他会话 |
+
+因此 `AXDriver` 查找控制元素时**必须**同时满足：role 为 `AXButton` 或 `AXCheckBox`、desc 命中候选标签集合、**且子节点恰好一个且为 `AXImage`**。仅凭标签匹配是缺陷。
+
+**该结构规则的适用范围已实测验证覆盖全部语音控件**，不止按钮：
+
+| 控件 | role | subrole | 子节点 |
+|---|---|---|---|
+| `Stop voice chat` | `AXButton` | — | 1 × `AXImage` |
+| `Mute speakers` | `AXCheckBox` | `AXToggleButton` | 1 × `AXImage` |
+| `Mute microphone` | `AXCheckBox` | `AXToggleButton` | 1 × `AXImage` |
+
+静音类控件另带 `subrole=AXToggleButton`，可作为额外的判别信号；其 `value` 字段（`0`/`1`）即当前静音状态，无需另找指示器。
+
+**由此确立的规则：任何「按标签找元素再操作」的代码，都必须有结构约束兜底，并且在操作后验证预期状态真的发生了**（例如按下启动语音后应能观察到 `Voice chat active` 出现）。返回码为 0 不等于动作生效。
+
+#### 2.3.2 元素出现有延迟 —— 操作之间必须等待重试
+
+实测：按下启动语音成功后**立即**查找 `Stop voice chat`，报「找不到」；等界面渲染完成后重试，同一按钮存在且可按下（结构也符合 2.3.1 的判据）。
+
+语音浮层的渲染晚于 `kAXPressAction` 返回。因此 `AXDriver` 的每个操作都必须遵循「**等目标元素出现 → 操作 → 验证状态变化**」，不得在一次动作后假设下一个元素已经就位。惰性 AX 树的唤醒（`AXTree.wake`）只保证 `AXWebArea` 出现，不保证特定控件已渲染。
+
+建议的通用原语：`waitForElement(role:labels:timeout:)`，轮询间隔 0.3 秒、默认超时 5 秒，超时按 spec 第 6 节的规则报中文错误并给出下一步。
+
+#### 2.3.3 `Voice chat active` 是会话级常驻，不随语音活动闪烁
+
+实测：启动语音后**全程不说话**，每 500ms 采样一次、持续 20 秒（40 次采样），`AXImage desc="Voice chat active"` **一次都没有消失**。
 
 ```
-chatgpt://new-conversation
-chatgpt://new-voice-conversation
-chatgpt://end-voice-conversation
-chatgpt://pause-voice-conversation
-chatgpt://followup-prompt
-chatgpt://settings/...（多个）
+时间轴（# = 指示器在，每格 0.5 秒）
+########## ########## ########## ##########
+消失次数：0/40
 ```
 
-二进制中存在 Swift 类型 `NewConversationDeepLink`，其嵌套类型包含 `Mode`；反射字符串中可检出 `prompt`、`query`、`model`、`autoSend`、`auto_send`、`starterPrompt`、`starter_prompt`、`temporaryChat`、`voice_mode`、`hints`。
+**这条实测关闭了一个真实的设计风险。** 审查曾指出：新的 `VoiceEndPolicy` 去掉了上游那个「最短 12 秒」门槛，只靠 3 次轮询（约 1.5 秒）去抖；若该指示器跟随语音活动（VAD）闪烁，考生思考时的正常停顿就会击穿去抖窗口，把练习中途误判为结束——对非母语考生来说停顿几秒极为常见。
 
-**推断（未验证）**：`chatgpt://new-conversation` 可能接受 prompt 与 mode 参数，若成立则一条 URL 即可完成「打开应用 + 带入提示词 + 进入语音」。参数的确切拼写必须由 Phase 0 实测确定，见第 12 节。
+实测结果表明该指示器是**会话级**信号，静默不影响它。因此：
 
-### 2.3 ChatGPT Classic 不可 AppleScript 化
+- 1.5 秒去抖窗口是安全的
+- **不要**把上游的最短时长门槛加回来。它在上游是必需的，因为上游的信号本身不可靠；这里的信号是直接且稳定的，加时长门槛只会让短题目无法正常结束
 
-无 sdef，未声明 `NSAppleScriptEnabled`。因此若 deep link 不支持带入提示词，唯一可行的注入手段是 Accessibility（AXUIElement），需要用户授予「辅助功能」权限。
+### 2.4 输入框与语音共存
+
+`AXTextArea desc="Work with ChatGPT"` 与 `Stop voice chat`、`Mute speakers` 等按钮**位于同一控制条内**——语音进行中依然可以发送文字。
+
+这一条推翻了原设计的流程假设。原方案（沿袭上游）是「发提示词 → 进语音 → **退出语音** → 发复盘指令 → 读复盘」。实测后改为**全程不离开语音**：提示词、口语练习、复盘指令、读回复盘在同一个语音会话内连续完成。
+
+同时它作废了上游 `voice-end-policy.mjs` 的移植价值：那套状态机靠「语音界面消失、输入框重新出现」推断结束，而此处两者共存，前提不成立。改用 `AXImage desc="Voice chat active"` 直接判定。
+
+### 2.5 纠错记录：一个方法论错误
+
+初稿断定「语音在 Classic」，依据是 Classic 打包了 `LiveKitWebRTC.framework` 而新应用没有。两处都错：
+
+1. **打包了框架 ≠ 具备该功能。** 框架可能服务于会议录制等其他用途，或是历史残留。
+2. **反向推理更错。** 新应用是 Chromium 壳，WebRTC 由 Chromium 自身提供，本就不需要单独打包 LiveKit。「它没有该框架」对其语音能力**不构成任何证据**。
+
+用一个单向的弱信号当成了双向的强证据。更该记住的是：纠正这个错误的不是后续推理，而是**用户的一句直接观察**，而当时手上的 AX dump 里其实已经写着「Classic 输入区只有 Attach / Search / Work with Apps / Options / Record meeting / Dictation / Send，没有语音按钮」——证据早已在手，只是没被读懂。
+
+**由此确立的规则：涉及外部应用能力的判断，一律以在运行中的应用上实测为准，不接受从二进制内容、框架清单、Info.plist 措辞推断出的结论。**
 
 ## 3. 决策记录
 
@@ -55,15 +139,17 @@ chatgpt://settings/...（多个）
 |---|---|---|
 | 功能范围 | 与上游完整对等 | 含题库、计划、复盘、错题、词汇、重训、仪表盘、MCP、Codex 插件 |
 | 技术栈 | 全原生 SwiftUI 重写 | 已知代价：工作量远大于复用方案，且无法再跟随上游更新 |
-| ChatGPT 驱动方式 | deep link 优先，AX 兜底 | |
+| **目标 ChatGPT 应用** | **`com.openai.codex`（新 ChatGPT.app）** | 实测确认语音在此。`com.openai.chat`（Classic）无语音，不是目标 |
+| ChatGPT 驱动方式 | **AX 为主，剪贴板兜底** | deep link 与 AppleScript-JS 两条路均实测排除，见 2.2 |
+| 会话流程 | **全程不离开语音** | 输入框与语音控制共存，实测确认，见 2.4 |
 | 复盘回收 | 半自动（剪贴板）打底 + 全自动（AX）先试 | 两条都实现，AX 失败自动降级 |
 | MCP server | Swift 重写为独立 target | 与 App 共享 `IELTSCoachCore` |
 | 分发 | 先自用，架构预留分发能力 | 不购买 Developer ID，但签名/公证/授权引导流程预留 |
-| 语音结束判定 | AX 探测 + 手动按钮双保险 | AX 判定失败退回按钮 |
+| 语音结束判定 | 读 `AXImage desc="Voice chat active"` + 手动按钮双保险 | **不移植上游 voice-end-policy.mjs**，其前提在新目标上不成立，见 2.4 |
 | 辅助功能授权时机 | 首次启动引导 | 可跳过，跳过则运行在半自动模式 |
 | 题库来源 | 电子表格/文档导入 | 不做 OCR 工具 |
 | 提示词组装 | App 自动拼装，用户不手写 | |
-| 最低系统版本 | macOS 14.0 | ChatGPT Classic 自身要求 14.0，更低版本无意义 |
+| 最低系统版本 | macOS 14.0 | 保持不变；新目标为 Chromium 应用，系统要求不高于此 |
 | Bundle ID | `com.ielts.speakingcoach` | 与上游一致；AX 授权绑定它，必须固定 |
 | 项目位置 | `~/Projects/ielts-speaking-coach-mac` | |
 
@@ -74,7 +160,7 @@ Swift Package Manager 工程，四个模块：
 ```
 IELTSCoach/
 ├── Sources/IELTSCoachCore/       library     纯逻辑；不依赖 UI，不依赖外部应用
-├── Sources/ChatGPTBridge/        library     唯一与 ChatGPT Classic 交互的模块
+├── Sources/ChatGPTBridge/        library     唯一与 ChatGPT.app 交互的模块
 ├── Sources/IELTSCoachApp/        app         SwiftUI 界面
 └── Sources/ielts-speaking-mcp/   executable  MCP stdio server
 ```
@@ -99,20 +185,20 @@ IELTSCoach/
 | `PlanBuilder` | 7 / 14 / 30 天计划生成与进度推进 | `server.mjs` 计划部分 |
 | `RetrainingPolicy` | 从复盘中选出下次的单点重训目标 | `references/retraining-policy.md` |
 | `AnswerUpgradePolicy` | 回答升级建议策略 | `desktop/answer-upgrade-policy.mjs` |
-| `VoiceEndPolicy` | 语音结束状态机 | `desktop/voice-end-policy.mjs` |
+| `VoiceEndPolicy` | 语音结束判定 | **不移植上游** —— 上游靠「语音界面消失、输入框重新出现」推断，该前提在新目标上不成立（2.4）。改为读 `AXImage desc="Voice chat active"` 的直接信号，配合去抖动窗口避免瞬时抖动误判 |
 
 ### 4.2 ChatGPTBridge
 
 依赖：Core、AppKit、ApplicationServices。
 
-对外只暴露一个 protocol，App 层不感知内部用的是 deep link 还是 AX：
+对外只暴露一个 protocol，App 层不感知内部用的是 AX 还是剪贴板：
 
 ```swift
 protocol CoachBridge {
     func preflight() async -> BridgeReadiness
-    func startSession(prompt: String) async throws -> SessionHandle
+    func sendText(_ text: String) async throws          // 写入输入框并发送
+    func startVoice() async throws
     func observeVoiceState() -> AsyncStream<VoiceState>
-    func requestReview(instruction: String) async throws
     func captureLatestAssistantMessage() async throws -> CaptureResult
     func endVoice() async throws
 }
@@ -120,15 +206,20 @@ protocol CoachBridge {
 
 `CaptureResult` 携带来源标记（`.accessibility` / `.clipboard`），供界面提示与诊断使用。
 
-内部三层，按顺序尝试并降级：
+**注意 `sendText` 取代了原设计的 `startSession(prompt:)` 与 `requestReview(instruction:)`。** 既然输入框与语音共存（2.4），发考官提示词和发复盘指令是同一个动作，没有理由拆成两个方法。
 
-1. `DeepLinkLauncher` — 通过 `NSWorkspace.open` 调用 `chatgpt://` 系列
-2. `AXDriver` — `AXUIElement` 遍历窗口、注入文本、读取消息、探测语音状态
-3. `ClipboardFallback` — 提示词写入 `NSPasteboard` 供粘贴；复盘由用户 ⌘C 后从 `NSPasteboard` 读回
+内部两层，按顺序尝试并降级：
 
-`preflight()` 在会话开始前检查：ChatGPT Classic 是否安装、bundle id 是否为 `com.openai.chat`、辅助功能权限是否已授予（`AXIsProcessTrusted()`）。
+1. `AXDriver` — 主路径。启用惰性 AX 树后：写 `AXTextArea` 的 `kAXValueAttribute` 注入文本、对按钮执行 `kAXPressAction`、遍历 `AXStaticText` 读消息、读 `AXImage desc="Voice chat active"` 判定语音状态
+2. `ClipboardFallback` — 提示词写入 `NSPasteboard` 供用户粘贴；复盘由用户 ⌘C 后从 `NSPasteboard` 读回
 
-另附一个 `AXProbe` 诊断入口：dump 目标窗口的完整 AX 树到文件。Phase 0 用它探路，后续 ChatGPT 改版时用它快速定位失效点。
+原设计的 `DeepLinkLauncher` 层**已删除**——deep link 对新目标不适用（2.2）。降级层数由三层减为两层。
+
+`AXDriver` 必须在每次会话开始时执行**惰性树唤醒**：对 application 元素设置 `AXManualAccessibility` 与 `AXEnhancedUserInterface`（两者返回错误码属正常，不得据此判定失败），随后等待并轮询直到 `AXWebArea` 出现或超时。跳过这一步会看到一棵只有菜单栏的空树。
+
+`preflight()` 在会话开始前检查：`com.openai.codex` 是否安装并运行、辅助功能权限是否已授予（`AXIsProcessTrusted()`）、惰性树唤醒后能否找到 `AXTextArea desc="Work with ChatGPT"`。
+
+另附一个 `AXProbe` 诊断入口：dump 目标窗口的完整 AX 树到文件。后续 ChatGPT 改版时用它快速定位失效点——**这是本项目最重要的排障工具**，因为 2.3 表格里那七个节点特征全都可能随 ChatGPT 更新而改变。
 
 ### 4.3 IELTSCoachApp
 
@@ -177,38 +268,41 @@ App 与 MCP CLI 使用同一份路径解析实现。环境变量 `IELTS_SPEAKING
 3. `ExaminerPrompt` 组装考官提示词
 
 ### 开始练习
-4. `CoachBridge.preflight()` 检查环境
-5. `CoachBridge.startSession(prompt:)`
-   - 主路径：`chatgpt://new-conversation?<prompt 参数>&<voice 模式参数>`
-   - 降级路径：`chatgpt://new-conversation` → 提示词写入剪贴板 → AX 注入或用户粘贴 → 回车 → `chatgpt://new-voice-conversation`
-6. App 进入「练习中」状态
+4. `CoachBridge.preflight()` 检查环境并唤醒惰性 AX 树
+5. `CoachBridge.sendText(examinerPrompt)` — 写入 `AXTextArea` 并发送
+6. `CoachBridge.startVoice()` — 对 `AXButton desc="New voice chat"` 执行 `kAXPressAction`
+7. App 进入「练习中」状态，`observeVoiceState()` 轮询 `AXImage desc="Voice chat active"`
 
 ### 练习结束
-7. 结束判定二选一先到者：`observeVoiceState()` 探测到结束，或用户点击 App 内的「我练完了」按钮
-8. `requestReview(instruction:)` 发送复盘指令
-9. `captureLatestAssistantMessage()`
-   - 优先 AX 读取
-   - 失败或内容不完整 → 降级为提示用户 ⌘C，从剪贴板读回
-10. `ReviewParser` 提取定界块 → JSON 容错修复 → schema 校验
-11. 写入 `pending-reviews/`
+8. 结束判定二选一先到者：`observeVoiceState()` 探测到 `Voice chat active` 消失，或用户点击 App 内的「我练完了」按钮
+9. `CoachBridge.sendText(reviewInstruction)` — **不需要退出语音**（2.4）
+10. `captureLatestAssistantMessage()`
+    - 优先 AX 读取 `AXStaticText`
+    - 失败或内容不完整 → 降级为提示用户 ⌘C，从剪贴板读回
+11. `ReviewParser` 提取定界块 → JSON 容错修复 → schema 校验
+12. 写入 `pending-reviews/`
+
+> 第 9 步刻意保留在语音会话内。上游必须先退出语音才能发文字，本设计不必——整场练习是一个连续的语音会话，ChatGPT 的上下文不被打断，复盘质量更有保障。
 
 ### 存档之后
-12. 从 `pending-reviews/` 正式入库：写 `reports/`，更新 `state.json`
-13. 复盘中的语法/发音问题进错题本，重复出现的标记为高优先级
-14. 推荐词汇进词汇本
-15. `RetrainingPolicy` 选出下次的单点重训目标
-16. 计划进度推进
+13. 从 `pending-reviews/` 正式入库：写 `reports/`，更新 `state.json`
+14. 复盘中的语法/发音问题进错题本，重复出现的标记为高优先级
+15. 推荐词汇进词汇本
+16. `RetrainingPolicy` 选出下次的单点重训目标
+17. 计划进度推进
 
-**第 11 步与第 12 步分离是刻意的**（沿用上游设计）：复盘先落盘再入库，中途崩溃或误关窗口都不丢数据，下次启动可继续处理。
+**第 12 步与第 13 步分离是刻意的**（沿用上游设计）：复盘先落盘再入库，中途崩溃或误关窗口都不丢数据，下次启动可继续处理。
 
 ## 6. 降级与错误处理
 
 | 失败情形 | 行为 |
 |---|---|
-| 未安装 ChatGPT Classic | 明确报错 + 提供下载指引，不进入练习流程 |
-| 只装了 `com.openai.codex` 那个 ChatGPT | 识别 bundle id，明确提示需要 ChatGPT Classic |
-| deep link 不支持 prompt 参数 | 自动降级为剪贴板 + 粘贴，用户无感 |
+| 未安装 `com.openai.codex`（新 ChatGPT.app）| 明确报错 + 提供下载指引，不进入练习流程 |
+| 只装了 `com.openai.chat`（Classic）| 识别 bundle id，明确说明 Classic 没有 live 语音、需要安装新版 ChatGPT.app |
+| 目标应用未运行 | 用 `NSWorkspace` 启动它并等待就绪；超时则报错并提示用户手动打开 |
+| 惰性 AX 树唤醒后仍找不到 `AXWebArea` 或输入框 | 视为 AX 通道不可用，整体降级到剪贴板模式，并提示运行 `AXProbe` 收集诊断信息 |
 | 未授予辅助功能权限 | 跳转 `x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility`，说明用途；用户拒绝则运行在半自动模式 |
+| 找不到 `New voice chat` 按钮 | 提示用户手动点击语音按钮，App 继续用 `Voice chat active` 监测状态 |
 | AX 读不到复盘或内容截断 | 降级为「请按 ⌘C」，界面明确提示 |
 | 复盘 JSON 格式残缺 | 先自动修复；仍失败则保留原文到 `pending-reviews/`，界面提供「重新生成」 |
 | ChatGPT 大改版导致 AX 全面失效 | 全流程降级为半手动：App 负责组装提示词 + 剪贴板收发。核心功能保持可用 |
@@ -264,17 +358,30 @@ Phase 2 之后用户即可实际使用，其后均为增量。
 - **不购买 Developer ID / 不做公证**：架构预留，本期不执行
 - **不跟随上游更新**：全原生重写即自立门户，这是已知且已接受的代价
 
-## 11. 待验证的假设（Phase 0）
+## 11. Phase 0 假设的验证结果
 
-以下假设直接影响 `ChatGPTBridge` 设计，必须在 Phase 1 开工前用实测给出结论。每条都附有明确的决策规则，不存在悬空状态。
+初稿列了 6 条假设。实测后，其中 3 条随目标应用变更而作废，2 条成立，1 条待验证。**结论均以在运行中的应用上实测为准**（见 2.5 确立的规则）。
 
-| # | 假设 | 验证方法 | 若不成立 |
+| # | 假设 | 结论 | 依据 |
 |---|---|---|---|
-| 1 | `chatgpt://new-conversation` 接受携带提示词的查询参数 | 依次实测候选拼写：`prompt`、`query`、`starter_prompt`、`starterPrompt` | 降级：deep link 开新会话 + 剪贴板 + AX 注入 |
-| 2 | 同一 deep link 可直接指定语音模式 | 实测 `mode=voice`、`voice_mode=1` 等候选 | 降级：先建会话，再调 `chatgpt://new-voice-conversation` |
-| 3 | 存在自动发送参数 | 实测 `auto_send`、`autoSend` | 降级：AX 注入后模拟回车 |
-| 4 | AX 树暴露对话消息文本 | `AXProbe` dump 窗口树，检查是否存在消息节点 | 复盘回收固定走剪贴板路径，AX 仅用于语音状态探测 |
-| 5 | AX 能读到滚出屏幕的历史消息 | 制造长对话后 dump，比对可读条数 | 同上；这是最可能不成立的一条 |
-| 6 | AX 能探测语音会话的开始与结束 | 语音进行中与结束后各 dump 一次，比对差异 | 语音结束完全依赖用户点击 App 内按钮 |
+| 1 | deep link 接受携带提示词的查询参数 | **作废** | 属于 Classic，而 Classic 无语音。新目标无可用 deep link（2.2）。改由 AX 写 `kAXValueAttribute`，已实测成功 |
+| 2 | deep link 可直接指定语音模式 | **作废** | 同上。改由 AX 按下 `AXButton desc="New voice chat"` |
+| 3 | 存在自动发送参数 | **作废** | 同上。改由 AX 发送 |
+| 4 | AX 树暴露对话消息文本 | ✅ **成立** | 语音会话中读出考官原话 166 字符，逐字可读（2.3）|
+| 5 | AX 能读到滚出屏幕的历史消息 | ⏳ **待验证** | 见下 |
+| 6 | AX 能探测语音会话的开始与结束 | ✅ **成立** | `AXImage desc="Voice chat active"`、`AXButton desc="Stop voice chat"`（2.3）|
 
-假设 4 与 5 若均不成立，则「全自动复盘」不可行，项目按半自动模式交付——这已在决策阶段被接受，不构成阻塞。
+### 关于假设 5
+
+这是唯一未关闭的一条，需要在新目标上造出 30 轮以上的长对话后 dump，统计可读消息条数。
+
+**它的风险性质已经改变。** 初稿担心的是「SwiftUI 列表懒加载，读不到就是绕不过去」；新目标是 Chromium 应用，问题变成「ChatGPT 网页端是否虚拟化 DOM」——而这正是上游 Electron 版本已经跑通过的场景。风险等级由「可能推翻方案」降为「可能需要先滚动加载」。
+
+**若不成立：** 复盘回收固定走剪贴板路径（用户按 ⌘C），AX 仍用于写入、启停语音、状态探测。全自动降为半自动，其余架构不变。这已在决策阶段被接受，不构成阻塞。
+
+### 仍需实测的两个动作
+
+以下两项属 AX 标准操作，风险低，但不接受「标准操作应该没问题」这种论证，须在 Phase 2 实装时各真跑一次：
+
+- 对按钮执行 `kAXPressAction`（用于启停语音）
+- 发送已写入的文本（回车键事件或按下发送按钮）
