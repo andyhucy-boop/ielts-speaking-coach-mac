@@ -1,5 +1,6 @@
 import Foundation
 import IELTSCoachCore
+import PDFKit
 import UniformTypeIdentifiers
 
 /// 把题库变成界面要显示的样子：按 Part 筛、按话题分组、数一数练过几道。
@@ -132,14 +133,16 @@ public enum QuestionBankImport {
     /// 文件面板的 message、空状态的提示、导入卡片的副标题），只是**恰好**一致，
     /// 没有任何构造上或测试上的耦合：把 `supportedExtensions` 改成 `["csv", "json", "pdf"]`，
     /// 面板就会放行 PDF、`parse` 抛错、拒绝文案还在说「只认 .csv 和 .json」——
-    /// 而全部 272 条测试无一变红。而 Task 8 要动的恰恰就是这一行。
+    /// 而全部 272 条测试无一变红。**Task 8 加 `.pdf` 时走的就是这条收口过的路**：
+    /// 只加一个 case，下面四个 `switch` 同时编不过，一处也漏不掉。
     ///
-    /// 现在加一个 case，下面三个 `switch` 立刻不完备，**编译就过不去**；
-    /// 硬填上去的话，`testEveryFormatTheFilePanelLetsThroughIsActuallyParsed` 会红
-    /// （没人给这种格式补样本 = 没人验证过 `parse` 真的认它）。
+    /// 加一个 case 而不补样本的话，`testEveryFormatTheFilePanelLetsThroughIsActuallyParsed`
+    /// 会红（没人给这种格式补样本 = 没人验证过 `parse` 真的认它）。
     public enum Format: String, CaseIterable, Sendable {
         case csv
         case json
+        /// 用户手上的季度题库就是这个：PDFKit 抽出纯文本，再交给 `PDFQuestionExtractor`。
+        case pdf
 
         /// 文件名扩展名，一律小写（`parse` 会把用户的文件名先转小写再匹配，
         /// 从 Excel 导出的常是 `.CSV`）。
@@ -155,6 +158,7 @@ public enum QuestionBankImport {
             switch self {
             case .csv: return .commaSeparatedText
             case .json: return .json
+            case .pdf: return .pdf
             }
         }
 
@@ -163,6 +167,7 @@ public enum QuestionBankImport {
             switch self {
             case .csv: return "CSV（第一行 id,part,topic,prompt）"
             case .json: return "本工具导出的 JSON"
+            case .pdf: return "PDF（雅思口语季度题库原文，须是文字版而非扫描件）"
             }
         }
 
@@ -175,6 +180,10 @@ public enum QuestionBankImport {
             switch self {
             case .csv: return try QuestionBankImporter.importCSV(text, sourceTitle: sourceTitle)
             case .json: return try QuestionBankImporter.importJSON(text, sourceTitle: sourceTitle)
+            case .pdf:
+                // 这里的 text 已经是 PDFKit 抽出来的纯文本了（见 `QuestionBankFileReader`）。
+                return try PDFQuestionExtractor.extract(
+                    plainText: text, sourceTitle: sourceTitle, sourceUrl: "")
             }
         }
     }
@@ -196,20 +205,33 @@ public enum QuestionBankImport {
         Format.allCases.map(\.displayName).joined(separator: "、")
     }
 
-    /// 按扩展名选导入器。**不认识的扩展名必须报错，不能默默当成 CSV。**
-    public static func parse(fileName: String, text: String) throws -> ImportResult {
-        let name = fileName as NSString
-        let ext = name.pathExtension.lowercased()
-        let title = name.deletingPathExtension
+    /// 按扩展名认格式。**不认识的扩展名必须报错，不能默默当成 CSV。**
+    ///
+    /// 单独拆出来是因为「怎么把文件读成文字」得先知道格式：PDF 不能按文本读
+    /// （见 `QuestionBankFileReader`），而那一步发生在 `parse` 之前。
+    public static func format(ofFileName fileName: String) throws -> Format {
+        let ext = (fileName as NSString).pathExtension.lowercased()
         guard let format = Format(rawValue: ext) else {
             // 没有扩展名时不能拼成「扩展名是「.」」——那句话读起来像程序自己出了错。
             let what = ext.isEmpty ? "没有扩展名" : "扩展名是「.\(ext)」"
             throw CoachError.questionBankInvalid(
                 "「\(fileName)」\(what)，本页只认 \(supportedExtensionList) "
                     + "这 \(Format.allCases.count) 种题库文件。"
-                    + "下一步：把题库另存为 CSV（第一行是 id,part,topic,prompt,followups）再导入。")
+                    + "下一步：把题库另存为 CSV（第一行是 id,part,topic,prompt,followups）再导入；"
+                    + "若你手上是季度题库的原文 PDF，直接选那份 PDF 就行。")
         }
-        return try format.makeImportResult(text: text, sourceTitle: title)
+        return format
+    }
+
+    /// 题库来源的名字：文件名去掉扩展名。练习记录里靠它看出题是从哪份文件来的。
+    public static func sourceTitle(ofFileName fileName: String) -> String {
+        (fileName as NSString).deletingPathExtension
+    }
+
+    /// 按扩展名选导入器。
+    public static func parse(fileName: String, text: String) throws -> ImportResult {
+        try format(ofFileName: fileName)
+            .makeImportResult(text: text, sourceTitle: sourceTitle(ofFileName: fileName))
     }
 
     /// 把导入过程中的任何失败翻译成用户能照做的一句话。
@@ -224,5 +246,52 @@ public enum QuestionBankImport {
         return "导入「\(fileName)」时失败：\(detail)。"
             + "下一步：确认这个文件没有被 Excel 之类的程序占用、磁盘还有剩余空间，然后重试；"
             + "若反复失败，把文件另存一份新的再导入。"
+    }
+}
+
+/// 把用户选中的那个文件读成 `QuestionBankImport.parse` 要的纯文本。
+///
+/// **单独拆出来是因为 PDF 不是文本文件。** CSV / JSON 用
+/// `String(contentsOf:encoding:.utf8)` 读，PDF 用 PDFKit 抽文字——
+/// 拿 PDF 去按 UTF-8 读必然失败，而失败之后那句「用文本编辑另存为 UTF-8」
+/// 对一份 PDF 是**做不到**的事，用户会照着去试然后卡住（铁律 6）。
+///
+/// 取文字这一步做成注入的闭包，是为了让上面这条能被测到：`PDFDocument(url:)`
+/// 在单元测试里造不出一份真 PDF 来，但「PDF 走没走 PDFKit 这条路」「取不出文字时
+/// 跟用户怎么说」这两件事完全可测，而它们恰恰是最容易做错的部分。
+public enum QuestionBankFileReader {
+    /// 默认实现：PDFKit。**这是全项目唯一一处碰 PDFKit 的地方**，
+    /// 解析逻辑在 `IELTSCoachCore` 里、只吃纯文本，所以 Core 只依赖 Foundation 的约束不被破坏。
+    public static func pdfPlainText(at url: URL) -> String? { PDFDocument(url: url)?.string }
+
+    public static func text(at url: URL, format: QuestionBankImport.Format,
+                            pdfText: (URL) -> String? = pdfPlainText) throws -> String {
+        let fileName = url.lastPathComponent
+        switch format {
+        case .csv, .json:
+            do {
+                return try String(contentsOf: url, encoding: .utf8)
+            } catch {
+                throw CoachError.questionBankInvalid(
+                    "读不到「\(fileName)」的内容，它多半不是 UTF-8 编码的文本"
+                        + "（系统说：\(error.localizedDescription)）。"
+                        + "下一步：用「文本编辑」打开它，选「文件 › 存储为」并把编码设成 UTF-8，"
+                        + "再回来导入一次。")
+            }
+        case .pdf:
+            // 空串与 nil 要一视同仁：PDFKit 对「有页面但一个字都没有」的扫描件返回的是空串，
+            // 放它过去只会在下一步变成一句莫名其妙的「没有解析出任何题目」，
+            // 而真正的原因没人告诉用户。
+            let text = pdfText(url) ?? ""
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw CoachError.questionBankInvalid(
+                    "「\(fileName)」里没有可提取的文字，它多半是扫描件（整页都是图片）。"
+                        + "下一步：换一份文字版 PDF；"
+                        + "或者用系统「预览」打开它，看看能不能选中并复制其中的文字——"
+                        + "选不中就说明确实是扫描件，需要先做一次文字识别，"
+                        + "再把题目整理成 CSV（第一行 id,part,topic,prompt,followups）导入。")
+            }
+            return text
+        }
     }
 }

@@ -237,27 +237,18 @@ struct QuestionBankView: View {
         runImport(from: url)
     }
 
+    /// **先认格式、再读文字、最后解析。** 三步的顺序不能换：PDF 不能按 UTF-8 文本读，
+    /// 而「这是不是 PDF」只有认完格式才知道（`QuestionBankFileReader` 里有完整说明）。
     private func runImport(from url: URL) {
         let fileName = url.lastPathComponent
         do {
-            let text = try readText(at: url, fileName: fileName)
+            let format = try QuestionBankImport.format(ofFileName: fileName)
+            let text = try QuestionBankFileReader.text(at: url, format: format)
             let result = try QuestionBankImport.parse(fileName: fileName, text: text)
             feedback = QuestionBankImportFeedback(outcome: try app.applyImport(result))
         } catch {
             feedback = QuestionBankImportFeedback(
                 failureMessage: QuestionBankImport.describeFailure(error, fileName: fileName))
-        }
-    }
-
-    private func readText(at url: URL, fileName: String) throws -> String {
-        do {
-            return try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            throw CoachError.questionBankInvalid(
-                "读不到「\(fileName)」的内容，它多半不是 UTF-8 编码的文本"
-                    + "（系统说：\(error.localizedDescription)）。"
-                    + "下一步：用「文本编辑」打开它，选「文件 › 存储为」并把编码设成 UTF-8，"
-                    + "再回来导入一次。")
         }
     }
 }

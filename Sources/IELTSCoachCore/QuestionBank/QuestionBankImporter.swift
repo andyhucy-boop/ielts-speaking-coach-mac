@@ -168,7 +168,7 @@ public enum QuestionBankImporter {
 
     /// 确定性哈希（FNV-1a 64 位）。**不能用 Swift 的 hashValue** —— 它每次进程启动
     /// 都换种子，同一份题库两次导入会得到不同 id。
-    private static func stableHash(_ text: String) -> String {
+    static func stableHash(_ text: String) -> String {
         var hash: UInt64 = 0xcbf2_9ce4_8422_2325
         for byte in text.utf8 {
             hash ^= UInt64(byte)
@@ -181,7 +181,11 @@ public enum QuestionBankImporter {
     /// 中间插入或删除一个 topic，后面所有题的 id 都变，merge 会把无关内容
     /// 覆盖到旧 id 上、未变的题被当成新题追加、练习记录错位。
     /// 雅思口语题库每季度换题，二次导入是常态而非边缘情况。
-    private static func questionID(part: Int, topic: String, prompt: String) -> String {
+    ///
+    /// **`internal` 而不是 `private` 是为了让 `PDFQuestionExtractor` 用同一份实现。**
+    /// PDF 导入自己再写一遍哈希，两条路生成的 id 就会对不上：同一道题从 CSV 导一次、
+    /// 从 PDF 再导一次会变成两道，`merge` 也去不掉重。
+    static func questionID(part: Int, topic: String, prompt: String) -> String {
         "p\(part)-\(stableHash("\(topic)|\(prompt)"))"
     }
 

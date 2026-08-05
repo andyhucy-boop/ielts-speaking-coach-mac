@@ -61,6 +61,15 @@ final class QuestionBankViewModelTests: XCTestCase {
         {"title":"季度题库","part1":[{"raw":"Home","questions":["Do you live in a house or a flat?"]}]}
         """#
 
+    /// PDF 那一路吃的是「PDFKit 抽出来的纯文本」，所以样本就是真实 PDF 里的片段
+    /// （分区标题带字符间空格，照抄 2026-08-06 的实测结果）。
+    private static let pdf = """
+        Part 1 T opics
+        Part1 必 考 题
+        1-Study and work
+        Do you work or are you a student?
+        """
+
     func testCSVGoesToTheCSVImporterAndTakesItsTitleFromTheFileName() throws {
         let result = try QuestionBankImport.parse(fileName: "季度题库.csv", text: Self.csv)
         XCTAssertEqual(result.questions.map(\.id), ["p1-1"])
@@ -81,15 +90,18 @@ final class QuestionBankViewModelTests: XCTestCase {
     }
 
     func testUnsupportedExtensionIsRejectedInsteadOfBeingTreatedAsCSV() {
-        // 故意喂一份**合法的 CSV 正文**，只是文件名是 .pdf。
+        // 故意喂一份**合法的 CSV 正文**，只是文件名是 .docx。
         // 若实现照搬命令行那套「不是 json 就当 csv」，这里会安静地导入成功——
         // 那正是这条测试要拦住的。
-        XCTAssertThrowsError(try QuestionBankImport.parse(fileName: "季度题库.pdf", text: Self.csv)) { error in
+        //
+        // 这里原本用的是 .pdf。**Task 8 把 PDF 变成了支持的格式**，再拿它当反例就不成立了；
+        // 换成 .docx（用户第二可能拿来试的东西）而不是放宽断言。
+        XCTAssertThrowsError(try QuestionBankImport.parse(fileName: "季度题库.docx", text: Self.csv)) { error in
             let message = error.localizedDescription
             XCTAssertTrue(message.contains("下一步"), "只说不支持不说下一步不算合格：" + message)
             XCTAssertTrue(message.contains("csv") || message.contains("CSV"),
                           "得告诉用户到底认哪几种格式：" + message)
-            XCTAssertTrue(message.contains("季度题库.pdf"), "得指名是哪个文件：" + message)
+            XCTAssertTrue(message.contains("季度题库.docx"), "得指名是哪个文件：" + message)
         }
     }
 
@@ -109,7 +121,9 @@ final class QuestionBankViewModelTests: XCTestCase {
     /// 面板的清单、`parse` 的分派、拒绝文案是三份互不相干的字面量，
     /// 改其中一份另外两份不会有任何反应。
     func testEveryFormatTheFilePanelLetsThroughIsActuallyParsed() throws {
-        let samples: [QuestionBankImport.Format: String] = [.csv: Self.csv, .json: Self.json]
+        let samples: [QuestionBankImport.Format: String] = [
+            .csv: Self.csv, .json: Self.json, .pdf: Self.pdf
+        ]
 
         XCTAssertFalse(QuestionBankImport.Format.allCases.isEmpty,
                        "一种格式都不认时 allowedContentTypes 会是空数组，"
@@ -155,7 +169,7 @@ final class QuestionBankViewModelTests: XCTestCase {
     /// 把清单改成 `["csv", "json", "pdf"]`，面板就会放行 PDF、`parse` 抛错、
     /// 而这句话还在说「只认 .csv 和 .json 两种」——全部 272 条测试无一变红。
     func testTheRejectionMessageListsTheSameFormatsTheFilePanelLetsThrough() {
-        XCTAssertThrowsError(try QuestionBankImport.parse(fileName: "季度题库.pdf", text: Self.csv)) { error in
+        XCTAssertThrowsError(try QuestionBankImport.parse(fileName: "季度题库.docx", text: Self.csv)) { error in
             let message = error.localizedDescription
             for ext in QuestionBankImport.supportedExtensions {
                 XCTAssertTrue(message.contains(".\(ext)"),
