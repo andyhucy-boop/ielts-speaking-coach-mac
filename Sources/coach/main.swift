@@ -19,6 +19,8 @@ case "doctor":
     exit(DoctorCommand.run())
 case "questions":
     exit(QuestionsCommand.run(Array(args.dropFirst())))
+case "practice":
+    exit(PracticeCommand.run(Array(args.dropFirst())))
 default:
     print("未知命令：\(command)。运行 coach 查看用法。")
     exit(2)
