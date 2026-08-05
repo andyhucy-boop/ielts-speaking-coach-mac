@@ -86,7 +86,7 @@ public struct RootView: View {
             .frame(maxWidth: 640, alignment: .leading)
         } else {
             switch current {
-            case .today: TodayView(app: app)
+            case .today: TodayView(app: app, onGo: { selection = $0 })
             case .questionBank: QuestionBankView(app: app)
             case .reviewReports: ReviewReportView(app: app, onGo: { selection = $0 })
             default: PlaceholderView(item: current, onGo: { selection = $0 })
