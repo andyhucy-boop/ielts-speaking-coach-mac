@@ -57,13 +57,52 @@ plutil -lint "$APP/Contents/Info.plist" >/dev/null || {
 }
 
 echo "▶︎ 签名…"
-if ! security find-certificate -c "$SIGN_IDENTITY" >/dev/null 2>&1; then
-    echo "❌ 找不到签名证书「$SIGN_IDENTITY」。"
-    echo "   下一步：按 docs/superpowers/plans/2026-08-05-phase3-gui-shell.md「前置条件」一节重新创建，"
-    echo "   否则每次编译后辅助功能授权都会失效，需反复去系统设置重新勾选。"
+
+# 查的是「签名身份」（证书 + 私钥），不是「证书在不在」。
+# security find-certificate 只要钥匙串里有那张证书就返回 0，而 codesign -s 要的是 identity。
+# 只导进证书没导进私钥时（PKCS12 导入容易只成一半，换机器只拷 .cer 也一样），
+# 查证书会放行，然后死在下面 codesign 的英文报错上——恰恰是这个闸门存在的目的所在的场景。
+#
+# 用不带 -v 的 find-identity：它会把未被信任的身份也列出来
+# （显示为 CSSMERR_TP_NOT_TRUSTED），正好绕开「find-identity -v 显示 0 valid」那个坑。
+if ! security find-identity -p codesigning 2>/dev/null | grep -q "\"$SIGN_IDENTITY\""; then
+    echo "❌ 找不到可用的签名身份「$SIGN_IDENTITY」（证书或私钥缺失）。"
+    echo "   下一步：按 docs/superpowers/plans/2026-08-05-phase3-gui-shell.md「前置条件」一节重新创建。"
+    echo "   注意 PKCS12 导入必须带 -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1，"
+    echo "   否则 macOS 读不了新版加密，会出现「证书在、私钥不在」这种半截状态。"
     exit 1
 fi
+
 codesign --force --sign "$SIGN_IDENTITY" --identifier "$BUNDLE_ID" "$APP"
 
+# 签名成功什么都不证明——真正要守的是「指定要求」是否仍然稳定。
+# TCC（辅助功能授权）记的就是它。ad-hoc 签名会让它变成 cdhash H"…"，
+# 每打包一次就换一次，用户每次都得重新去系统设置勾选。
+#
+# 这一段必须在打印「✅ 已生成」**之前**跑，且不许 `|| true`。
+# 触发路径不需要有人手改脚本：证书到期、或重新生成/重新导入一次，leaf 哈希就变了。
+# 那时用户唯一的线索是 macOS 又来要一次辅助功能权限——查起来极难。
+DESIGNATED="$(codesign -d -r- "$APP" 2>&1 | grep designated || true)"
+
+if [ -z "$DESIGNATED" ]; then
+    echo "❌ 读不出签名的指定要求（designated requirement）。"
+    echo "   下一步：跑 codesign -d -r- \"$APP\" 看完整输出。签名可能没真正生效。"
+    exit 1
+fi
+
+case "$DESIGNATED" in
+    *"identifier \"$BUNDLE_ID\""*"certificate leaf"*)
+        ;;
+    *)
+        echo "❌ 签名的指定要求不是预期形状，辅助功能授权会反复失效。"
+        echo "   实际读到：$DESIGNATED"
+        echo "   期望包含：identifier \"$BUNDLE_ID\" and certificate leaf = H\"…\""
+        echo "   下一步：若里面是 cdhash，说明用成了 ad-hoc 签名（codesign -s -），"
+        echo "   检查 SIGN_IDENTITY 是否为空；若 leaf 哈希变了，说明证书被重新生成过，"
+        echo "   那么授权需要重做一次，之后才会重新稳定。"
+        exit 1
+        ;;
+esac
+
 echo "✅ 已生成 $APP"
-codesign -d -r- "$APP" 2>&1 | grep designated || true
+echo "   $DESIGNATED"
