@@ -1194,7 +1194,18 @@ enum QuestionsCommand {
         }
         switch sub {
         case "import": return importBank(path: args.count > 1 ? args[1] : nil)
-        case "list": return list(partFilter: args.count > 1 ? Int(args[1]) : nil)
+        case "list":
+            if args.count > 1 {
+                // 不能用 Int(args[1]) 直接转 —— 输入 "1a" 时它返回 nil，
+                // 会静默退化成「列出全部」，用户以为自己在看 Part 1 的题。
+                guard let part = Int(args[1]), (1...3).contains(part) else {
+                    print("❌ 「\(args[1])」不是有效的 Part。")
+                    print("   下一步：用 coach questions list 1（或 2、3）；不带参数则列出全部。")
+                    return 2
+                }
+                return list(partFilter: part)
+            }
+            return list(partFilter: nil)
         default:
             print("未知子命令：\(sub)。可用：import、list")
             return 2
@@ -1207,6 +1218,13 @@ enum QuestionsCommand {
             return 2
         }
         let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+           isDirectory.boolValue {
+            print("❌ 「\(url.path)」是个文件夹，不是题库文件。")
+            print("   下一步：指定文件夹里那个具体的 .csv 或 .json 文件。")
+            return 2
+        }
         guard let text = try? String(contentsOf: url, encoding: .utf8) else {
             print("❌ 读不到文件：\(url.path)")
             print("   下一步：确认路径正确、文件是 UTF-8 编码的文本，然后重试。")
@@ -1274,7 +1292,10 @@ case "questions":
 
 用上游的样例题库建一个测试 CSV：
 
+**⚠️ 必须隔离数据目录再跑。** 不设 `IELTS_SPEAKING_DATA_DIR` 的话，这些样例题会被写进用户**真实的**题库（`~/Library/Application Support/IELTS Speaking Coach/state.json`），跟真题混在一起且不好分辨。开发期的验证绝不能污染用户数据。
+
 ```bash
+export IELTS_SPEAKING_DATA_DIR=/tmp/coach-verify-$$
 cat > /tmp/sample.csv <<'CSV'
 id,part,topic,prompt,followups
 p1-home-001,1,Home,What do you like most about your home?,
@@ -1282,6 +1303,9 @@ p2-skill-001,2,Skills,Describe a useful skill you learned,"How you learned it|Wh
 CSV
 swift run coach questions import /tmp/sample.csv
 swift run coach questions list
+swift run coach questions list 1a     # 应报错并给出下一步，而不是列出全部
+swift run coach questions import /tmp # 应报「是个文件夹」
+rm -rf "$IELTS_SPEAKING_DATA_DIR"
 ```
 
 Expected: 导入 2 题、列出 2 题。再跑一次 import 应显示题库仍是 2 题（id 相同被合并）。
