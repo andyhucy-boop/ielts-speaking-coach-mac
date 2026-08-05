@@ -581,11 +581,25 @@ public struct AXLocator: Sendable {
     }
 
     public func waitForComposer(timeout: TimeInterval) throws -> AXNodeSnapshot {
+        var lastNodes: [AXNodeSnapshot] = []
         let deadline = Date().addingTimeInterval(timeout)
         repeat {
-            if let hit = ChatGPTLabels.composer(among: access.snapshotTree()) { return hit }
+            lastNodes = access.snapshotTree()
+            if let hit = ChatGPTLabels.composer(among: lastNodes) { return hit }
             Thread.sleep(forTimeInterval: pollInterval)
         } while Date() < deadline
+
+        // 「有多个文本框、不敢猜」与「根本没有文本框」是两种完全不同的处境，
+        // 处置方式也不同。报同一句通用错误，等于把 composer 那层防护浪费掉一半。
+        let candidates = ChatGPTLabels.candidateComposers(among: lastNodes)
+        if candidates.count > 1 {
+            let described = candidates.map { "「\($0.descriptionText)」" }.joined(separator: "、")
+            throw BridgeError.elementNotFound(
+                "界面上有 \(candidates.count) 个文本框（\(described)），无法确定哪个是 ChatGPT 的输入框，"
+                + "不敢乱猜——猜错会把考官提示词写进搜索框之类的地方，而你只会看到「什么都没发生」。"
+                + "下一步：确认 ChatGPT 停在普通对话界面（不是搜索、不是重命名会话）后重试；"
+                + "若 ChatGPT 刚更新过，运行 axprobe dump 把新的输入框描述报给开发者。")
+        }
         throw BridgeError.elementNotFound(
             "等了 \(Int(timeout)) 秒仍未找到 ChatGPT 的输入框。"
             + "下一步：确认 ChatGPT 窗口可见且已打开一个会话，然后重试。")
