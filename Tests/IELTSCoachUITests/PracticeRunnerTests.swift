@@ -24,6 +24,12 @@ final class FakeBridge: CoachBridge, @unchecked Sendable {
     var copyResult: Result<String, BridgeError> = .success("")
     /// `captureLatestAssistantMessage` 的结果。
     var captureResult: Result<String, BridgeError> = .success("")
+    /// 「按复制按钮」那一步的闸门。设上之后，`copyLatestAssistantMessage` 一进来先放行
+    /// `copyStarted`，再卡在这里等 `signal()`——测试因此能在这一步**跑到一半**时
+    /// 检查界面这时显示的是哪一步（实测最长 10 秒，界面在这段时间里说的必须是这一步的事）。
+    /// 卡的是后台线程，主线程照常跑，`PracticeRunner` 的阶段更新不受影响。
+    var copyGate: DispatchSemaphore?
+    let copyStarted = DispatchSemaphore(value: 0)
 
     private let lock = NSLock()
     private var recordedCalls: [String] = []
@@ -78,6 +84,10 @@ final class FakeBridge: CoachBridge, @unchecked Sendable {
     func copyLatestAssistantMessage(pasteboard: any PasteboardAccess,
                                     timeout: TimeInterval) throws -> String {
         lock.withLock { recordedCalls.append("copy") }
+        if let copyGate {
+            copyStarted.signal()
+            copyGate.wait()
+        }
         return try copyResult.get()
     }
 }
@@ -177,15 +187,21 @@ final class PracticeRunnerTests: XCTestCase {
     /// 失败信息必须原样带上桥那边写好的中文说明（它自带「下一步」），并说清断在哪一步。
     ///
     /// 换成一句自己编的「练习失败」，用户就只剩重启一条路可走（铁律 6）。
+    ///
+    /// **断言的是 `userFacingText`，不是 `.failed` 的关联值。** 界面上那行字画的是
+    /// `runner.stage.userFacingText`（`PracticeSheet.stageBlock`），这是失败信息上屏的唯一路径；
+    /// 只断言关联值的话，把 `PracticeStage.failed` 那一支改成 `return "操作失败。"`
+    /// 一样绿——而用户看到的就只剩这四个字。
     func testFailureKeepsTheActionableMessageFromTheBridge() async {
         let bridge = FakeBridge()
         bridge.failAt = .startingVoice
         let runner = Self.runner(bridge: bridge)
         try? await runner.start(setup: Self.setup())
-        guard case .failed(let message) = runner.stage else { return XCTFail("应当停在失败态") }
-        XCTAssertTrue(message.contains("假装失败。下一步：这是测试用的。"),
-                      "桥那边的原话被吞掉了，用户看不到到底哪里出的问题")
-        XCTAssertTrue(message.contains("启动语音"), "得说清断在哪一步，否则无从下手")
+        guard case .failed = runner.stage else { return XCTFail("应当停在失败态") }
+        let shown = runner.stage.userFacingText
+        XCTAssertTrue(shown.contains("假装失败。下一步：这是测试用的。"),
+                      "桥那边的原话没画到界面上，用户看不到到底哪里出的问题")
+        XCTAssertTrue(shown.contains("启动语音"), "得说清断在哪一步，否则无从下手")
     }
 
     /// 桥以外的失败（磁盘、系统 API）抛出来的是不带「下一步」的 NSError。
@@ -240,6 +256,43 @@ final class PracticeRunnerTests: XCTestCase {
         XCTAssertEqual(state.issues.count, 1, "错题本该从 0 变正（成品标准第 4 条）")
         XCTAssertEqual(state.vocabulary.count, 1, "词汇本该从 0 变正")
         XCTAssertEqual(state.targets.count, 1, "重训目标该从 0 变正")
+
+        // 档案真的动了，还得让用户看得见动了多少。只画一句「完成」的话，
+        // 「复盘写得完整、档案却纹丝不动」这种静默失败永远没人发现。
+        let notice = try XCTUnwrap(runner.archiveNotice, "存档之后必须交代进了多少条、原文存在哪儿")
+        XCTAssertTrue(notice.contains("错题本 1 条"), "没说错题本进了几条：\(notice)")
+        XCTAssertTrue(notice.contains("词汇本 1 条"), "没说词汇本进了几条：\(notice)")
+        XCTAssertTrue(notice.contains("重训目标 1 个"), "没说重训目标进了几个：\(notice)")
+        XCTAssertTrue(notice.contains(Self.pendingPath(in: directory).path),
+                      "没说复盘原文存在哪儿，用户想自己核对时无从下手：\(notice)")
+        XCTAssertFalse(notice.contains("⚠️"), "这一份复盘整份都归进档案了，不该报警：\(notice)")
+    }
+
+    /// **静默的 0 必须说出来。** 顶层 `must_correct` 明明有内容，却一条都没归进档案——
+    /// 多半是 ChatGPT 用的字段名和本工具读的对不上。这种失败不报错、不崩溃，
+    /// 只是悄悄什么都不做，是本项目已知最危险的失败形态。
+    ///
+    /// 这条测试守的是 `archiveNotice` 的**内容**：把那段话整个换成一句「完成」，它必须变红。
+    func testTheNoticeCallsOutFieldsThatWentNowhere() async throws {
+        let directory = try Self.temporaryDirectory()
+        let bridge = FakeBridge()
+        bridge.voiceActive = true
+        bridge.copyResult = .success(Self.reviewWithUnreadableIssues)
+        let runner = Self.runner(bridge: bridge, directory: directory)
+
+        try await runner.start(setup: Self.setup())
+        try await runner.finishPractice()
+        XCTAssertEqual(runner.stage, .done, "字段读不进去不算失败，复盘本身是完整的")
+
+        let notice = try XCTUnwrap(runner.archiveNotice, "存档之后必须有交代")
+        XCTAssertTrue(notice.contains("must_correct"),
+                      "复盘里的 must_correct 一条都没归进档案，这件事必须点名说出来：\(notice)")
+        XCTAssertTrue(notice.contains("错题本 0 条"),
+                      "归进去 0 条这件事得直接写出来，不能只显示一个「完成」：\(notice)")
+        XCTAssertTrue(notice.contains(Self.pendingPath(in: directory).path),
+                      "得把复盘原文的路径给出来，用户才能打开对照着看：\(notice)")
+        XCTAssertTrue(notice.contains("下一步"),
+                      "只说「没归进去」不说该做什么，用户没法处理（铁律 6）：\(notice)")
     }
 
     /// 语音已经结束（用户自己在 ChatGPT 里挂了）时不该再去按一次结束——
@@ -272,18 +325,100 @@ final class PracticeRunnerTests: XCTestCase {
         try await runner.start(setup: Self.setup())
         try? await runner.finishPractice()
 
-        let pending = directory.pendingReviewsDirectory.appending(path: "\(Self.requestID).txt")
+        let pending = Self.pendingPath(in: directory)
         XCTAssertTrue(FileManager.default.fileExists(atPath: pending.path),
                       "解析失败了，但原文必须已经在盘上——不然用户练的这一场就白练了")
         let saved = try String(contentsOf: pending, encoding: .utf8)
         XCTAssertTrue(saved.contains("这一段根本不是 JSON"))
 
-        guard case .failed(let message) = runner.stage else { return XCTFail("解析失败该进失败态") }
-        XCTAssertTrue(message.contains(pending.path), "得把原文存在哪儿告诉用户")
-        XCTAssertTrue(message.contains("下一步"))
+        guard case .failed = runner.stage else { return XCTFail("解析失败该进失败态") }
+        let shown = runner.stage.userFacingText
+        XCTAssertTrue(shown.contains(pending.path), "得把原文存在哪儿告诉用户")
+        XCTAssertTrue(shown.contains("下一步"))
+        Self.assertPointsAtTheButtonThatIsActuallyThere(runner)
+    }
+
+    /// 「下一步」里指名的那颗按钮，必须就是这时界面上真会画出来的那一颗。
+    ///
+    /// 界面画的是 `runner.retry` 对应的那一颗（`PracticeSheet` 只在 `.failed` 时按
+    /// `runner.retry` 画一颗，`.needsManualCopy` 时画「我已经复制好了」）。
+    /// 文案里指了另一颗的话，用户拿着一句「再用「X」这条路重来」在界面上找不到 X。
+    static func assertPointsAtTheButtonThatIsActuallyThere(
+        _ runner: PracticeRunner, file: StaticString = #filePath, line: UInt = #line) {
+        let shown = runner.stage.userFacingText
+        guard let retry = runner.retry else {
+            return XCTFail("这时候界面上一颗重试按钮都没有", file: file, line: line)
+        }
+        XCTAssertTrue(shown.contains("「\(retry.buttonTitle)」"),
+                      "「下一步」没指出该点哪颗按钮：\(shown)", file: file, line: line)
+        for other in [PracticeRetry.restart, .wrapUp, .clipboard]
+        where other.buttonTitle != retry.buttonTitle {
+            XCTAssertFalse(shown.contains("「\(other.buttonTitle)」"),
+                           "「下一步」指的「\(other.buttonTitle)」这时界面上根本没有"
+                               + "（画出来的是「\(retry.buttonTitle)」）：\(shown)",
+                           file: file, line: line)
+        }
+    }
+
+    /// 手动 ⌘C 那条路上解析也失败时：**不许判成失败态**（复盘还在 ChatGPT 窗口里），
+    /// 且「下一步」指的按钮同样得是这时界面上真有的那一颗。
+    func testAParseFailureOnTheClipboardPathStillPointsAtTheRightButton() async throws {
+        let directory = try Self.temporaryDirectory()
+        let pasteboard = FakePasteboard(contents: "")
+        let bridge = FakeBridge()
+        bridge.voiceActive = true
+        bridge.copyResult = .failure(.elementNotFound("没找到复制按钮。下一步：测试用的。"))
+        bridge.captureResult = .failure(.elementNotFound("AX 树里也没读到。下一步：测试用的。"))
+        let runner = Self.runner(bridge: bridge, pasteboard: pasteboard, directory: directory)
+
+        try await runner.start(setup: Self.setup())
+        try await runner.finishPractice()
+
+        pasteboard.simulateUserCopied("复制是复制到了，但这段不是 JSON。" + String(repeating: "凑长度", count: 80))
+        try await runner.captureReviewFromClipboard()
+
+        guard case .needsManualCopy = runner.stage else {
+            return XCTFail("解析失败不该把这条路堵死——复盘还完整地在 ChatGPT 窗口里，能再复制一次")
+        }
+        let shown = runner.stage.userFacingText
+        XCTAssertTrue(shown.contains(Self.pendingPath(in: directory).path), "得把原文存在哪儿告诉用户")
+        XCTAssertTrue(shown.contains("下一步"))
+        Self.assertPointsAtTheButtonThatIsActuallyThere(runner)
     }
 
     // MARK: - 取复盘的三级降级
+
+    /// **阶段先设、再 await。** 取复盘的第一级（按 ChatGPT 自己的复制按钮）最长要等 10 秒，
+    /// 这 10 秒里界面显示的必须是「正在取复盘」，而不是上一步那句
+    /// 「正在请 ChatGPT 写复盘…这一步可能要一分钟左右」——那会让用户以为还在等 ChatGPT 写字。
+    ///
+    /// 顺带守住进度清单：`.capturingReview` 在 happy path 上永远不出现的话，
+    /// 「取回复盘」那一格从来不会作为当前步骤亮起，进度看着像是直接跳过了一步。
+    func testTheStageSwitchesToCapturingBeforeTheCopyButtonStepRuns() async throws {
+        let directory = try Self.temporaryDirectory()
+        let bridge = FakeBridge()
+        bridge.voiceActive = true
+        bridge.copyResult = .success(Self.rawReview)
+        let gate = DispatchSemaphore(value: 0)
+        bridge.copyGate = gate
+        let runner = Self.runner(bridge: bridge, directory: directory)
+
+        try await runner.start(setup: Self.setup())
+        let finishing = Task { try await runner.finishPractice() }
+
+        // 等「按复制按钮」这一步真的跑进去了。**不在主线程上 wait**：阶段更新要靠主线程，
+        // 卡住主线程的话读到的永远是旧值。超时兜底，避免实现有问题时整个测试挂死（铁律 7）。
+        let started = await Self.waitOffMain(bridge.copyStarted, seconds: 5)
+        if started == .success {
+            XCTAssertEqual(runner.stage, .capturingReview,
+                           "复制按钮那一步已经在跑了，界面显示的却还是上一步：\(runner.stage.userFacingText)")
+        }
+        gate.signal()
+        _ = try? await finishing.value
+
+        XCTAssertEqual(started, .success, "「按复制按钮」这一步 5 秒内没跑起来，这条测试等于空转")
+        XCTAssertEqual(runner.stage, .done)
+    }
 
     func testFallsBackToReadingTheAccessibilityTreeWhenTheCopyButtonFails() async throws {
         let directory = try Self.temporaryDirectory()
@@ -316,11 +451,14 @@ final class PracticeRunnerTests: XCTestCase {
         try await runner.start(setup: Self.setup())
         try await runner.finishPractice()
 
-        guard case .needsManualCopy(let message) = runner.stage else {
+        guard case .needsManualCopy = runner.stage else {
             return XCTFail("两条自动路都断了应当转到「请手动复制」，而不是失败或静默")
         }
+        // 断言的是 `userFacingText`——那才是界面上真会画出来的那行字。
+        let message = runner.stage.userFacingText
         XCTAssertTrue(message.contains("⌘C"), "得告诉用户具体怎么复制")
         XCTAssertTrue(message.contains("下一步"))
+        Self.assertPointsAtTheButtonThatIsActuallyThere(runner)
 
         // 用户照做之后，点一下就该把这一场救回来。
         pasteboard.simulateUserCopied(Self.rawReview)
@@ -345,10 +483,11 @@ final class PracticeRunnerTests: XCTestCase {
         bridge.clearCalls()
         try? await runner.finishPractice()
         XCTAssertEqual(bridge.calls, [], "取消之后不该再有任何一次 ChatGPT 操作")
-        guard case .failed(let message) = runner.stage else {
+        guard case .failed = runner.stage else {
             return XCTFail("没有正在进行的练习却要收尾，得说清楚，不能装作没事")
         }
-        XCTAssertTrue(message.contains("下一步"))
+        XCTAssertTrue(runner.stage.userFacingText.contains("下一步"),
+                      "界面上画出来的那行字得说清下一步做什么：\(runner.stage.userFacingText)")
     }
 
     // MARK: - 测试装置
@@ -373,6 +512,32 @@ final class PracticeRunnerTests: XCTestCase {
                             "evidence":["I just like it."]}}
         <<<END_IELTS_REVIEW_JSON:\(requestID)>>>
         """
+
+    /// 顶层 `must_correct` 有内容，但里面的字段名（`said` / `fix`）不是本工具读的那几个。
+    /// 解析得过、归档却一条都进不去——`ArchiveOutcome.skipped` 要报的就是这种。
+    static let reviewWithUnreadableIssues = """
+        <<<IELTS_REVIEW_JSON:\(requestID)>>>
+        {"summary":"这份复盘的字段名和本工具读的对不上。",
+         "must_correct":[{"said":"I very like it.","fix":"I really like it."}],
+         "priority_target":{"id":"logic-explain","label":"回答后补一个原因和例子","status":"new",
+                            "evidence":["I just like it."]}}
+        <<<END_IELTS_REVIEW_JSON:\(requestID)>>>
+        """
+
+    /// 在主线程之外等一个信号量，等到了再回到主线程。**必须带超时**：实现有问题时
+    /// 这条测试要红，不能挂死在这儿（铁律 7）。
+    static func waitOffMain(_ semaphore: DispatchSemaphore, seconds: Int) async -> DispatchTimeoutResult {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global().async {
+                continuation.resume(returning: semaphore.wait(timeout: .now() + .seconds(seconds)))
+            }
+        }
+    }
+
+    /// 复盘原文的落盘路径。运行器要在交代里把它给出来，用户才能自己打开对照。
+    static func pendingPath(in directory: DataDirectory) -> URL {
+        directory.pendingReviewsDirectory.appending(path: "\(requestID).txt")
+    }
 
     static func setup() -> SessionSetup {
         SessionSetup(question: Question(id: "q1", part: 1, topic: "Home",

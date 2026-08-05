@@ -15,6 +15,19 @@ public enum PracticeRetry: Equatable, Sendable {
     case wrapUp
     /// 用户手动 ⌘C 之后，从剪贴板取。
     case clipboard
+
+    /// 重试那颗按钮上写的字。
+    ///
+    /// **放在这里是因为运行器写的「下一步」要指名道姓地提到这颗按钮**，而按钮是界面画的。
+    /// 两边各写一份的话，改了界面上的字，错误信息里指的就成了一颗界面上不存在的按钮——
+    /// 用户照着找，找不到（铁律 6）。
+    public var buttonTitle: String {
+        switch self {
+        case .restart: return "从头再试一次"
+        case .wrapUp: return "重新取复盘"
+        case .clipboard: return "我已经复制好了"
+        }
+    }
 }
 
 /// 把一场练习包成可观察的状态流。
@@ -138,7 +151,7 @@ public final class PracticeRunner {
             guard let raw = await captureReview(marker: marker.open) else {
                 return   // 已经转到 .needsManualCopy，等用户手动 ⌘C
             }
-            try archive(raw: raw, setup: setup, requestID: requestID)
+            try archive(raw: raw, setup: setup, requestID: requestID, retryOnFailure: .wrapUp)
         } catch {
             fail(error, retry: .wrapUp)
             throw error
@@ -159,7 +172,7 @@ public final class PracticeRunner {
             let raw = try await offMainThrowing { [pasteboard] _ in
                 try ClipboardFallback.readReview(from: pasteboard)
             }
-            try archive(raw: raw, setup: setup, requestID: requestID)
+            try archive(raw: raw, setup: setup, requestID: requestID, retryOnFailure: .clipboard)
         } catch {
             // 剪贴板里没有东西 / 内容太短，都还能再复制一次——**别把路堵死成失败态**。
             stage = .needsManualCopy(Self.describeFailure(error, at: .capturingReview))
@@ -188,6 +201,13 @@ public final class PracticeRunner {
     /// 返回 nil 表示前两级都没走通、已经转入 `.needsManualCopy`。**不抛错**：
     /// 复盘这时完整地留在 ChatGPT 窗口里，一次 ⌘C 就能救回来，判成失败等于让用户白练一场。
     private func captureReview(marker: String) async -> String? {
+        // **阶段先设、再 await**（同 `run(_:_:)`）。第一级最长要等 `copyTimeout` 秒，
+        // 设在它后面的话，这段时间界面上写的还是上一步那句「正在请 ChatGPT 写复盘…
+        // 可能要一分钟左右」——用户会以为还在等 ChatGPT 写字。
+        // 顺带：设在后面时 happy path 上 `.capturingReview` 根本不会出现，
+        // 进度清单里「取回复盘」那一格永远不会作为当前步骤亮起。
+        stage = .capturingReview
+
         var reasons: [String] = []
         do {
             let timeout = copyTimeout
@@ -197,7 +217,6 @@ public final class PracticeRunner {
         } catch {
             reasons.append("复制按钮这条路没走通（\(error.localizedDescription)）")
         }
-        stage = .capturingReview
         do {
             return try await offMainThrowing { try $0.captureLatestAssistantMessage(expectedMarker: marker) }
         } catch {
@@ -208,7 +227,7 @@ public final class PracticeRunner {
             "自动取复盘的两条路都没走通：\(reasons.joined(separator: "；"))。"
                 + "复盘本身没丢——它还完整地在 ChatGPT 窗口里。"
                 + "下一步：切到 ChatGPT，选中整段复盘（含首尾那两行 <<<…>>> 标记）按 ⌘C，"
-                + "然后回到这里点「我已经复制好了」。")
+                + "然后回到这里点「\(PracticeRetry.clipboard.buttonTitle)」。")
         retry = .clipboard
         return nil
     }
@@ -219,7 +238,12 @@ public final class PracticeRunner {
     ///
     /// 反过来写的话，解析一抛错，用户练了一整场换来的复盘原文就没了，只能从头再练一次。
     /// spec 第 5 节的原话是「复盘先落盘再入库，中途崩溃或误关窗口都不丢数据」。
-    private func archive(raw: String, setup: SessionSetup, requestID: String) throws {
+    ///
+    /// `retryOnFailure` 是**调用方失败时会摆出来的那颗按钮**，因为这里写的「下一步」要指名道姓
+    /// 提到它。两条调用路径摆出来的按钮不一样（收尾那条是「重新取复盘」，手动复制那条是
+    /// 「我已经复制好了」），写死一个的话，其中一条路上的用户会照着提示去找一颗不存在的按钮。
+    private func archive(raw: String, setup: SessionSetup, requestID: String,
+                         retryOnFailure: PracticeRetry) throws {
         stage = .archiving
 
         let pendingPath = directory.pendingReviewsDirectory.appending(path: "\(requestID).txt")
@@ -243,7 +267,8 @@ public final class PracticeRunner {
                 "复盘取回来了，但不是本工具认得的格式，解析不出来（\(error.localizedDescription)）。"
                     + "好消息是原文一个字都没丢，就在 \(pendingPath.path)。"
                     + "下一步：打开这个文件看看 ChatGPT 到底输出了什么——多半是被截断了（末尾少个 }）；"
-                    + "也可以回 ChatGPT 让它按要求重新输出一次，再用「我已经复制好了」这条路重来。")
+                    + "也可以回 ChatGPT 让它按要求重新输出一次，"
+                    + "再点「\(retryOnFailure.buttonTitle)」这条路重来。")
         }
 
         let timestamp = ISO8601DateFormatter().string(from: now())

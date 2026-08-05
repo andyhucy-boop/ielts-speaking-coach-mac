@@ -263,7 +263,7 @@ struct PracticeSheet: View {
                 Button("关掉") { onClose() }
                     .buttonStyle(.bordered)
                 if let retry = runner.retry {
-                    Button(retryTitle(retry)) { redo(retry) }
+                    Button(retry.buttonTitle) { redo(retry) }
                         .buttonStyle(.borderedProminent)
                         .tint(Palette.accent)
                         .keyboardShortcut(.defaultAction)
@@ -298,14 +298,10 @@ struct PracticeSheet: View {
     ///
     /// **不能一律重跑 `start`**：收尾阶段失败时重跑 start 的第一步是按「新建会话」，
     /// 那条刚练完、复盘还在里面的会话当场就没了。
-    private func retryTitle(_ retry: PracticeRetry) -> String {
-        switch retry {
-        case .restart: return "从头再试一次"
-        case .wrapUp: return "重新取复盘"
-        case .clipboard: return "我已经复制好了"
-        }
-    }
-
+    ///
+    /// 按钮上写什么字用的是 `PracticeRetry.buttonTitle`，**不在这里另写一份**：
+    /// 运行器的错误信息里会指名道姓提到这颗按钮，两处各写一份的话，
+    /// 改了这边的字，那边指的就成了一颗界面上不存在的按钮。
     private func redo(_ retry: PracticeRetry) {
         switch retry {
         case .restart:
