@@ -22,6 +22,7 @@ public enum ReviewRequestPrompt {
         3. answer_upgrades 是数组，每项含 question、original_answer、revised_answer、changes。
         4. priority_target 只给一个，含 id、label、status、evidence。
         5. 只在有音频证据时给发音反馈；仅凭文本时该项写 "Not assessed from text"。
+        6. 复盘的所有说明、点评、解释一律用中文；引用学员原话与给出的英文范例保持英文原文，不要翻译。
 
         \(open)
         {在这里输出 JSON}

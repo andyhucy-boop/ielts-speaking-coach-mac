@@ -6,6 +6,13 @@ final class ExaminerPromptTests: XCTestCase {
                                     prompt: "Describe a useful skill you learned",
                                     followups: ["How you learned it", "Why it is useful"])
 
+    private func setup(focusPart: FocusPart = .part2,
+                        feedbackTiming: FeedbackTiming = .deferred,
+                        part2PrepMode: Part2PrepMode = .countdown) -> SessionSetup {
+        SessionSetup(question: question, focusPart: focusPart, durationMinutes: 4, goal: "",
+                     feedbackTiming: feedbackTiming, part2PrepMode: part2PrepMode)
+    }
+
     func testIncludesQuestionAndFollowups() {
         let text = ExaminerPrompt.build(setup: SessionSetup(
             question: question, focusPart: .part2, durationMinutes: 4, goal: ""))
@@ -17,7 +24,8 @@ final class ExaminerPromptTests: XCTestCase {
         let text = ExaminerPrompt.build(setup: SessionSetup(
             question: question, focusPart: .part2, durationMinutes: 4, goal: ""))
         XCTAssertTrue(text.contains("I will act as the examiner."))
-        XCTAssertTrue(text.contains("结束训练"))
+        // 停止口令按 brief 第 3 节要求由中文改英文（testStopCommandIsEnglish 覆盖两种模式）。
+        XCTAssertTrue(text.contains("stop the test"))
     }
 
     func testPart2AnnouncesPreparationAndSpeakingTime() {
@@ -88,5 +96,55 @@ final class ExaminerPromptTests: XCTestCase {
         """
         XCTAssertEqual(try ReviewParser.parse(fake, requireAnswerUpgrades: true)["summary"],
                        .string("ok"))
+    }
+
+    func testDeferredTimingForbidsMidSessionFeedback() {
+        let text = ExaminerPrompt.build(setup: setup(feedbackTiming: .deferred))
+        XCTAssertTrue(text.contains("Do not correct, praise, explain, or teach until examiner mode ends."))
+        XCTAssertFalse(text.contains("After each answer"))
+    }
+
+    func testImmediateTimingAsksForOneShortChineseCorrection() {
+        let text = ExaminerPrompt.build(setup: setup(feedbackTiming: .immediate))
+        XCTAssertTrue(text.contains("After each answer"))
+        XCTAssertTrue(text.contains("at most two sentences"))
+        XCTAssertFalse(text.contains("Do not correct, praise, explain, or teach until examiner mode ends."),
+                       "immediate 模式不能同时出现「全程不反馈」的指令，两者自相矛盾")
+        XCTAssertFalse(text.contains("I will save all feedback until the end"),
+                       "immediate 模式的开场白不能说「反馈留到最后」")
+    }
+
+    func testCountdownPrepAnnouncesOneMinute() {
+        let text = ExaminerPrompt.build(setup: setup(focusPart: .part2, part2PrepMode: .countdown))
+        XCTAssertTrue(text.contains("Announce one minute of preparation"))
+    }
+
+    func testLearnerControlledPrepDoesNotRush() {
+        let text = ExaminerPrompt.build(setup: setup(focusPart: .part2, part2PrepMode: .learnerControlled))
+        XCTAssertTrue(text.contains("say \"I'm ready\""))
+        XCTAssertFalse(text.contains("Announce one minute of preparation"))
+    }
+
+    func testStopCommandIsEnglish() {
+        for timing in FeedbackTiming.allCases {
+            let text = ExaminerPrompt.build(setup: setup(feedbackTiming: timing))
+            XCTAssertTrue(text.contains("stop the test"), "停止口令应为英文：\(timing)")
+            XCTAssertFalse(text.contains("结束训练"), "不应再出现中文停止口令：\(timing)")
+        }
+    }
+
+    func testAllModesRequireChineseCommentary() {
+        for timing in FeedbackTiming.allCases {
+            for prep in Part2PrepMode.allCases {
+                let text = ExaminerPrompt.build(
+                    setup: setup(focusPart: .part2, feedbackTiming: timing, part2PrepMode: prep))
+                XCTAssertTrue(text.contains("in 中文"), "缺少中文点评要求：\(timing)/\(prep)")
+            }
+        }
+    }
+
+    func testReviewRequestRequiresChineseCommentary() {
+        let text = ReviewRequestPrompt.build(requestID: "sync-1", focusPart: .part2)
+        XCTAssertTrue(text.contains("一律用中文"))
     }
 }
