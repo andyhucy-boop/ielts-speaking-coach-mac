@@ -60,7 +60,7 @@ public struct TodayViewModel: Sendable {
     /// 直接读常量的话，`true` 那一支永远跑不到。
     public static func unwiredRecordingNotice(isWired: Bool = practiceRecordingIsWired) -> String? {
         guard !isWired else { return nil }
-        return "这一版还不会把练习记录写进训练数据：在终端练完一整场之后，上面的「本周训练」次数、"
+        return "这一版还不会把练习记录写进训练数据：在这一页练完一整场之后，上面的「本周训练」次数、"
             + "下面的「最近练习」都不会变，「继续上次练习」那条路线也不会出现——不是你的练习没生效。"
             + "下一步：照常练。练出来的错题、词汇、复训目标和计划进度都会正常入库，"
             + "复盘原文也会存进数据目录；训练记录要等下一版接上，接上之后这两处才会开始动。"
@@ -97,7 +97,7 @@ public struct TodayViewModel: Sendable {
     public var availableRoutes: [PracticeRoute] {
         // 题库空 = 四条路线全走不通，一条都不排。
         // 「继续上次练习」「复训一个旧问题」看着只依赖历史记录，其实同样要按 id 去题库反查
-        // 那道题（`TodayView.plannedQuestion`）——库空了它们哪也去不了，显示出来就是两个
+        // 那道题（见下面的 `plannedQuestion(for:)`）——库空了它们哪也去不了，显示出来就是两个
         // 点了没用的按钮。换季重新导入题库（先清空再导）时用户正好停在这一格上。
         guard !state.questions.isEmpty else { return [] }
 
@@ -108,6 +108,69 @@ public struct TodayViewModel: Sendable {
         // 已经退休的目标不算数：那是已经改掉的毛病，再拿它复训是白练一场。
         if state.targets.contains(where: { $0.status != "retired" }) { routes.append(.retrain) }
         return routes
+    }
+
+    // MARK: - 点「开始练习」之后要练哪道题、按什么设置练
+
+    /// 最近记下的那个还没退休的复训目标。`targets` 按归档顺序追加，越靠后越新。
+    ///
+    /// 已经退休的目标是已经改掉的毛病，拿它复训是白练一场。
+    public var liveTarget: RetrainingTarget? {
+        state.targets.last { $0.status != "retired" }
+    }
+
+    /// 这条路线上已经定下来的那道题。**nil 表示这道题得由用户当场自己挑。**
+    ///
+    /// 三种情况都会返回 nil，界面对它们的处置是同一个（弹一个挑题的列表）：
+    /// 自由选题、计划里排不出题、以及「上次那道题在题库里已经没有了」——
+    /// 最后这一种在换季重新导入题库之后就会发生，硬拿那个 id 去练的话，
+    /// 考官提示词里的题干是空的，用户对着 ChatGPT 干瞪眼却不知道为什么。
+    public func plannedQuestion(for route: PracticeRoute) -> Question? {
+        switch route {
+        case .planToday:
+            return todayQuestions.first
+        case .freePick:
+            // 自由选题的意思就是这道题由用户当场挑，这里定不下来是正常的。
+            return nil
+        case .continueLast:
+            guard let last = recentSessions.first else { return nil }
+            return state.questions.first { $0.id == last.questionId }
+        case .retrain:
+            guard let target = liveTarget,
+                  let source = state.sessions.first(where: { $0.id == target.sourceSessionId })
+            else { return nil }
+            return state.questions.first { $0.id == source.questionId }
+        }
+    }
+
+    /// 这条路线要带的本次目标。只有「复训一个旧问题」有。
+    ///
+    /// 目标必须真的进到考官提示词里（`ExaminerPrompt` 的「本次唯一目标」那段），
+    /// 否则「带着这个目标重练」只是句口号：复盘不会针对它给反馈，
+    /// 改进闭环（成品标准第 2 节）当场断掉。
+    public func goal(for route: PracticeRoute) -> String {
+        route == .retrain ? (liveTarget?.label ?? "") : ""
+    }
+
+    /// 把一道题变成一场练习的设置。
+    ///
+    /// `focusPart` 取这道题自己的 Part——它决定 ChatGPT 按哪套规则考
+    /// （`ExaminerPrompt.partRules`：Part 2 是一分钟准备 + 两分钟长回答，Part 1 是 6–10 个短问题）。
+    /// 定错了，用户练的就是另一种题型，而界面上一点异样都看不出来。
+    ///
+    /// 时长与 `coach practice` 保持一致：Part 2 一场就一道题，四分钟足够；其余六分钟。
+    public func practiceSetup(question: Question, route: PracticeRoute) -> SessionSetup {
+        SessionSetup(question: question,
+                     focusPart: FocusPart(rawValue: "Part \(question.part)") ?? .fullMock,
+                     durationMinutes: question.part == 2 ? 4 : 6,
+                     goal: goal(for: route))
+    }
+
+    /// 挑题时可选的题目。按 Part、再按题库原有顺序。
+    public var pickableQuestions: [Question] {
+        state.questions.enumerated()
+            .sorted { ($0.element.part, $0.offset) < ($1.element.part, $1.offset) }
+            .map(\.element)
     }
 
     /// 本周练了几次 / 目标几次。

@@ -1,4 +1,3 @@
-import AppKit
 import ChatGPTBridge
 import Foundation
 import IELTSCoachCore
@@ -21,12 +20,11 @@ struct TodayView: View {
     /// 与 `ReviewReportView`、`PlaceholderView` 的做法一致——这一页自己不持有导航状态。
     let onGo: (SidebarItem) -> Void
 
-    /// 点了「开始练习」之后要交代的话。非 nil 时弹出来。
+    /// 正在进行的这一场。非 nil 时弹出 `PracticeSheet`，由它驱动 ChatGPT。
     ///
-    /// **本阶段还不能在界面里真的开练**（计划 Task 6：「本阶段只显示与选择，不实际发起练习」），
-    /// 驱动接进按钮是紧接着的 Task 9。在那之前，点下去必须把「现在为什么还练不了」和
-    /// 「那现在怎么练」一次说清（铁律 6）——什么都不发生是最坏的一种。
-    @State private var startHint: PracticeStartHint?
+    /// **这就是 Task 9 的交付物**：点一下就真的开练，全程不需要打开终端（成品标准第 2 条）。
+    /// 上一版这里弹的是一张写着 `swift run coach practice <id>` 的卡片。
+    @State private var launch: PracticeLaunch?
 
     private var model: TodayViewModel { TodayViewModel(state: app.state) }
 
@@ -55,9 +53,27 @@ struct TodayView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(Palette.canvas)
-        .sheet(item: $startHint) { hint in
-            PracticeStartHintSheet(hint: hint, onDismiss: { startHint = nil })
+        // 重读放在 onDismiss 上而不是 onClose 里：存档会改 state.json（错题本、词汇本、
+        // 复训目标、计划进度），不重读的话这一页显示的还是开练之前那份，用户会以为没生效。
+        // 挂在 onDismiss 上，是为了让「不是从按钮走的那些关闭方式」也照样重读。
+        .sheet(item: $launch, onDismiss: { app.reload() }) { launch in
+            PracticeSheet(runner: launch.runner,
+                          route: launch.route,
+                          preselected: launch.preselected,
+                          candidates: model.pickableQuestions,
+                          makeSetup: { model.practiceSetup(question: $0, route: launch.route) },
+                          onClose: { self.launch = nil })
         }
+    }
+
+    /// 开一场新的练习。**每一场都新造一台驱动器**：它带着「这一场是哪道题」的状态，
+    /// 复用同一台会让上一场的残留影响下一场。
+    private func startPractice(_ route: PracticeRoute) {
+        launch = PracticeLaunch(
+            route: route,
+            preselected: model.plannedQuestion(for: route)
+                .map { model.practiceSetup(question: $0, route: route) },
+            runner: app.makePracticeRunner())
     }
 
     // MARK: - 顶部：问候、日期、本周进度
@@ -124,7 +140,7 @@ struct TodayView: View {
     /// 「本周训练 N/5」和「最近练习」这两处，在当前工程里**练完也不会动**——
     /// 没有任何代码往 `state.sessions` 里写记录（见 `TodayViewModel.practiceRecordingIsWired`）。
     ///
-    /// 不说这句话的话，用户照这一页自己弹出来的提示在终端练完一整场，回到这一页看到的还是
+    /// 不说这句话的话，用户在这一页练完一整场（Task 9 之后按钮真的会开练），回来看到的还是
     /// 「0/5 次」「还没有练习记录」，只会以为程序坏了（铁律 6、铁律 7）。
     /// 记录接上之后 `unwiredRecordingNotice()` 返回 nil，这块自己就消失。
     ///
@@ -171,7 +187,7 @@ struct TodayView: View {
         PrimaryActionCard(title: route.title,
                           subtitle: route.subtitle,
                           actionTitle: "开始练习",
-                          action: { startHint = hint(for: route) }) {
+                          action: { startPractice(route) }) {
             routeDetail(route)
         }
     }
@@ -189,7 +205,7 @@ struct TodayView: View {
                     routeDetail(route)
                 }
                 Spacer(minLength: Spacing.sm)
-                Button("开始练习") { startHint = hint(for: route) }
+                Button("开始练习") { startPractice(route) }
                     .buttonStyle(.bordered)
             }
         }
@@ -219,7 +235,7 @@ struct TodayView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         case .retrain:
-            if let target = liveTarget {
+            if let target = model.liveTarget {
                 Text("上次复盘留下的目标：\(target.label)")
                     .font(Typography.body)
                     .fixedSize(horizontal: false, vertical: true)
@@ -347,7 +363,7 @@ struct TodayView: View {
     private var noSessionHint: String {
         guard TodayViewModel.practiceRecordingIsWired else {
             return "这一版还不会把练习记录存进训练数据，所以练完之后这里仍然是空的"
-                + "（上面那条说明写了详情）。下一步：用上面那张紫色卡片挑一道题，照弹出来的提示到终端开练——"
+                + "（上面那条说明写了详情）。下一步：用上面那张紫色卡片直接开练——"
                 + "练出来的错题、词汇和复训目标都会正常入库，这一场不会白练。"
         }
         return "练完第一场之后，这里会按时间倒序列出最近五次：练的哪道题、当时定的目标、"
@@ -366,52 +382,6 @@ struct TodayView: View {
                 + "导完回到这一页就能开始。",
             actionTitle: "去训练题库",
             action: { onGo(.questionBank) })
-    }
-
-    // MARK: - 点了「开始练习」之后说什么
-
-    private var liveTarget: RetrainingTarget? {
-        // 最近记下的那个还没退休的目标。`targets` 按归档顺序追加，越靠后越新。
-        app.state.targets.last { $0.status != "retired" }
-    }
-
-    /// 这条路线上要练的那道题。定不下来时返回 nil，提示里会改成「先挑一道」。
-    private func plannedQuestion(for route: PracticeRoute) -> Question? {
-        switch route {
-        case .planToday:
-            return model.todayQuestions.first
-        case .continueLast:
-            guard let last = model.recentSessions.first else { return nil }
-            // 题库里已经没有这道题时（换季重新导入之后会发生）不能硬给一个练不了的 id。
-            return app.state.questions.first { $0.id == last.questionId }
-        case .retrain:
-            guard let target = liveTarget,
-                  let source = app.state.sessions.first(where: { $0.id == target.sourceSessionId })
-            else { return nil }
-            return app.state.questions.first { $0.id == source.questionId }
-        case .freePick:
-            // 自由选题的意思就是这道题由用户当场挑，这里定不下来是正常的。
-            return nil
-        }
-    }
-
-    private func hint(for route: PracticeRoute) -> PracticeStartHint {
-        let question = plannedQuestion(for: route)
-        let goal = route == .retrain ? liveTarget?.label ?? "" : ""
-        let goalFlag = goal.isEmpty ? "" : #" --goal "\#(goal)""#
-        let commands: [String]
-        if let question {
-            commands = ["swift run coach practice \(question.id)\(goalFlag)"]
-        } else {
-            // 题还没定下来时，第一条命令是「先看看有哪些题」——直接甩一个 <题目id> 占位符
-            // 而不说去哪儿找 id，用户照样敲不出来。
-            commands = ["swift run coach questions list",
-                        "swift run coach practice <上一条列出来的题目id>\(goalFlag)"]
-        }
-        return PracticeStartHint(
-            route: route,
-            questionLine: question.map { "Part \($0.part) · \(promptText($0))" },
-            commands: commands)
     }
 
     // MARK: - 文案小工具
@@ -453,136 +423,16 @@ struct TodayView: View {
     }
 }
 
-/// 点了「开始练习」之后要交代的内容。
-struct PracticeStartHint: Identifiable {
+/// 一场正要开始的练习：走哪条路线、题定下来了没有、以及驱动它的那台运行器。
+///
+/// 每按一次「开始练习」都新造一份（含一台新的 `PracticeRunner`）：运行器带着
+/// 「这一场是哪道题」的状态，复用同一台会让上一场的残留影响下一场。
+struct PracticeLaunch: Identifiable {
     let id = UUID()
     let route: PracticeRoute
-    /// 这条路线上已经定下来的那道题；nil 表示要用户自己挑一道。
-    let questionLine: String?
-    /// 要用户照着敲的命令，按先后顺序。
-    let commands: [String]
-
-    /// 把命令写进剪贴板。`write` 是真正干活的那一下，返回是否写成功。
-    ///
-    /// **返回值必须消费**：`NSPasteboard.setString` 是 `@discardableResult`，丢掉它编译器
-    /// 不会吭声，而别的进程正占着剪贴板时它会返回 false——用户按 ⌘V 粘出来的是上一次复制的
-    /// 东西（很可能是一段别的命令），照着敲下去后果不好说。**成功也要有反馈**：
-    /// 点完按钮界面一个像素都不变的话，用户分不清是复制好了还是按钮坏了。
-    /// 这两条都照 `PermissionStatus.copyDiagnostics` 的范式来。
-    func copyCommands(using write: (String) -> Bool) -> ActionNotice {
-        guard write(commands.joined(separator: "\n")) else {
-            return ActionNotice(
-                text: "没能把命令写进剪贴板（多半是别的程序正占着它）。"
-                    + "下一步：直接选中上面那几行命令按 ⌘C 复制，再粘进「终端」运行。",
-                isFailure: true)
-        }
-        return ActionNotice(
-            text: commands.count > 1
-                ? "\(commands.count) 行命令都已复制到剪贴板。"
-                    + "下一步：打开「终端」，进到本工具的源码目录，按 ⌘V 粘贴后逐行回车。"
-                : "命令已复制到剪贴板。下一步：打开「终端」，进到本工具的源码目录，按 ⌘V 粘贴后回车。",
-            isFailure: false)
-    }
-}
-
-/// 本阶段点「开始练习」弹出来的交代。
-///
-/// **它是临时的**：计划 Task 9 会把练习驱动接进那个按钮，到时这个 sheet 换成 `PracticeSheet`。
-/// 在那之前，这一页必须把两件事一次说清（铁律 6）：
-/// 现在为什么还不能在界面里开练，以及**现在到底怎么练**——
-/// 只说「暂未实现」而不给出路，等于让用户对着一个死按钮。
-struct PracticeStartHintSheet: View {
-    let hint: PracticeStartHint
-    let onDismiss: () -> Void
-    /// 真正去写剪贴板的那一下。抽成闭包是为了让「写失败时到底会不会告诉用户」这件事
-    /// 有测试管得住（`View` 本身没法单元测试），与 `PermissionGateView` 的做法一致。
-    let writeToPasteboard: (String) -> Bool
-
-    /// 点了「拷贝命令」之后的反馈。`nil` 表示还没点过。
-    @State private var copyNotice: ActionNotice?
-
-    init(hint: PracticeStartHint,
-         onDismiss: @escaping () -> Void,
-         writeToPasteboard: @escaping (String) -> Bool = { text in
-             let pasteboard = NSPasteboard.general
-             pasteboard.clearContents()
-             return pasteboard.setString(text, forType: .string)
-         }) {
-        self.hint = hint
-        self.onDismiss = onDismiss
-        self.writeToPasteboard = writeToPasteboard
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
-            Text("「\(hint.route.title)」还不能在界面里直接开始")
-                .font(Typography.sectionTitle)
-                .foregroundStyle(Palette.textPrimary)
-
-            if let questionLine = hint.questionLine {
-                CoachCard {
-                    VStack(alignment: .leading, spacing: Spacing.xs) {
-                        Text("已经替你选好这道题")
-                            .font(Typography.label)
-                            .foregroundStyle(Palette.textSecondary)
-                        Text(questionLine)
-                            .font(Typography.body)
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-            }
-
-            Text("这一版的今日训练页只做了选题与显示，把 ChatGPT 驱动接到这个按钮上是紧接着的下一步。"
-                 + "界面与驱动刻意分两步接：出问题时才能一眼看出是界面还是驱动的毛病。")
-                .font(Typography.body)
-                .foregroundStyle(Palette.textPrimary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Text("下一步：打开「终端」，进到本工具的源码目录，按顺序运行下面的命令。"
-                 + "命令行和这个界面读写的是同一份训练数据——练完的复盘、错题、进度都会回到这一页。")
-                .font(Typography.body)
-                .foregroundStyle(Palette.textPrimary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            CoachCard {
-                VStack(alignment: .leading, spacing: Spacing.xs) {
-                    ForEach(Array(hint.commands.enumerated()), id: \.offset) { _, command in
-                        Text(command)
-                            .font(Typography.body)
-                            .monospaced()
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-            }
-
-            // 点完按钮的那句话。失败用 danger，成功用次一级的文字色——
-            // 成功也要说话，不然用户分不清「复制好了」和「按钮坏了」。
-            if let copyNotice {
-                Text(copyNotice.text)
-                    .font(Typography.secondary)
-                    .foregroundStyle(copyNotice.isFailure ? Palette.danger : Palette.textSecondary)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            HStack(spacing: Spacing.sm) {
-                Button("拷贝命令") {
-                    copyNotice = hint.copyCommands(using: writeToPasteboard)
-                }
-                .buttonStyle(.bordered)
-                Spacer(minLength: Spacing.md)
-                Button("知道了", action: onDismiss)
-                    .buttonStyle(.borderedProminent)
-                    .tint(Palette.accent)
-                    .keyboardShortcut(.defaultAction)
-            }
-        }
-        .padding(Spacing.xl)
-        .frame(width: 560)
-        .background(Palette.canvas)
-    }
+    /// 已经替用户定下来的这一场；nil 表示要在 sheet 里先挑一道题。
+    let preselected: SessionSetup?
+    let runner: PracticeRunner
 }
 
 /// 预览一律注入：假的环境检查（不碰真的 ChatGPT）+ 临时目录（不碰用户真实的训练数据）。
@@ -596,13 +446,5 @@ struct PracticeStartHintSheet: View {
         onGo: { _ in })
 }
 
-/// 剪贴板也注入假的：在 Xcode 画布里点一下「拷贝命令」不该把用户真实的剪贴板冲掉。
-/// 传 `false` 是因为失败那条提示更长，版式先按它对——短的那条一定放得下。
-#Preview("点了开始练习之后") {
-    PracticeStartHintSheet(
-        hint: PracticeStartHint(route: .planToday,
-                                questionLine: "Part 1 · Do you work or are you a student?",
-                                commands: ["swift run coach practice p1-study-001"]),
-        onDismiss: {},
-        writeToPasteboard: { _ in false })
-}
+// 点了「开始练习」之后弹出来的那张 sheet 的预览在 `Session/PracticeSheet.swift` 里，
+// 且刻意用一个一次也不碰真实 ChatGPT 的空壳 Bridge（铁律 5）。

@@ -1,6 +1,10 @@
 import Foundation
 
-public final class AXDriver: CoachBridge {
+/// `Sendable` 是必须的，不是顺手加的：界面把每一次 AX 调用甩到主线程之外跑
+/// （最长的一步——启动语音——实测约 9 秒，放在主线程上窗口会整整冻住九秒），
+/// 而跨并发域传递要求这个类型是 Sendable。
+/// 保证由编译器给：下面所有存储属性都是 `let`，且各自的类型都已经是 Sendable。
+public final class AXDriver: CoachBridge, Sendable {
     private let access: any AXAccess
     private let locator: AXLocator
     // 不标 private：只是为了让 AXDriverTests 能直接断言默认值本身是对的

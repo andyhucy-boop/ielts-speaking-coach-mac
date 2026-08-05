@@ -21,6 +21,7 @@ public final class AppState {
     private let directory: DataDirectory
     private let store: StateStore
     private let preflight: @Sendable () -> BridgeReadiness
+    private let makeBridge: @Sendable () -> any CoachBridge & Sendable
     /// 首次环境检查是否已经发起过。见 `startInitialPermissionCheckIfNeeded()`。
     private var didStartInitialCheck = false
 
@@ -31,11 +32,21 @@ public final class AppState {
         return AXDriver(access: access, locator: AXLocator(access: access)).preflight()
     }
 
+    /// 生产环境真正用的那一台驱动器。**构造它本身没有副作用**——不打开 ChatGPT、不碰磁盘，
+    /// 只有被调用的方法才会动真格；`livePreflight` 那一份则是一按下去就会启动 ChatGPT。
+    /// 单元测试与预览一律注入假 Bridge，不接触真实 ChatGPT（铁律 5）。
+    nonisolated public static let liveBridge: @Sendable () -> any CoachBridge & Sendable = {
+        let access = LiveAXAccess()
+        return AXDriver(access: access, locator: AXLocator(access: access))
+    }
+
     public init(directory: DataDirectory = .resolve(),
-                preflight: @escaping @Sendable () -> BridgeReadiness = AppState.livePreflight) {
+                preflight: @escaping @Sendable () -> BridgeReadiness = AppState.livePreflight,
+                makeBridge: @escaping @Sendable () -> any CoachBridge & Sendable = AppState.liveBridge) {
         self.directory = directory
         self.store = StateStore(directory: directory)
         self.preflight = preflight
+        self.makeBridge = makeBridge
         // 这里只读本地磁盘（毫秒级）。环境检查**不在**构造函数里做，见下面两个方法的说明。
         reload()
     }
@@ -97,6 +108,19 @@ public final class AppState {
         return QuestionBankImportOutcome(importedCount: result.questions.count,
                                          totalCount: total,
                                          warnings: result.warnings)
+    }
+
+    /// 造一台练习驱动器：**与本 AppState 同一个数据目录**，桥接注入进来的那个 Bridge。
+    ///
+    /// 放在这里而不是让视图自己 new 一个，理由和 `applyImport`、`loadReview` 一样：
+    /// `directory` 是私有的，而它私有是有道理的——App 与命令行必须读写同一个目录，
+    /// 多一处解析目录就多一处走岔的机会。练完存下来的复盘要是落在另一个目录里，
+    /// 用户回到「复盘报告」页会看到空的，而磁盘上其实存着。
+    ///
+    /// 每次开练都造一台新的：`PracticeRunner` 带着「这一场是哪道题」的状态，
+    /// 复用同一台会让上一场的残留状态影响下一场。
+    public func makePracticeRunner() -> PracticeRunner {
+        PracticeRunner(bridge: makeBridge(), pasteboard: SystemPasteboard(), directory: directory)
     }
 
     /// 读出某次练习的复盘，拆成复盘报告页要显示的分区。

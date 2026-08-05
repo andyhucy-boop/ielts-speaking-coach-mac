@@ -122,6 +122,100 @@ final class TodayViewModelTests: XCTestCase {
         XCTAssertEqual(Set(titles).count, titles.count, "有两条路线叫同一个名字")
     }
 
+    // MARK: - 点「开始练习」到底要练哪道题、按什么设置练
+
+    /// 这几条守的是 Task 9 那颗按钮背后的取数：点下去之后要拿哪道题、带什么目标、按哪个 Part
+    /// 的规则考。原来这段逻辑写在 `TodayView` 里（`plannedQuestion`），而 `View` 测不了——
+    /// 于是「继续上次练习」指向一道题库里已经没有的题」这类错误只能等真机上撞见。
+
+    func testPlannedQuestionForPlanTodayIsTheFirstOfTodaysPlanDay() throws {
+        let questions = (1...14).map { question("q\($0)") }
+        let plan = try PlanBuilder.build(questions: questions, lengthDays: 7,
+                                         createdAt: "2026-08-05T00:00:00Z")
+        let vm = TodayViewModel(state: state(plan: plan, questions: questions))
+        XCTAssertEqual(vm.plannedQuestion(for: .planToday)?.id, plan.days[0].questionIds.first)
+    }
+
+    /// 「从题库自由选题」的意思就是这道题由用户当场挑，这里定不下来是正常的。
+    /// 硬塞一道给他，那条路线的名字就成了假话。
+    func testPlannedQuestionForFreePickIsNilBecauseTheUserPicks() {
+        let vm = TodayViewModel(state: state(plan: nil, questions: [question("a")]))
+        XCTAssertNil(vm.plannedQuestion(for: .freePick))
+    }
+
+    /// 上次练的那道题**必须回题库里反查**，不能拿会话里记的 id 直接开练。
+    /// 换季重新导入题库之后，那个 id 很可能已经不存在了——拿它去练，
+    /// 考官提示词里的题干就是空的，用户对着 ChatGPT 干瞪眼。
+    func testPlannedQuestionForContinueLastMustStillExistInTheBank() {
+        var gone = state(plan: nil, questions: [question("a")],
+                         sessions: [PracticeSession(id: "s1", questionId: "换季前的老题", focusPart: .part1,
+                                                    startedAt: "2026-08-05T10:00:00Z", endedAt: "",
+                                                    goal: "", transcript: [], reportPath: "",
+                                                    recordingPath: "")])
+        XCTAssertNil(TodayViewModel(state: gone).plannedQuestion(for: .continueLast),
+                     "题库里已经没有这道题了，就不该硬给一个练不了的 id")
+
+        gone.questions.append(question("换季前的老题"))
+        XCTAssertEqual(TodayViewModel(state: gone).plannedQuestion(for: .continueLast)?.id, "换季前的老题")
+    }
+
+    func testPlannedQuestionForRetrainFollowsTheTargetBackToItsSession() {
+        var s = state(plan: nil, questions: [question("a"), question("b")],
+                      sessions: [practiceSession("s1", startedAt: "2026-08-05T10:00:00Z")])
+        s.sessions[0].questionId = "b"
+        s.targets = [retrainingTarget("t1", status: "new")]   // sourceSessionId 是 "s1"
+        XCTAssertEqual(TodayViewModel(state: s).plannedQuestion(for: .retrain)?.id, "b",
+                       "复训要重练的是当初留下这个目标的那道题")
+    }
+
+    /// 复训那一场必须把目标带进考官提示词，否则「带着这个目标重练」就只是句口号——
+    /// 复盘里也不会针对它给反馈，改进闭环（成品标准第 2 节）当场断掉。
+    func testRetrainCarriesTheTargetAsThisSessionsGoal() {
+        var s = state(plan: nil, questions: [question("a")],
+                      sessions: [practiceSession("s1", startedAt: "2026-08-05T10:00:00Z")])
+        s.targets = [retrainingTarget("t1", status: "new")]
+        let vm = TodayViewModel(state: s)
+        XCTAssertEqual(vm.goal(for: .retrain), "L", "retrainingTarget 的 label 就是这一场的目标")
+        XCTAssertEqual(vm.goal(for: .planToday), "", "其余路线不带目标")
+    }
+
+    /// 已经退休的目标是已经改掉的毛病，拿它复训是白练一场。
+    func testRetiredTargetsAreNotUsedForRetraining() {
+        var s = state(plan: nil, questions: [question("a")],
+                      sessions: [practiceSession("s1", startedAt: "2026-08-05T10:00:00Z")])
+        s.targets = [retrainingTarget("t1", status: "retired")]
+        XCTAssertEqual(TodayViewModel(state: s).goal(for: .retrain), "")
+        XCTAssertNil(TodayViewModel(state: s).plannedQuestion(for: .retrain))
+    }
+
+    /// `focusPart` 决定 ChatGPT 按哪个 Part 的规则考（`ExaminerPrompt.partRules`）：
+    /// Part 2 是「给一分钟准备 + 两分钟长回答」，Part 1 是「6–10 个短问题」。
+    /// 定错了，用户练的就是另一种题型，而界面上一点异样都看不出来。
+    func testPracticeSetupTakesTheFormatFromTheQuestionsOwnPart() {
+        let vm = TodayViewModel(state: state(plan: nil, questions: []))
+        let part1 = Question(id: "a", part: 1, topic: "Home", prompt: "P")
+        let part2 = Question(id: "b", part: 2, topic: "Skills", prompt: "Q")
+
+        let one = vm.practiceSetup(question: part1, route: .planToday)
+        XCTAssertEqual(one.focusPart, .part1)
+        XCTAssertEqual(one.durationMinutes, 6)
+        XCTAssertEqual(one.goal, "")
+
+        let two = vm.practiceSetup(question: part2, route: .planToday)
+        XCTAssertEqual(two.focusPart, .part2)
+        XCTAssertEqual(two.durationMinutes, 4, "Part 2 是长回答，一场就一道题，不需要六分钟")
+    }
+
+    func testPracticeSetupForRetrainCarriesTheGoalIntoTheExaminerPrompt() {
+        var s = state(plan: nil, questions: [question("a")],
+                      sessions: [practiceSession("s1", startedAt: "2026-08-05T10:00:00Z")])
+        s.targets = [retrainingTarget("t1", status: "new")]
+        let setup = TodayViewModel(state: s).practiceSetup(question: question("a"), route: .retrain)
+        XCTAssertEqual(setup.goal, "L")
+        XCTAssertTrue(ExaminerPrompt.build(setup: setup).contains("本次唯一目标：L"),
+                      "目标得真的进到发给 ChatGPT 的提示词里，不能只存在界面上")
+    }
+
     // MARK: - 本周进度与最近练习
 
     func testWeekProgressCountsOnlyThisWeek() {
@@ -155,6 +249,18 @@ final class TodayViewModelTests: XCTestCase {
         XCTAssertTrue(text.contains("本周训练"), "得指名道姓说清是哪两处不会动")
         XCTAssertTrue(text.contains("最近练习"))
         XCTAssertTrue(text.contains("下一步"), "只说「记录还没接上」不说下一步，用户还是不知道该干什么")
+    }
+
+    /// 这句交代是 Task 9 之前写的，那时候练习只能在终端里进行，所以它把用户支去命令行。
+    /// 现在界面自己就能开练（成品标准第 2 条），再提终端就是给用户一条更麻烦、
+    /// 而且已经不必要的路。
+    func testUnwiredRecordingNoticeNoLongerSendsTheUserToATerminal() throws {
+        let text = try XCTUnwrap(TodayViewModel.unwiredRecordingNotice(isWired: false))
+        for forbidden in ["终端", "命令行"] {
+            XCTAssertFalse(text.contains(forbidden),
+                           "这句交代里还留着「\(forbidden)」，而现在点一下按钮就能开练。"
+                               + "下一步：改写成「在这一页练完之后…」。")
+        }
     }
 
     /// 记录接上（Phase 4）之后这句话必须自己消失，否则界面会对着一个已经能用的功能说它不能用。
