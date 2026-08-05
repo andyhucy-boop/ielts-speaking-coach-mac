@@ -16,3 +16,19 @@ public enum BridgeError: Error, Equatable, LocalizedError {
         }
     }
 }
+
+public struct BridgeReadiness: Equatable, Sendable {
+    public let ok: Bool
+    public let messages: [String]
+    public init(ok: Bool, messages: [String]) { self.ok = ok; self.messages = messages }
+}
+
+/// App 层只依赖这个 protocol，不感知内部用的是 AX 还是剪贴板。
+public protocol CoachBridge {
+    func preflight() -> BridgeReadiness
+    func sendText(_ text: String) throws
+    func startVoice() throws
+    func isVoiceActive() -> Bool
+    func endVoice() throws
+    func captureLatestAssistantMessage() throws -> String
+}
