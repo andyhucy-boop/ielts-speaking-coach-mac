@@ -8,7 +8,14 @@ public enum ChatGPTLabels {
     public static let stopVoice = ["Stop voice chat"]
     /// 语音进行中的标志。实测为会话级常驻，静默不消失（spec 2.3.3）。
     public static let voiceActiveIndicator = "Voice chat active"
-    public static let composerDescription = "Work with ChatGPT"
+    /// 输入框的 description **随状态而变**（实测）：普通聊天是 "Message ChatGPT"，
+    /// 语音会话进行中是 "Work with ChatGPT"。此前只认后者，是因为最初的 AX 结构
+    /// 全部在语音会话中采集，把语音态特征当成了通用特征。
+    public static let composerDescriptions = ["Message ChatGPT", "Work with ChatGPT"]
+    /// 别名，兼容旧的单数写法。发提示词时界面处于 `composerDescriptions[0]` 那个状态。
+    public static let composerDescription = composerDescriptions[0]
+    /// 发送按钮。实测模拟回车不会发送（文字留在输入框里），必须按这个按钮。
+    public static let sendMessage = ["Send", "发送"]
 
     /// 控制元素的合法 role。静音类是 AXCheckBox（subrole=AXToggleButton），
     /// 启停语音是 AXButton，两者结构判据相同（实测确认）。
@@ -50,7 +57,7 @@ public enum ChatGPTLabels {
     /// 两个以上时返回 nil，由调用方报错并列出候选供诊断。
     public static func composer(among nodes: [AXNodeSnapshot]) -> AXNodeSnapshot? {
         if let exact = nodes.first(where: {
-            $0.role == "AXTextArea" && $0.descriptionText == composerDescription
+            $0.role == "AXTextArea" && composerDescriptions.contains($0.descriptionText)
         }) { return exact }
         let textAreas = nodes.filter { $0.role == "AXTextArea" }
         return textAreas.count == 1 ? textAreas[0] : nil

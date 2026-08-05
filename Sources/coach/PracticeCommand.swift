@@ -67,6 +67,9 @@ enum PracticeCommand {
             print("\n▶︎ 正在把考官提示词发给 ChatGPT…")
             try driver.sendText(ExaminerPrompt.build(setup: setup))
 
+            print("▶︎ 等 ChatGPT 读完考官指令…")
+            try driver.waitForAssistantReply(timeout: 60)
+
             print("▶︎ 正在启动语音…")
             try driver.startVoice()
             print("\n✅ 开练了。跟 ChatGPT 说话就行。")

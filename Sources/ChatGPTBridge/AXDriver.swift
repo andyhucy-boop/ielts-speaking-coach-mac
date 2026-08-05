@@ -48,17 +48,24 @@ public final class AXDriver: CoachBridge {
             throw BridgeError.actionFailed("写入 ChatGPT 输入框失败。"
                 + "下一步：确认 ChatGPT 窗口没有被弹窗挡住，然后重试。")
         }
-        guard access.sendReturnKey() else {
-            throw BridgeError.actionFailed("文字已写入输入框但没能发送。"
-                + "下一步：切到 ChatGPT 窗口手动按一下回车。")
+        // 实测模拟回车不会发送——文字会原样留在输入框里，必须按 Send 按钮。
+        let sendButton = try locator.waitForControl(ChatGPTLabels.sendMessage, timeout: shortTimeout)
+        guard access.press(sendButton.element) else {
+            throw BridgeError.actionFailed("按下发送按钮失败。"
+                + "下一步：确认 ChatGPT 窗口没有被弹窗挡住，然后重试。")
         }
-        // 操作后验证。sendReturnKey 返回 true 不代表 ChatGPT 真收到了——
-        // 发送键被禁用、焦点跑掉时它也可能返回 true。而这条路径失败被当成成功的后果
-        // 特别严重：考官提示词没发出去，语音却正常启动，ChatGPT 就是个普通聊天机器人，
+        // 操作后验证。kAXPressAction 返回 true 不代表 ChatGPT 真收到了——按钮被禁用、
+        // 焦点跑掉时它也可能返回 true。而这条路径失败被当成成功的后果特别严重：
+        // 考官提示词没发出去，语音却正常启动，ChatGPT 就是个普通聊天机器人，
         // 用户要练完一整场、等复盘出来是一团乱麻才发现不对。
-        // 判据：发送成功后输入框里不该还是我们刚写进去的那段文字。
+        //
+        // 判据必须是「输入框空了」，不能是「内容和我写的不一样」——
+        // AX 读回的值与写入值不可能逐字节相同（换行与空白会被规范化），
+        // 后者一开始就成立，等于没验证。这是本项目第二次栽在
+        // 「验证只问现在是不是目标态、没问到底变没变」上。
         try locator.waitUntil({ nodes in
-            ChatGPTLabels.composer(among: nodes).map { $0.value != text } ?? true
+            guard let composer = ChatGPTLabels.composer(among: nodes) else { return false }
+            return composer.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }, timeout: shortTimeout, describing: "提示词发送到 ChatGPT")
     }
 
@@ -84,6 +91,34 @@ public final class AXDriver: CoachBridge {
     }
 
     public func isVoiceActive() -> Bool { ChatGPTLabels.isVoiceActive(access.snapshotTree()) }
+
+    /// 等 ChatGPT 把上一条消息回复完。
+    ///
+    /// 判据：界面上出现了一段足够长的新文本，且在连续两次采样间**不再增长**
+    /// （流式输出结束）。用户实测确认必须等它回复完再进语音，否则语音会话
+    /// 可能不带考官设定就开始了 —— 这一点从 AX 树上看不出来。
+    public func waitForAssistantReply(timeout: TimeInterval, minimumLength: Int = 60) throws {
+        var previousLongest = 0
+        var stableTicks = 0
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            let longest = access.snapshotTree()
+                .filter { $0.role == "AXStaticText" }
+                .map(\.value.count).max() ?? 0
+            if longest >= minimumLength && longest == previousLongest {
+                stableTicks += 1
+                if stableTicks >= 3 { return }
+            } else {
+                stableTicks = 0
+            }
+            previousLongest = longest
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        throw BridgeError.stateNotReached(
+            "等了 \(Int(timeout)) 秒，ChatGPT 还没把考官指令回复完。"
+            + "下一步：切到 ChatGPT 窗口看看它是不是还在输出；"
+            + "如果它已经回复完了，说明本工具的判断有误，请把这条错误告诉开发者。")
+    }
 
     public func endVoice() throws {
         // 同样是前置校验：没有通话在跑时「结束通话」若被当成成功，

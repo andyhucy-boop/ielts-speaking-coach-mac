@@ -31,6 +31,8 @@ public protocol CoachBridge {
     func isVoiceActive() -> Bool
     func endVoice() throws
     func captureLatestAssistantMessage(expectedMarker: String?) throws -> String
+    /// 等 ChatGPT 把上一条消息回复完，见 `AXDriver.waitForAssistantReply`。
+    func waitForAssistantReply(timeout: TimeInterval, minimumLength: Int) throws
 }
 
 extension CoachBridge {
@@ -38,5 +40,10 @@ extension CoachBridge {
     /// 用扩展补一个「省略 expectedMarker」的重载，行为等价于 `expectedMarker: nil`。
     public func captureLatestAssistantMessage() throws -> String {
         try captureLatestAssistantMessage(expectedMarker: nil)
+    }
+
+    /// 同理：省略 `minimumLength` 的重载，默认 60 字符，与 `AXDriver` 的默认值保持一致。
+    public func waitForAssistantReply(timeout: TimeInterval) throws {
+        try waitForAssistantReply(timeout: timeout, minimumLength: 60)
     }
 }

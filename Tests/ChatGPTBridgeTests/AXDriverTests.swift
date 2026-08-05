@@ -14,6 +14,11 @@ final class AXDriverTests: XCTestCase {
         AXNodeSnapshot(element: AXElementRef(rawID: id, epoch: 0), role: "AXButton",
                        descriptionText: desc, childCount: 1, childRoles: ["AXImage"])
     }
+    // 实测发送按钮的结构：AXButton desc="Send"，唯一子节点 AXImage —— 与 control(_:_:) 相同的
+    // 结构判据，单独起名是为了让调用处一眼看出这是发送按钮而不是随便一个控制按钮。
+    private func sendButton(_ id: Int, _ desc: String = "Send") -> AXNodeSnapshot {
+        control(id, desc)
+    }
     private func voiceActive(_ id: Int) -> AXNodeSnapshot {
         AXNodeSnapshot(element: AXElementRef(rawID: id, epoch: 0), role: "AXImage",
                        descriptionText: ChatGPTLabels.voiceActiveIndicator)
@@ -40,24 +45,69 @@ final class AXDriverTests: XCTestCase {
         XCTAssertTrue(readiness.messages.joined().contains("辅助功能"))
     }
 
-    func testSendTextWritesComposerThenPressesReturn() throws {
+    // 实测模拟回车不会发送——文字会原样留在输入框里，必须按 Send 按钮。这条测试
+    // 原名 testSendTextWritesComposerThenPressesReturn，按回车已被证实不管用后改为按按钮，
+    // 断言对象也从 returnKeyCount 换成了「按下的是 Send 按钮」。
+    func testSendTextWritesComposerThenPressesSendButton() throws {
         let access = FakeAXAccess()
-        access.nodes = [composer(1)]
-        // 修复轮加了「发送后验证输入框真的变了」，FakeAXAccess.setValue 现在会把文字
-        // 真的写进节点；这里显式模拟「ChatGPT 收到后清空了输入框」，否则 sendText 会
-        // 因为 composer 仍然等于刚写入的文字而误判成「回车没生效」。
-        access.onSendReturnKey = { nodes in
+        access.nodes = [composer(1), sendButton(2)]
+        // 模拟「按下 Send 后 ChatGPT 真的收到了，输入框被清空」。
+        access.onPress = { _, nodes in
             for i in nodes.indices where nodes[i].role == "AXTextArea" { nodes[i].value = "" }
         }
         try driver(access).sendText("你好")
         XCTAssertEqual(access.setValues.count, 1)
         XCTAssertEqual(access.setValues[0].1, "你好")
-        XCTAssertEqual(access.returnKeyCount, 1, "写入之后必须真的发送")
+        XCTAssertEqual(access.pressedElements.map(\.rawID), [2], "必须按下 Send 按钮")
+    }
+
+    // 第 2 条缺陷的直接回归测试：sendText 不再允许调用 sendReturnKey，
+    // 哪怕发送本身成功了也不能——发送已经完全靠按钮，回车路径必须彻底退场。
+    func testSendTextNeverCallsSendReturnKey() throws {
+        let access = FakeAXAccess()
+        access.nodes = [composer(1), sendButton(2)]
+        access.onPress = { _, nodes in
+            for i in nodes.indices where nodes[i].role == "AXTextArea" { nodes[i].value = "" }
+        }
+        try driver(access).sendText("你好")
+        XCTAssertEqual(access.returnKeyCount, 0, "发送必须靠按钮，不能再依赖模拟回车")
     }
 
     func testSendTextFailsWhenComposerStillHoldsTheText() {
         let access = FakeAXAccess()
-        access.nodes = [composer(1)]   // 输入框内容不会变 —— 模拟「回车没生效」
+        access.nodes = [composer(1), sendButton(2)]   // 按了 Send，但输入框没被清空 —— 模拟「发送没生效」
+        XCTAssertThrowsError(try driver(access).sendText("考官提示词")) { error in
+            XCTAssertTrue("\(error)".contains("下一步"))
+        }
+    }
+
+    // 第 3 条缺陷的直接回归测试：本项目第二次栽在「验证只问现在是不是目标态、
+    // 没问到底变没变」上。旧判据是「composer.value != 写入值」——但 AX 读回的值
+    // 与写入值不可能逐字节相同（换行/空白会被规范化），旧判据在这里会一开始就为真，
+    // 把「根本没清空、只是被规范化了」误判成「发送成功」。
+    func testSendTextDoesNotFalselySucceedWhenComposerTextIsMerelyNormalized() {
+        let access = FakeAXAccess()
+        access.nodes = [composer(1), sendButton(2)]
+        access.onPress = { _, nodes in
+            for i in nodes.indices where nodes[i].role == "AXTextArea" {
+                // AX 读回值被规范化（多了个换行），但输入框并没有真的清空。
+                nodes[i].value = "考官提示词\n"
+            }
+        }
+        XCTAssertThrowsError(try driver(access).sendText("考官提示词")) { error in
+            XCTAssertTrue("\(error)".contains("下一步"),
+                          "输入框只是内容被规范化、并未清空时必须继续判定为未发送")
+        }
+    }
+
+    // guard...else { return false } 而不是原来的 `?? true`：输入框从树上找不到时
+    // 必须继续等，不能被当成发送成功。
+    func testSendTextKeepsWaitingWhenComposerDisappearsFromTree() {
+        let access = FakeAXAccess()
+        access.nodes = [composer(1), sendButton(2)]
+        access.onPress = { _, nodes in
+            nodes.removeAll { $0.role == "AXTextArea" }
+        }
         XCTAssertThrowsError(try driver(access).sendText("考官提示词")) { error in
             XCTAssertTrue("\(error)".contains("下一步"))
         }
@@ -156,6 +206,46 @@ final class AXDriverTests: XCTestCase {
             XCTAssertTrue("\(error)".contains("没有正在进行的语音通话"))
         }
         XCTAssertTrue(access.pressedElements.isEmpty)
+    }
+
+    // 第 4 条缺陷：发完提示词必须等 ChatGPT 回复完再进语音，否则语音会话可能不带
+    // 考官设定就开始了。判据是「够长的文本连续三次采样不再增长」。
+
+    func testWaitForAssistantReplyReturnsOnceTextIsLongEnoughAndStopsGrowing() throws {
+        let access = FakeAXAccess()
+        // 文本从一开始就是最终长度、后续快照不再变化——应在连续三次采样后返回。
+        access.nodes = [
+            AXNodeSnapshot(element: AXElementRef(rawID: 1, epoch: 0), role: "AXStaticText",
+                           value: String(repeating: "考官反馈内容", count: 10))   // 60 字符
+        ]
+        try driver(access).waitForAssistantReply(timeout: 5)
+    }
+
+    func testWaitForAssistantReplyWaitsForStreamingToStopBeforeReturning() throws {
+        let access = FakeAXAccess()
+        let finalText = String(repeating: "考官反馈内容", count: 10)   // 60 字符
+        access.nodes = [
+            AXNodeSnapshot(element: AXElementRef(rawID: 1, epoch: 0), role: "AXStaticText", value: "")
+        ]
+        // 模拟流式输出：先出现一段还没达到门槛长度的文本，随后才涨到最终长度并停止变化。
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) {
+            access.nodes = [AXNodeSnapshot(element: AXElementRef(rawID: 1, epoch: 0), role: "AXStaticText",
+                                           value: String(finalText.prefix(20)))]
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) {
+            access.nodes = [AXNodeSnapshot(element: AXElementRef(rawID: 1, epoch: 0), role: "AXStaticText",
+                                           value: finalText)]
+        }
+        try driver(access).waitForAssistantReply(timeout: 5)
+    }
+
+    func testWaitForAssistantReplyThrowsActionableErrorWhenTextNeverLongEnough() {
+        let access = FakeAXAccess()
+        access.nodes = []   // 没有任何文本，也就永远达不到 minimumLength
+        XCTAssertThrowsError(try driver(access).waitForAssistantReply(timeout: 0.1)) { error in
+            XCTAssertTrue("\(error)".contains("下一步"))
+            XCTAssertTrue("\(error)".contains("回复完"))
+        }
     }
 }
 

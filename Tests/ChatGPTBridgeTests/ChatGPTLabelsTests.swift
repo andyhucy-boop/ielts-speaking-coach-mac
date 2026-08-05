@@ -41,6 +41,19 @@ final class ChatGPTLabelsTests: XCTestCase {
                        AXElementRef(rawID: 4, epoch: 0))
     }
 
+    func testMatchesIconOnlySendButton() {
+        // 实测发送按钮结构：AXButton desc="Send"，唯一子节点 AXImage
+        let button = node(5, role: "AXButton", desc: "Send", childRoles: ["AXImage"])
+        XCTAssertEqual(ChatGPTLabels.matchControl(ChatGPTLabels.sendMessage, among: [button])?.element,
+                       AXElementRef(rawID: 5, epoch: 0))
+    }
+
+    func testSendMessageCandidatesCoverAllObservedLabels() {
+        for observed in ["Send", "发送"] {
+            XCTAssertTrue(ChatGPTLabels.sendMessage.contains(observed), "候选集合缺少标签：\(observed)")
+        }
+    }
+
     func testStartVoiceCandidatesCoverAllObservedLabels() {
         // 实测在同一台机器上先后出现过这三种，缺一会导致启动语音失败
         for observed in ["Start voice chat", "Start new voice chat", "New voice chat"] {
@@ -54,6 +67,28 @@ final class ChatGPTLabelsTests: XCTestCase {
                                      role: "AXTextArea", descriptionText: "改版后的新描述")
         XCTAssertEqual(ChatGPTLabels.composer(among: [onlyOne])?.element,
                        AXElementRef(rawID: 1, epoch: 0))
+    }
+
+    func testComposerDescriptionsCoverBothObservedStates() {
+        // 实测输入框 description 随状态而变：普通聊天是 "Message ChatGPT"，
+        // 语音会话进行中是 "Work with ChatGPT"。发提示词时是前者，此前代码只认后者。
+        for observed in ["Message ChatGPT", "Work with ChatGPT"] {
+            XCTAssertTrue(ChatGPTLabels.composerDescriptions.contains(observed), "候选集合缺少实测标签：\(observed)")
+        }
+    }
+
+    func testComposerMatchesEitherObservedDescriptionEvenWithOtherTextAreasPresent() {
+        // 界面上还有别的文本框时，精确匹配分支必须能命中两种候选描述中的任意一种——
+        // 不能靠「只有一个 AXTextArea」的兜底才蒙对。
+        for desc in ChatGPTLabels.composerDescriptions {
+            let target = AXNodeSnapshot(element: AXElementRef(rawID: 1, epoch: 0),
+                                        role: "AXTextArea", descriptionText: desc)
+            let other = AXNodeSnapshot(element: AXElementRef(rawID: 2, epoch: 0),
+                                       role: "AXTextArea", descriptionText: "Search")
+            XCTAssertEqual(ChatGPTLabels.composer(among: [target, other])?.element,
+                           AXElementRef(rawID: 1, epoch: 0),
+                           "候选描述「\(desc)」应命中精确匹配分支")
+        }
     }
 
     func testComposerRefusesToGuessAmongMultipleTextAreas() {
