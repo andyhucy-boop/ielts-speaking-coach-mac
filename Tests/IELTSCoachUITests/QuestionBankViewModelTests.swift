@@ -102,6 +102,72 @@ final class QuestionBankViewModelTests: XCTestCase {
         }
     }
 
+    /// 每一种格式都必须真的解析得出题目来。
+    ///
+    /// **有牙齿的是那句 `XCTFail`。** 加一种格式而不给样本，这条当场红——
+    /// 也就逼着加格式的人回答「`parse` 真的认它吗」。之前这个问题没人问：
+    /// 面板的清单、`parse` 的分派、拒绝文案是三份互不相干的字面量，
+    /// 改其中一份另外两份不会有任何反应。
+    func testEveryFormatTheFilePanelLetsThroughIsActuallyParsed() throws {
+        let samples: [QuestionBankImport.Format: String] = [.csv: Self.csv, .json: Self.json]
+
+        XCTAssertFalse(QuestionBankImport.Format.allCases.isEmpty,
+                       "一种格式都不认时 allowedContentTypes 会是空数组，"
+                           + "而空数组的意思是 NSOpenPanel 放行一切文件类型；这条测试也就空转了")
+
+        for format in QuestionBankImport.Format.allCases {
+            guard let sample = samples[format] else {
+                XCTFail("文件面板放行 .\(format.fileExtension)，但这条测试没有对应的样本，"
+                        + "也就从没人验证过 parse 真的认它。"
+                        + "下一步：给这条测试补一份 .\(format.fileExtension) 的样本，"
+                        + "确认 parse 解析得出题目，而不是选完文件才把用户拒掉。")
+                continue
+            }
+            let result = try QuestionBankImport.parse(
+                fileName: "季度题库.\(format.fileExtension)", text: sample)
+            XCTAssertFalse(result.questions.isEmpty,
+                           "面板放行 .\(format.fileExtension)，parse 却一道题都没解析出来")
+        }
+    }
+
+    /// 每种格式配给文件面板的类型，必须真的对应它的扩展名。
+    ///
+    /// 原先这里是 `supportedExtensions.compactMap { UTType(filenameExtension: $0) }`：
+    /// 查不到 UTType 的项会被**静默丢掉**（铁律 7），全丢掉时 `allowedContentTypes`
+    /// 退化成空数组——而空数组对 `NSOpenPanel` 的意思是「放行一切文件类型」。
+    func testEachFormatsFilePanelTypeReallyMatchesItsExtension() {
+        for format in QuestionBankImport.Format.allCases {
+            XCTAssertEqual(format.contentType.preferredFilenameExtension, format.fileExtension,
+                           "格式 .\(format.fileExtension) 配的是 \(format.contentType.identifier)，"
+                               + "面板里能选到的会是别的文件")
+        }
+        XCTAssertEqual(QuestionBankImport.allowedContentTypes.count,
+                       QuestionBankImport.Format.allCases.count,
+                       "有格式在配文件面板类型的路上被丢掉了——丢光时空数组等于放行一切文件")
+        XCTAssertFalse(QuestionBankImport.allowedContentTypes.isEmpty,
+                       "allowedContentTypes 为空时 NSOpenPanel 放行一切文件类型")
+    }
+
+    /// 拒绝文案里列的格式，必须就是文件面板放行的那几种。
+    ///
+    /// 这一条守的是「同一份清单被抄了三遍」：`supportedExtensions`（面板用）、
+    /// `parse` 的分派、以及这句拒绝文案，一度是三处各写各的字面量，只是恰好一致。
+    /// 把清单改成 `["csv", "json", "pdf"]`，面板就会放行 PDF、`parse` 抛错、
+    /// 而这句话还在说「只认 .csv 和 .json 两种」——全部 272 条测试无一变红。
+    func testTheRejectionMessageListsTheSameFormatsTheFilePanelLetsThrough() {
+        XCTAssertThrowsError(try QuestionBankImport.parse(fileName: "季度题库.pdf", text: Self.csv)) { error in
+            let message = error.localizedDescription
+            for ext in QuestionBankImport.supportedExtensions {
+                XCTAssertTrue(message.contains(".\(ext)"),
+                              "文件面板放行 .\(ext)，拒绝文案却没提它，用户不知道该另存成什么：" + message)
+            }
+            // 连「几种」这个数也必须是数出来的。写死成「两种」的话，
+            // 加一种格式之后这句话就开始骗人，而没有任何东西会红。
+            XCTAssertTrue(message.contains("这 \(QuestionBankImport.supportedExtensions.count) 种"),
+                          "格式的种数是写死在文案里的，加一种格式它就会开始骗人：" + message)
+        }
+    }
+
     // MARK: - 导入完成后给用户看的那句话
     //
     // 铁律 6：面向用户的文案要同时说清「发生了什么」和「下一步做什么」。
@@ -159,5 +225,38 @@ final class QuestionBankViewModelTests: XCTestCase {
             QuestionBankImport.describeFailure(CoachError.questionBankInvalid(original),
                                                fileName: "季度题库.csv"),
             original)
+    }
+
+    // MARK: - 导入之后弹给用户看的那张交代
+    //
+    // 这张交代必须弹出来（`.sheet`），不能画在滚动页面里——理由见 `QuestionBankViewTests`。
+    // 这里测的是弹出来之后**里面写什么**：语气对不对、警告有没有被吞掉。
+
+    func testFeedbackOfAnEmptyImportIsNotDressedUpAsSuccess() {
+        let feedback = QuestionBankImportFeedback(outcome: QuestionBankImportOutcome(
+            importedCount: 0, totalCount: 41,
+            warnings: ["跳过第 7 行：缺少 id。下一步：给这道题一个唯一编号。"]))
+        XCTAssertEqual(feedback.tone, .nothing,
+                       "一道题都没进来时给绿色对勾，用户扫一眼就走开了，"
+                           + "而真正的原因全在下面那几条警告里")
+        XCTAssertFalse(feedback.title.contains("完成"), feedback.title)
+    }
+
+    func testFeedbackCarriesEveryWarningThroughInOrder() {
+        let warnings = ["第 3 行没有题干。", "第 7 行缺少 id。", "第 9 行的 part 不是 1/2/3。"]
+        let feedback = QuestionBankImportFeedback(outcome: QuestionBankImportOutcome(
+            importedCount: 3, totalCount: 41, warnings: warnings))
+        XCTAssertEqual(feedback.warnings, warnings,
+                       "警告要逐条摆出来、一条不吞（计划 Task 4 Step 3）——"
+                           + "它们比「导入了 N 题」有用得多，而且不看就再也不会知道")
+        XCTAssertEqual(feedback.tone, .done)
+        XCTAssertTrue(feedback.message.contains("下一步"), feedback.message)
+    }
+
+    func testFailureFeedbackKeepsTheWholeMessage() {
+        let text = "读不到「季度题库.csv」的内容。下一步：另存为 UTF-8 之后再导入一次。"
+        let feedback = QuestionBankImportFeedback(failureMessage: text)
+        XCTAssertEqual(feedback.tone, .failed)
+        XCTAssertEqual(feedback.message, text, "失败原因被改写或截断，用户就照着做不了了")
     }
 }

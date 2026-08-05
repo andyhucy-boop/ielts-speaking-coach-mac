@@ -2,7 +2,6 @@ import AppKit
 import ChatGPTBridge
 import IELTSCoachCore
 import SwiftUI
-import UniformTypeIdentifiers
 
 /// 训练题库页：看题库里有什么、按 Part 筛、按话题分组，以及导入新题库。
 ///
@@ -18,7 +17,14 @@ struct QuestionBankView: View {
     /// 而 selection 是 `Int?`），一旦对不上，分段控件看着能点、列表却纹丝不动——
     /// 编译器不会说一个字。用 `Int` 就没有这一类失效。
     @State private var partSelection = 0
-    @State private var feedback: ImportFeedback = .idle
+
+    /// 上一次导入的交代。非 nil 时弹 `QuestionBankImportResultSheet`。
+    ///
+    /// **它不能画进下面那个滚动页面里。** 触发导入的按钮（`importCard`）在页面最底下，
+    /// 而题库有几十个话题时页面远超一屏：画在页面里，用户选完文件回来，
+    /// 交代就落在屏幕外，他看不到任何东西——计划要求逐条摆出来的那些警告尤其。
+    /// `QuestionBankViewTests` 扫源码守着这一条。
+    @State private var feedback: QuestionBankImportFeedback?
 
     private var partFilter: Int? { partSelection == 0 ? nil : partSelection }
 
@@ -30,7 +36,6 @@ struct QuestionBankView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Spacing.section) {
                 header
-                feedbackCard
                 if model.counts.total == 0 {
                     emptyBank
                 } else {
@@ -42,6 +47,9 @@ struct QuestionBankView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(Palette.canvas)
+        .sheet(item: $feedback) { result in
+            QuestionBankImportResultSheet(feedback: result) { feedback = nil }
+        }
     }
 
     // MARK: - 顶部：这个题库现在是什么样
@@ -173,8 +181,9 @@ struct QuestionBankView: View {
     private var emptyBank: some View {
         EmptyStateView(
             message: "题库还是空的",
-            hint: "先导入你的雅思口语题库，才能开始练习。支持 CSV（第一行 id,part,topic,prompt）"
-                + "与本工具导出的 JSON 两种文件。",
+            hint: "先导入你的雅思口语题库，才能开始练习。支持这 "
+                + "\(QuestionBankImport.supportedExtensions.count) 种文件："
+                + "\(QuestionBankImport.supportedFormatList)。",
             actionTitle: "导入题库…",
             action: chooseFile)
     }
@@ -207,87 +216,23 @@ struct QuestionBankView: View {
     private var importCard: some View {
         PrimaryActionCard(
             title: "再导入一份题库",
-            subtitle: "支持 CSV 与 JSON。同一道题会被新的覆盖，不会变成两道——换季重新导入是安全的。",
+            subtitle: "支持 \(QuestionBankImport.supportedExtensionList)。"
+                + "同一道题会被新的覆盖，不会变成两道——换季重新导入是安全的。",
             actionTitle: "导入题库…",
             action: chooseFile)
-    }
-
-    /// 导入之后必须给一句交代，而且**警告要逐条摆出来**。
-    ///
-    /// 只显示「导入了 N 题 ✅」是这一页最容易犯的错：那些警告是在告诉用户
-    /// 「你的 CSV 第 7 行缺 id，那道题没进来」——比总数有用得多，而且不看就再也不会知道。
-    @ViewBuilder
-    private var feedbackCard: some View {
-        switch feedback {
-        case .idle:
-            EmptyView()
-
-        case .failure(let message):
-            CoachCard {
-                VStack(alignment: .leading, spacing: Spacing.sm) {
-                    Label("导入没有成功", systemImage: "xmark.octagon")
-                        .font(Typography.cardTitle)
-                        .foregroundStyle(Palette.danger)
-                    Text(message)
-                        .font(Typography.body)
-                        .foregroundStyle(Palette.textPrimary)
-                        .textSelection(.enabled)
-                    dismissFeedbackButton
-                }
-            }
-
-        case .success(let outcome):
-            CoachCard {
-                VStack(alignment: .leading, spacing: Spacing.sm) {
-                    if outcome.importedCount > 0 {
-                        Label("导入完成", systemImage: "checkmark.circle")
-                            .font(Typography.cardTitle)
-                            .foregroundStyle(Palette.success)
-                    } else {
-                        // 一道题都没进来不是「完成」。用警告色 + 警告图标，
-                        // 免得用户扫一眼绿色对勾就走开了（铁律 7）。
-                        Label("这次一道题都没有导入", systemImage: "exclamationmark.triangle")
-                            .font(Typography.cardTitle)
-                            .foregroundStyle(Palette.warning)
-                    }
-                    Text(outcome.summary)
-                        .font(Typography.body)
-                        .foregroundStyle(Palette.textPrimary)
-                        .textSelection(.enabled)
-                    if !outcome.warnings.isEmpty {
-                        VStack(alignment: .leading, spacing: Spacing.xs) {
-                            ForEach(Array(outcome.warnings.enumerated()), id: \.offset) { _, warning in
-                                Label(warning, systemImage: "exclamationmark.triangle")
-                                    .font(Typography.secondary)
-                                    .foregroundStyle(Palette.warning)
-                                    .textSelection(.enabled)
-                            }
-                        }
-                        .padding(.top, Spacing.xs)
-                    }
-                    dismissFeedbackButton
-                }
-            }
-        }
-    }
-
-    private var dismissFeedbackButton: some View {
-        Button("知道了") { feedback = .idle }
-            .buttonStyle(.bordered)
-            .padding(.top, Spacing.xs)
     }
 
     private func chooseFile() {
         let panel = NSOpenPanel()
         panel.title = "选择题库文件"
-        panel.message = "支持 CSV 与 JSON 两种题库文件。"
+        panel.message = "支持这 \(QuestionBankImport.supportedExtensions.count) 种题库文件："
+            + "\(QuestionBankImport.supportedFormatList)。"
         panel.prompt = "导入"
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        // 面板放行的类型直接由 `supportedExtensions` 推出来，与 `parse` 共用同一份清单。
-        // 两处各写一份的话，面板放行了、解析却不认，用户会选完文件才被拒，白跑一趟。
-        panel.allowedContentTypes = QuestionBankImport.supportedExtensions
-            .compactMap { UTType(filenameExtension: $0) }
+        // 面板放行的类型与 `parse` 认的格式来自同一个 `QuestionBankImport.Format`。
+        // 各写一份的话，面板放行了、解析却不认，用户会选完文件才被拒，白跑一趟。
+        panel.allowedContentTypes = QuestionBankImport.allowedContentTypes
         guard panel.runModal() == .OK, let url = panel.url else { return }
         runImport(from: url)
     }
@@ -297,9 +242,10 @@ struct QuestionBankView: View {
         do {
             let text = try readText(at: url, fileName: fileName)
             let result = try QuestionBankImport.parse(fileName: fileName, text: text)
-            feedback = .success(try app.applyImport(result))
+            feedback = QuestionBankImportFeedback(outcome: try app.applyImport(result))
         } catch {
-            feedback = .failure(QuestionBankImport.describeFailure(error, fileName: fileName))
+            feedback = QuestionBankImportFeedback(
+                failureMessage: QuestionBankImport.describeFailure(error, fileName: fileName))
         }
     }
 
@@ -313,12 +259,6 @@ struct QuestionBankView: View {
                     + "下一步：用「文本编辑」打开它，选「文件 › 存储为」并把编码设成 UTF-8，"
                     + "再回来导入一次。")
         }
-    }
-
-    private enum ImportFeedback {
-        case idle
-        case failure(String)
-        case success(QuestionBankImportOutcome)
     }
 }
 
