@@ -75,7 +75,7 @@ enum PracticeCommand {
             try driver.startVoice()
 
             print("▶︎ 等语音模式的输入框出现…")
-            try driver.waitForVoiceComposer(timeout: 15)
+            try driver.waitForVoiceComposer(timeout: 20)
 
             print("▶︎ 正在把考官提示词发给 ChatGPT…")
             try driver.sendText(ExaminerPrompt.build(setup: setup))

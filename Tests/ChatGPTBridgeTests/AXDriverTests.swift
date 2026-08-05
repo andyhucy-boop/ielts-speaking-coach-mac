@@ -23,12 +23,33 @@ final class AXDriverTests: XCTestCase {
         AXNodeSnapshot(element: AXElementRef(rawID: id, epoch: 0), role: "AXImage",
                        descriptionText: ChatGPTLabels.voiceActiveIndicator)
     }
+    // 语音模式下的输入框（description = "Work with ChatGPT"），与 composer(_:) 区分开——
+    // 后者用的是普通聊天态的描述，两者不能互相冒充。
+    private func voiceComposer(_ id: Int) -> AXNodeSnapshot {
+        AXNodeSnapshot(element: AXElementRef(rawID: id, epoch: 0), role: "AXTextArea",
+                       descriptionText: ChatGPTLabels.voiceComposerDescription)
+    }
     // 修复轮第 4 条（我在上一轮报告里提出的疑虑）：brief 原版 helper 没有覆盖默认的
-    // shortTimeout(5.0)/stateTimeout(8.0)，导致「预期失败」的测试要真的等到超时才
-    // 拿到结果。这里显式传短超时，让整个测试类的耗时从约 13 秒降到 1 秒以内。
+    // shortTimeout(5.0)/stateTimeout(当时是 8.0，本轮改成 25.0，见下方
+    // testDefaultTimeoutsMatchRealMeasuredStartupDelay)，导致「预期失败」的测试要真的
+    // 等到超时才拿到结果。这里显式传短超时，让整个测试类的耗时从约 13 秒降到 1 秒以内。
     private func driver(_ access: FakeAXAccess) -> AXDriver {
         AXDriver(access: access, locator: AXLocator(access: access, pollInterval: 0.01),
                  shortTimeout: 0.2, stateTimeout: 0.2)
+    }
+
+    // 【超时太短】的直接回归测试：用户逐秒采样 25 秒实测，Live 语音第 9 秒才出现
+    // Voice chat active，旧默认 8 秒正好卡在它起来的前一秒。这是首次真机联调失败的
+    // 直接原因。这里不模拟真的等 9/25 秒（会让测试套件变慢），只断言默认值本身对不对——
+    // 数值层面的正确性由这条测试兜底，实际等待行为已由 AXLocatorTests 的
+    // waitUntil/waitForNode 相关用例覆盖。
+    func testDefaultTimeoutsMatchRealMeasuredStartupDelay() {
+        let access = FakeAXAccess()
+        let sut = AXDriver(access: access, locator: AXLocator(access: access))
+        XCTAssertEqual(sut.shortTimeout, 5.0)
+        XCTAssertEqual(sut.stateTimeout, 25.0,
+                       "实测 Live 语音第 9 秒才出现 Voice chat active；旧默认 8 秒正好卡在前一秒，"
+                       + "25 秒才留得出余量")
     }
 
     func testPreflightFailsWhenTargetMissing() {
@@ -61,16 +82,45 @@ final class AXDriverTests: XCTestCase {
         XCTAssertEqual(access.pressedElements.map(\.rawID), [2], "必须按下 Send 按钮")
     }
 
-    // 第 2 条缺陷的直接回归测试：sendText 不再允许调用 sendReturnKey，
-    // 哪怕发送本身成功了也不能——发送已经完全靠按钮，回车路径必须彻底退场。
-    func testSendTextNeverCallsSendReturnKey() throws {
+    // 第 2 条缺陷的直接回归测试（本轮改名前叫 testSendTextNeverCallsSendReturnKey）：
+    // Send 按钮存在时必须优先走按钮这条路，不能因为「反正回车也是条备选路径」就
+    // 绕过按钮直接模拟回车——按钮路径是普通聊天状态下唯一实测有效的路径。
+    // 回车路径本身没有退场：本次故障（语音模式没有 Send 按钮）恰恰要求把它加回来，
+    // 见下面 testSendTextFallsBackToReturnKeyWhenNoSendButtonExists。
+    func testSendTextPrefersSendButtonOverReturnKeyWhenButtonExists() throws {
         let access = FakeAXAccess()
         access.nodes = [composer(1), sendButton(2)]
         access.onPress = { _, nodes in
             for i in nodes.indices where nodes[i].role == "AXTextArea" { nodes[i].value = "" }
         }
         try driver(access).sendText("你好")
-        XCTAssertEqual(access.returnKeyCount, 0, "发送必须靠按钮，不能再依赖模拟回车")
+        XCTAssertEqual(access.returnKeyCount, 0, "Send 按钮在时必须走按钮，不能绕过去模拟回车")
+    }
+
+    // 第 3 条【语音模式没有 Send 按钮】的直接回归测试：实测第 4 秒起 Send 按钮就消失了，
+    // 整个语音期间（采样到第 25 秒）都没再出现过。语音模式下写完提示词必须退回模拟回车，
+    // 不能死等一个根本不会出现的按钮，否则 sendText 在语音模式下永远发不出去东西。
+    func testSendTextFallsBackToReturnKeyWhenNoSendButtonExists() throws {
+        let access = FakeAXAccess()
+        access.nodes = [composer(1)]   // 没有 Send 按钮——语音模式下的真实现场
+        access.onSendReturnKey = { nodes in
+            for i in nodes.indices where nodes[i].role == "AXTextArea" { nodes[i].value = "" }
+        }
+        try driver(access).sendText("你好")
+        XCTAssertEqual(access.returnKeyCount, 1, "没有 Send 按钮时必须退回模拟回车")
+        XCTAssertTrue(access.pressedElements.isEmpty, "没有按钮可按，不该留下任何 press 记录")
+    }
+
+    // 两条路都没能让输入框变空——必须响亮报错，不能静默判定成功（呼应第 2 条修复
+    // 强调过的教训：验证要问「到底变没变」，不能只问「现在是不是目标态」）。
+    func testSendTextFailsActionablyWhenNeitherButtonNorReturnKeyClearsComposer() {
+        let access = FakeAXAccess()
+        access.nodes = [composer(1)]   // 没有 Send 按钮；onSendReturnKey 保持默认（什么都不做）
+        XCTAssertThrowsError(try driver(access).sendText("考官提示词")) { error in
+            XCTAssertTrue("\(error)".contains("下一步"))
+        }
+        XCTAssertEqual(access.returnKeyCount, 1, "仍应该尝试过回车这条路")
+        XCTAssertTrue(access.pressedElements.isEmpty)
     }
 
     func testSendTextFailsWhenComposerStillHoldsTheText() {
@@ -162,14 +212,44 @@ final class AXDriverTests: XCTestCase {
         }
     }
 
-    // waitForVoiceComposer 是对 locator.waitForComposer 的转发（语音输入框和普通输入框
-    // 走同一套查找逻辑，composerDescriptions 已经同时包含两种描述），这里只验证转发确实
-    // 接上了——真正的查找逻辑已由 AXLocatorTests 的 composer 相关用例覆盖。
-    func testWaitForVoiceComposerFindsComposer() throws {
+    // waitForVoiceComposer 曾经是对 locator.waitForComposer 的纯转发，本轮改掉了——
+    // 转发版会在实测第 9~11 秒那个窗口里命中还没切换过来的普通输入框（description 仍是
+    // "Message ChatGPT"），把考官提示词发进错误的地方。以下三条是本次故障的直接回归测试。
+
+    func testWaitForVoiceComposerFindsVoiceComposerWhenAlreadyPresent() throws {
         let access = FakeAXAccess()
-        access.nodes = [composer(1)]
+        access.nodes = [voiceComposer(1)]
         let found = try driver(access).waitForVoiceComposer(timeout: 0.5)
         XCTAssertEqual(found.element.rawID, 1)
+    }
+
+    // 【发进错误的输入框】的核心场景，本次故障的直接现场：树里只有普通输入框
+    // "Message ChatGPT" 时必须继续等，不能提前返回；等语音输入框
+    // "Work with ChatGPT" 出现才能返回。这条测试改回旧的「转发 waitForComposer」实现时
+    // 会立刻变红——旧实现见到 composer(1) 就直接返回了，根本不会等 voiceComposer(2) 出现。
+    func testWaitForVoiceComposerKeepsWaitingWhileOnlyNormalComposerIsPresent() throws {
+        let access = FakeAXAccess()
+        access.nodes = [composer(1)]   // 只有 "Message ChatGPT"——实测第 9~11 秒那个窗口
+        // 直接构造节点而不是调用 self.voiceComposer(_:)：DispatchQueue.global().asyncAfter
+        // 的闭包是 @Sendable 的，捕获 self（非 Sendable 的 XCTestCase 子类）会触发警告；
+        // 与本文件其余 asyncAfter 用例（如 testWaitForAssistantReplyWaitsForStreamingToStopBeforeReturning）
+        // 保持同样的写法。
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) {
+            access.nodes = [AXNodeSnapshot(element: AXElementRef(rawID: 2, epoch: 0), role: "AXTextArea",
+                                           descriptionText: ChatGPTLabels.voiceComposerDescription)]
+        }
+        let found = try driver(access).waitForVoiceComposer(timeout: 1.0)
+        XCTAssertEqual(found.element.rawID, 2,
+                       "必须等到语音输入框出现，不能命中窗口期里的普通输入框")
+    }
+
+    func testWaitForVoiceComposerFailsActionablyWhenItNeverAppears() {
+        let access = FakeAXAccess()
+        access.nodes = [composer(1)]   // 一直只有普通输入框，语音输入框始终没出现
+        XCTAssertThrowsError(try driver(access).waitForVoiceComposer(timeout: 0.1)) { error in
+            XCTAssertTrue("\(error)".contains("下一步"))
+            XCTAssertTrue("\(error)".contains("语音"))
+        }
     }
 
     func testStartVoiceVerifiesIndicatorAppeared() throws {

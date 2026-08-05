@@ -11,7 +11,12 @@ public enum ChatGPTLabels {
     /// 输入框的 description **随状态而变**（实测）：普通聊天是 "Message ChatGPT"，
     /// 语音会话进行中是 "Work with ChatGPT"。此前只认后者，是因为最初的 AX 结构
     /// 全部在语音会话中采集，把语音态特征当成了通用特征。
-    public static let composerDescriptions = ["Message ChatGPT", "Work with ChatGPT"]
+    /// 普通聊天状态的输入框。
+    public static let normalComposerDescription = "Message ChatGPT"
+    /// 语音模式下的输入框。**实测比 Voice chat active 还晚约 3 秒出现。**
+    public static let voiceComposerDescription = "Work with ChatGPT"
+    /// 两者合集，供通用查找使用。
+    public static let composerDescriptions = [normalComposerDescription, voiceComposerDescription]
     /// 别名，兼容旧的单数写法。发提示词时界面处于 `composerDescriptions[0]` 那个状态。
     public static let composerDescription = composerDescriptions[0]
     /// 发送按钮。实测模拟回车不会发送（文字留在输入框里），必须按这个按钮。
@@ -66,6 +71,12 @@ public enum ChatGPTLabels {
         }) { return exact }
         let textAreas = nodes.filter { $0.role == "AXTextArea" }
         return textAreas.count == 1 ? textAreas[0] : nil
+    }
+
+    /// 专门找**语音模式**的输入框。不能用通用的 composer(among:) —— 语音起来后
+    /// 有约 3 秒窗口界面上摆的仍是普通输入框，那时发送会发进错误的框。
+    public static func voiceComposer(among nodes: [AXNodeSnapshot]) -> AXNodeSnapshot? {
+        nodes.first { $0.role == "AXTextArea" && $0.descriptionText == voiceComposerDescription }
     }
 
     /// 界面上全部的文本框。`composer` 找不到时用于给出可执行的诊断。

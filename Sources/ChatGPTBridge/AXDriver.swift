@@ -3,11 +3,14 @@ import Foundation
 public final class AXDriver: CoachBridge {
     private let access: any AXAccess
     private let locator: AXLocator
-    private let shortTimeout: TimeInterval
-    private let stateTimeout: TimeInterval
+    // 不标 private：只是为了让 AXDriverTests 能直接断言默认值本身是对的
+    // （见 testDefaultTimeoutsMatchRealMeasuredStartupDelay），不属于对外公开的 API——
+    // `coach` 可执行 target 从不读取这两个字段，只调用 AXDriver/CoachBridge 的方法。
+    let shortTimeout: TimeInterval
+    let stateTimeout: TimeInterval
 
     public init(access: any AXAccess, locator: AXLocator,
-                shortTimeout: TimeInterval = 5.0, stateTimeout: TimeInterval = 8.0) {
+                shortTimeout: TimeInterval = 5.0, stateTimeout: TimeInterval = 25.0) {
         self.access = access; self.locator = locator
         self.shortTimeout = shortTimeout; self.stateTimeout = stateTimeout
     }
@@ -48,16 +51,22 @@ public final class AXDriver: CoachBridge {
             throw BridgeError.actionFailed("写入 ChatGPT 输入框失败。"
                 + "下一步：确认 ChatGPT 窗口没有被弹窗挡住，然后重试。")
         }
-        // 实测模拟回车不会发送——文字会原样留在输入框里，必须按 Send 按钮。
-        let sendButton = try locator.waitForControl(ChatGPTLabels.sendMessage, timeout: shortTimeout)
-        guard access.press(sendButton.element) else {
-            throw BridgeError.actionFailed("按下发送按钮失败。"
-                + "下一步：确认 ChatGPT 窗口没有被弹窗挡住，然后重试。")
+
+        // 实测：普通聊天状态下写入文字后会出现 Send 按钮，按它才能发出去（模拟回车无效）；
+        // 而语音模式下整个过程都没有 Send 按钮——第 4 秒起就消失，25 秒采样期间再没出现过。
+        // 所以两条路都要试，最终一律以「输入框回到空态」为准 —— 走哪条路成功都行，
+        // 都失败就报错。press/sendReturnKey 的返回值不单独判断：kAXPressAction 返回 true
+        // 不代表 ChatGPT 真收到了（按钮被禁用、焦点跑掉时也可能返回 true），唯一可信的
+        // 判据还是下面这条「输入框空了」。
+        if let send = try? locator.waitForControl(ChatGPTLabels.sendMessage, timeout: 2.0) {
+            _ = access.press(send.element)
+        } else {
+            _ = access.sendReturnKey()
         }
-        // 操作后验证。kAXPressAction 返回 true 不代表 ChatGPT 真收到了——按钮被禁用、
-        // 焦点跑掉时它也可能返回 true。而这条路径失败被当成成功的后果特别严重：
-        // 考官提示词没发出去，语音却正常启动，ChatGPT 就是个普通聊天机器人，
-        // 用户要练完一整场、等复盘出来是一团乱麻才发现不对。
+
+        // 操作后验证。这条路径失败被当成成功的后果特别严重：考官提示词没发出去，
+        // 语音却正常启动，ChatGPT 就是个普通聊天机器人，用户要练完一整场、
+        // 等复盘出来是一团乱麻才发现不对。
         //
         // 判据必须是「输入框空了」，不能是「内容和我写的不一样」——
         // AX 读回的值与写入值不可能逐字节相同（换行与空白会被规范化），
@@ -84,12 +93,20 @@ public final class AXDriver: CoachBridge {
         }
     }
 
-    /// 等语音模式的输入框出现。语音输入框和普通聊天输入框走同一套查找逻辑——
-    /// `ChatGPTLabels.composerDescriptions` 已经同时包含两种描述，`locator.waitForComposer`
-    /// 不用改就能处理；单独起名只是让调用处「等的是语音模式那个」这层意图读起来更清楚。
+    /// 等语音模式的输入框出现。**不能用通用的 composer(among:) 查找**——实测第 9~11 秒
+    /// 这个窗口里，`Voice chat active` 已经出现，但输入框描述仍是普通聊天态的
+    /// "Message ChatGPT"，大约 3 秒后才变成语音态的 "Work with ChatGPT"。通用查找见到
+    /// 任意输入框就返回，会在这个窗口里命中普通框，把考官提示词发进错误的地方。
     @discardableResult
     public func waitForVoiceComposer(timeout: TimeInterval) throws -> AXNodeSnapshot {
-        try locator.waitForComposer(timeout: timeout)
+        guard let found = locator.waitForNode(matching: { ChatGPTLabels.voiceComposer(among: $0) },
+                                              timeout: timeout) else {
+            throw BridgeError.elementNotFound(
+                "语音已经启动，但等了 \(Int(timeout)) 秒仍没等到语音模式的输入框出现。"
+                + "下一步：看一眼 ChatGPT 窗口是不是真的进了语音界面；"
+                + "若已经进了但输入框迟迟不出现，可能是这一版 ChatGPT 改了界面，请把这条错误告诉开发者。")
+        }
+        return found
     }
 
     public func startVoice() throws {
@@ -109,6 +126,10 @@ public final class AXDriver: CoachBridge {
                 + "下一步：确认 ChatGPT 窗口在前台，然后重试。")
         }
         // kAXPressAction 返回成功不等于动作生效（spec 2.3.1），必须验证状态真的变了
+        //
+        // 实测：点下语音按钮后约 9 秒 Voice chat active 才出现（逐秒采样 25 秒得到）。
+        // 原默认 8 秒正好卡在它起来的前一秒，是首次真机联调失败的直接原因。
+        // 25 秒留足余量——慢网络或冷启动会更久。
         try locator.waitUntil({ ChatGPTLabels.isVoiceActive($0) },
                               timeout: stateTimeout, describing: "语音会话开始")
     }

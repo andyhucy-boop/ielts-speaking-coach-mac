@@ -94,6 +94,34 @@ final class AXLocatorTests: XCTestCase {
         }
     }
 
+    // waitForNode 是给 AXDriver.waitForVoiceComposer 用的通用轮询原语——
+    // 与 waitForControl/waitForComposer 的区别是它接受任意匹配函数，且找不到时
+    // 返回 nil 而不是抛错（错误信息由调用方根据场景自己拼，见 AXDriverTests）。
+
+    func testWaitForNodeKeepsPollingUntilPredicateMatches() throws {
+        let access = FakeAXAccess()
+        access.nodes = [AXNodeSnapshot(element: AXElementRef(rawID: 1, epoch: 0), role: "AXTextArea",
+                                       descriptionText: "Message ChatGPT")]
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) {
+            access.nodes = [AXNodeSnapshot(element: AXElementRef(rawID: 2, epoch: 0), role: "AXTextArea",
+                                           descriptionText: "Work with ChatGPT")]
+        }
+        let locator = AXLocator(access: access, pollInterval: 0.01)
+        let found = locator.waitForNode(matching: { nodes in
+            nodes.first { $0.descriptionText == "Work with ChatGPT" }
+        }, timeout: 1.0)
+        XCTAssertEqual(found?.element.rawID, 2,
+                       "谓词命中「Message ChatGPT」时不能提前返回，必须等到目标节点出现")
+    }
+
+    func testWaitForNodeReturnsNilOnTimeout() {
+        let access = FakeAXAccess()
+        access.nodes = []
+        let locator = AXLocator(access: access, pollInterval: 0.01)
+        let found = locator.waitForNode(matching: { $0.first }, timeout: 0.1)
+        XCTAssertNil(found)
+    }
+
     func testComposerTimeoutWhenNoTextAreaAtAll() {
         let access = FakeAXAccess()
         access.nodes = []

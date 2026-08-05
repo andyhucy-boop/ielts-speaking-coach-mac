@@ -71,6 +71,24 @@ public struct AXLocator: Sendable {
             + "下一步：确认 ChatGPT 窗口可见且已打开一个会话，然后重试。")
     }
 
+    /// 轮询直到 `matching` 从树里挑出目标节点，返回该节点；超时返回 nil。
+    ///
+    /// 用于「通用查找会命中错误目标」的场景——例如语音输入框：语音已经启动后仍有约 3 秒
+    /// 窗口，界面上摆的还是普通输入框，`waitForComposer` 见到它就会满足；必须换一个
+    /// 只认目标节点本身的谓词持续轮询，才不会在这个窗口里提前返回。不复用 `waitForControl`/
+    /// `waitForComposer` 的专用错误信息，是因为不同调用方对「没找到」要给出的下一步指引不同，
+    /// 由调用方自己根据 nil 结果拼错误更合适。
+    public func waitForNode(matching: ([AXNodeSnapshot]) -> AXNodeSnapshot?,
+                            timeout: TimeInterval) -> AXNodeSnapshot? {
+        let deadline = Date().addingTimeInterval(timeout)
+        let interval = effectiveInterval(for: timeout)
+        repeat {
+            if let hit = matching(access.snapshotTree()) { return hit }
+            Thread.sleep(forTimeInterval: interval)
+        } while Date() < deadline
+        return nil
+    }
+
     /// 轮询直到条件成立。用于「操作后验证状态真的变了」——
     /// kAXPressAction 返回成功不等于动作生效（spec 2.3.1）。
     public func waitUntil(_ condition: ([AXNodeSnapshot]) -> Bool, timeout: TimeInterval,

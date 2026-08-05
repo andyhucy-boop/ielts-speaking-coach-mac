@@ -91,6 +91,20 @@ final class ChatGPTLabelsTests: XCTestCase {
         }
     }
 
+    // voiceComposer(among:) 是【发进错误的输入框】那条修复的核心判据：实测第 9~11 秒
+    // 窗口里语音已经启动，但界面上摆的仍是普通输入框，voiceComposer 不能像 composer(among:)
+    // 那样把它也算数——必须精确匹配语音态描述。
+    func testVoiceComposerOnlyMatchesVoiceDescription() {
+        let normal = AXNodeSnapshot(element: AXElementRef(rawID: 1, epoch: 0), role: "AXTextArea",
+                                    descriptionText: ChatGPTLabels.normalComposerDescription)
+        let voice = AXNodeSnapshot(element: AXElementRef(rawID: 2, epoch: 0), role: "AXTextArea",
+                                   descriptionText: ChatGPTLabels.voiceComposerDescription)
+        XCTAssertNil(ChatGPTLabels.voiceComposer(among: [normal]),
+                     "只有普通输入框时不能被误认成语音输入框")
+        XCTAssertEqual(ChatGPTLabels.voiceComposer(among: [normal, voice])?.element,
+                       AXElementRef(rawID: 2, epoch: 0))
+    }
+
     func testComposerRefusesToGuessAmongMultipleTextAreas() {
         // 两个以上 → 必须失败，不能闭眼取第一个
         let search = AXNodeSnapshot(element: AXElementRef(rawID: 1, epoch: 0),
