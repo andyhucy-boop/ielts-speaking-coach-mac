@@ -30,5 +30,13 @@ public protocol CoachBridge {
     func startVoice() throws
     func isVoiceActive() -> Bool
     func endVoice() throws
-    func captureLatestAssistantMessage() throws -> String
+    func captureLatestAssistantMessage(expectedMarker: String?) throws -> String
+}
+
+extension CoachBridge {
+    /// 协议里的方法要求本身不能带默认参数值（会破坏见证表派发），
+    /// 用扩展补一个「省略 expectedMarker」的重载，行为等价于 `expectedMarker: nil`。
+    public func captureLatestAssistantMessage() throws -> String {
+        try captureLatestAssistantMessage(expectedMarker: nil)
+    }
 }

@@ -43,10 +43,24 @@ final class AXDriverTests: XCTestCase {
     func testSendTextWritesComposerThenPressesReturn() throws {
         let access = FakeAXAccess()
         access.nodes = [composer(1)]
+        // 修复轮加了「发送后验证输入框真的变了」，FakeAXAccess.setValue 现在会把文字
+        // 真的写进节点；这里显式模拟「ChatGPT 收到后清空了输入框」，否则 sendText 会
+        // 因为 composer 仍然等于刚写入的文字而误判成「回车没生效」。
+        access.onSendReturnKey = { nodes in
+            for i in nodes.indices where nodes[i].role == "AXTextArea" { nodes[i].value = "" }
+        }
         try driver(access).sendText("你好")
         XCTAssertEqual(access.setValues.count, 1)
         XCTAssertEqual(access.setValues[0].1, "你好")
         XCTAssertEqual(access.returnKeyCount, 1, "写入之后必须真的发送")
+    }
+
+    func testSendTextFailsWhenComposerStillHoldsTheText() {
+        let access = FakeAXAccess()
+        access.nodes = [composer(1)]   // 输入框内容不会变 —— 模拟「回车没生效」
+        XCTAssertThrowsError(try driver(access).sendText("考官提示词")) { error in
+            XCTAssertTrue("\(error)".contains("下一步"))
+        }
     }
 
     func testStartVoiceVerifiesIndicatorAppeared() throws {
@@ -54,12 +68,12 @@ final class AXDriverTests: XCTestCase {
         access.nodes = [control(1, "Start voice chat")]
         access.onPress = { _, nodes in nodes.append(self.voiceActive(9)) }
         try driver(access).startVoice()
-        // brief 原文断言 `[AXElementRef(rawID: 1)]`，同样缺 epoch。
-        // 修复轮加了前置校验 `guard !isVoiceActive()`，它自己会先取一次快照（代次变 1），
-        // 之后 waitForControl 才取第二次快照（代次变 2）并在这次就命中；随后 waitUntil
-        // 里的验证轮询还会继续调用 snapshotTree()（代次继续递增），但那不影响已经记录下来的
-        // pressedElements——它是按下那一刻的代次快照，是 2，不是断言时的 access.snapshotCount。
-        XCTAssertEqual(access.pressedElements, [AXElementRef(rawID: 1, epoch: 2)])
+        // 上一轮我把这里断言的 epoch 硬编码成具体数值（当时是 2），但协调者这轮点破了
+        // 这个写法本身就是脆弱点：调用链前面任何一次新增/删减 snapshotTree() 调用都会让
+        // 硬编码的代次错位（这轮 sendText 的验证又新增了一次快照，波及范围只会越来越大）。
+        // 代次校验的正确性已由 AXElementRefEpochTests.testPressRejectsElementFromStaleSnapshot
+        // 单独覆盖，这里只需要断言「按下的是哪个元素」，改成只比 rawID。
+        XCTAssertEqual(access.pressedElements.map(\.rawID), [1])
     }
 
     func testStartVoiceFailsWhenIndicatorNeverAppears() {
@@ -111,6 +125,19 @@ final class AXDriverTests: XCTestCase {
         }
     }
 
+    func testCaptureRequiresMarkerWhenGiven() {
+        let access = FakeAXAccess()
+        access.nodes = [
+            AXNodeSnapshot(element: AXElementRef(rawID: 1, epoch: 0), role: "AXStaticText",
+                           value: String(repeating: "用户自己粘贴的一大段无关文字", count: 20)),
+            AXNodeSnapshot(element: AXElementRef(rawID: 2, epoch: 0), role: "AXStaticText",
+                           value: "<<<IELTS_REVIEW_JSON:sync-9>>>{\"must_correct\":[]}<<<END_IELTS_REVIEW_JSON:sync-9>>>")
+        ]
+        let captured = try? driver(access).captureLatestAssistantMessage(expectedMarker: "sync-9")
+        XCTAssertEqual(captured?.contains("sync-9"), true,
+                       "给了标记就必须命中标记，不能因为别的文本更长就取错")
+    }
+
     func testStartVoiceRefusesWhenVoiceAlreadyActive() {
         let access = FakeAXAccess()
         access.nodes = [control(1, "Start voice chat"), voiceActive(9)]   // 语音已在跑
@@ -134,9 +161,13 @@ final class AXDriverTests: XCTestCase {
 
 final class ClipboardFallbackTests: XCTestCase {
     func testReadsPlainTextFromPasteboard() throws {
-        let pasteboard = FakePasteboard(contents: "  <<<IELTS_REVIEW_JSON>>>x<<<END_IELTS_REVIEW_JSON>>>  ")
-        XCTAssertEqual(try ClipboardFallback.readReview(from: pasteboard),
-                       "<<<IELTS_REVIEW_JSON>>>x<<<END_IELTS_REVIEW_JSON>>>")
+        // 门槛从 40 提到 200 后，brief 原版的 51 字符载荷（两个定界标记 + 1 个字符）
+        // 会被新门槛挡下，测试本身先红了一次。补足到 200+ 字符，同时保留原意：
+        // 校验首尾空白被裁掉、内容原样返回。
+        let body = String(repeating: "x", count: 200)
+        let payload = "<<<IELTS_REVIEW_JSON>>>\(body)<<<END_IELTS_REVIEW_JSON>>>"
+        let pasteboard = FakePasteboard(contents: "  \(payload)  ")
+        XCTAssertEqual(try ClipboardFallback.readReview(from: pasteboard), payload)
     }
 
     func testEmptyPasteboardGivesActionableChineseError() {
@@ -150,6 +181,15 @@ final class ClipboardFallbackTests: XCTestCase {
     func testTooShortContentIsRejected() {
         // 用户可能没选中就按了 ⌘C，剪贴板里是上一次复制的零碎内容
         XCTAssertThrowsError(try ClipboardFallback.readReview(from: FakePasteboard(contents: "ok"))) { error in
+            XCTAssertTrue("\(error)".contains("太短"))
+        }
+    }
+
+    func testModeratelyLongButNonReviewContentIsStillRejected() {
+        // 门槛从 40 提到 200：光两个定界标记加起来就超过 40 字符，旧门槛形同虚设。
+        // 这里验证一段 100 字符左右、明显不是复盘 JSON 的内容依然会被挡在门外。
+        let notAReview = String(repeating: "这不是复盘", count: 20)   // 100 字符
+        XCTAssertThrowsError(try ClipboardFallback.readReview(from: FakePasteboard(contents: notAReview))) { error in
             XCTAssertTrue("\(error)".contains("太短"))
         }
     }

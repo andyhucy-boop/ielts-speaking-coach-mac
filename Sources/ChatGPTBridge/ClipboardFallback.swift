@@ -12,7 +12,11 @@ public struct SystemPasteboard: PasteboardAccess {
 
 public enum ClipboardFallback {
     /// 复盘 JSON 至少这么长。低于此长度多半是用户没选中就按了 ⌘C。
-    public static let minimumLength = 40
+    ///
+    /// **40 太松**：光两个定界标记加起来就超过 40 字符，等于没有防护。
+    /// 真实的复盘 JSON 含 must_correct / answer_upgrades 等多个数组，实测都在数百字符以上。
+    /// 取 200 作为下限：足以挡掉误复制的零碎内容，又不至于误伤特别简短的复盘。
+    public static let minimumLength = 200
 
     public static func readReview(from pasteboard: any PasteboardAccess) throws -> String {
         let raw = (pasteboard.readString() ?? "").trimmingCharacters(in: .whitespacesAndNewlines)

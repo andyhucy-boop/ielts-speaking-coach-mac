@@ -24,6 +24,12 @@ final class FakeAXAccess: AXAccess, @unchecked Sendable {
     var onPress: ((AXElementRef, inout [AXNodeSnapshot]) -> Void)?
     var pressSucceeds = true
 
+    /// 发送回车后对树做的变更。用于模拟「ChatGPT 真收到了 → 输入框被清空」。
+    /// **默认什么都不做**——setValue 写进composer 的文字会原样留在那里，这正是
+    /// 「回车没生效」该有的默认状态。需要模拟"发送成功"的测试必须显式设置这个钩子，
+    /// 不能让"自动清空"成为默认行为，否则「操作后验证」这条防线在测试里永远测不出东西。
+    var onSendReturnKey: ((inout [AXNodeSnapshot]) -> Void)?
+
     func isTargetInstalled() -> Bool { installed }
     func isTargetRunning() -> Bool { running }
     func isAccessibilityTrusted() -> Bool { trusted }
@@ -41,7 +47,14 @@ final class FakeAXAccess: AXAccess, @unchecked Sendable {
     }
     func setValue(_ text: String, on element: AXElementRef) -> Bool {
         guard element.epoch == currentEpoch else { return false }
-        setValues.append((element, text)); return true
+        setValues.append((element, text))
+        // 真的把文字写进对应节点——这样「发送后验证输入框是否变了」才有东西可验证。
+        // 之前这里只记录不改状态，composer 的 value 永远是初始的 ""，会让新增的
+        // 操作后验证变成一句永远为真的死代码。
+        if let idx = nodes.firstIndex(where: { $0.element.rawID == element.rawID }) {
+            nodes[idx].value = text
+        }
+        return true
     }
     func press(_ element: AXElementRef) -> Bool {
         guard element.epoch == currentEpoch else { return false }
@@ -50,7 +63,11 @@ final class FakeAXAccess: AXAccess, @unchecked Sendable {
         onPress?(element, &nodes)
         return true
     }
-    func sendReturnKey() -> Bool { returnKeyCount += 1; return true }
+    func sendReturnKey() -> Bool {
+        returnKeyCount += 1
+        onSendReturnKey?(&nodes)
+        return true
+    }
 }
 
 /// 可编程的假剪贴板，供 ClipboardFallbackTests 使用。
