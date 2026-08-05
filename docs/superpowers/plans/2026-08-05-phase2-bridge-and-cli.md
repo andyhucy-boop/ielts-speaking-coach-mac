@@ -102,7 +102,14 @@ import Foundation
 /// 这样上层逻辑不直接接触 AXUIElement，才能在没有 ChatGPT 的情况下被测试。
 public struct AXElementRef: Hashable, Sendable {
     public let rawID: Int
-    public init(rawID: Int) { self.rawID = rawID }
+    /// 快照代次，每次 `snapshotTree()` 递增。
+    ///
+    /// **不能省。** rawID 每次快照都从 0 重新编号，若不校验代次，跨快照复用旧引用时
+    /// `press`/`setValue` 不会安全失败，而会**静默命中新树里编号相同的另一个元素** ——
+    /// 比「找不到」危险得多。而 AXLocator/AXDriver 的核心就是轮询（反复取快照），
+    /// 「拿到元素 → 等某个状态 → 按下它」是极自然的写法，正好会踩中。
+    public let epoch: Int
+    public init(rawID: Int, epoch: Int) { self.rawID = rawID; self.epoch = epoch }
 }
 
 /// 元素在某一时刻的属性快照。
@@ -159,12 +166,15 @@ public protocol AXAccess: Sendable {
     func launchTarget() throws
     /// 唤醒 Chromium 的惰性无障碍树。返回是否观察到 AXWebArea。
     func wakeAccessibilityTree(timeout: TimeInterval) -> Bool
-    /// 深度优先遍历当前树，返回全部节点快照
+    /// 深度优先遍历当前树，返回全部节点快照。**每次调用都会开启新的代次**，
+    /// 此前取得的 `AXElementRef` 随即失效。
     func snapshotTree() -> [AXNodeSnapshot]
     /// 设置元素的 kAXValueAttribute。返回是否成功。
+    /// 元素来自过期代次时必须返回 false，不得操作任何元素。
     func setValue(_ text: String, on element: AXElementRef) -> Bool
     /// 对元素执行 kAXPressAction。返回是否成功。
     /// **注意：返回 true 不等于动作生效**（spec 2.3.1），调用方必须另行验证状态变化。
+    /// 元素来自过期代次时必须返回 false，不得操作任何元素。
     func press(_ element: AXElementRef) -> Bool
     /// 向目标应用发送回车键
     func sendReturnKey() -> Bool
@@ -306,12 +316,16 @@ final class ChatGPTLabelsTests: XCTestCase {
     }
 
     func testPrefersControlButtonWhenSidebarRowComesFirst() {
-        // 深度优先遍历里侧边栏常常排在前面 —— 不能取第一个命中
-        let row = node(2, role: "AXButton", desc: "New voice chat",
+        // ⚠️ 两者标签必须**相同**，否则这条测试是装饰性的：
+        // matchControl 按候选集合顺序查找，标签不同时靠优先级就能选对，
+        // 结构判据根本不会被执行，删掉它这条测试照样绿。
+        // 标签相同时，唯一的区分依据才是结构。
+        let row = node(2, role: "AXButton", desc: "Start voice chat",
                        childRoles: ["AXGroup", "AXButton", "AXButton"])
         let button = node(3, role: "AXButton", desc: "Start voice chat", childRoles: ["AXImage"])
         XCTAssertEqual(ChatGPTLabels.matchControl(ChatGPTLabels.startVoice, among: [row, button])?.element,
-                       AXElementRef(rawID: 3))
+                       AXElementRef(rawID: 3, epoch: 0),
+                       "侧边栏行排在前面时仍必须选中结构合法的那个")
     }
 
     func testAcceptsCheckBoxControls() {
