@@ -203,7 +203,16 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>NSMicrophoneUsageDescription</key>
     <string>开启「保存我的回答录音」后，用于录下你练习时的回答，便于回听。录音只存在本机，可随时删除。</string>
 </dict>
+</plist>
 PLIST
+
+# 立即校验生成的 plist 是否合法。少一个闭合标签就会让 App 起不来，
+# 而那时的报错往往含糊到看不出是 plist 的问题。
+plutil -lint "$APP/Contents/Info.plist" >/dev/null || {
+    echo "❌ 生成的 Info.plist 不是合法 plist。"
+    echo "   下一步：检查 build-app.sh 里那段 heredoc 的标签是否闭合。"
+    exit 1
+}
 
 echo "▶︎ 签名…"
 if ! security find-certificate -c "$SIGN_IDENTITY" >/dev/null 2>&1; then
