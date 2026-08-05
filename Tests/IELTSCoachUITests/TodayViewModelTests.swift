@@ -71,6 +71,22 @@ final class TodayViewModelTests: XCTestCase {
         XCTAssertTrue(vm.availableRoutes.isEmpty, "题库空时一条路线都不该显示")
     }
 
+    /// 上面那条只覆盖了「题库空 **且** 没练过、没目标」这一格，而那一格里四条路线本来就都排不出来。
+    /// 真正会漏的是这一格：题库空、但以前练过、还留着没退休的复训目标——
+    /// 「继续上次练习」和「复训一个旧问题」看着只依赖历史记录，其实同样要按 id 去题库反查那道题
+    /// （`TodayView.plannedQuestion`），库空了它们哪也去不了。
+    ///
+    /// 换季重新导入题库（先清空再导）时用户就正好停在这一格上。
+    func testNoRouteSurvivesAnEmptyBankEvenWithHistoryAndLiveTargets() {
+        var s = state(plan: nil, questions: [],
+                      sessions: [practiceSession("s1", startedAt: "2026-08-05T10:00:00Z")])
+        s.targets = [retrainingTarget("t1", status: "new")]
+        XCTAssertEqual(
+            TodayViewModel(state: s).availableRoutes, [],
+            "题库空时「继续上次练习」「复训一个旧问题」照样走不通——两条最后都要拿题库里的一道题去练。"
+                + "显示出来等于给用户两个点了没用的按钮，而这一页是他每天打开的第一眼。")
+    }
+
     func testRetrainAvailableOnlyWithLiveTargets() {
         var withRetired = state(plan: nil, questions: [question("a")])
         withRetired.targets = [retrainingTarget("t1", status: "retired")]
@@ -127,5 +143,96 @@ final class TodayViewModelTests: XCTestCase {
         let sessions = (1...7).map { practiceSession("s\($0)", startedAt: "2026-08-0\($0)T10:00:00Z") }
         let vm = TodayViewModel(state: state(plan: nil, questions: [question("a")], sessions: sessions))
         XCTAssertEqual(vm.recentSessions.map(\.id), ["s7", "s6", "s5", "s4", "s3"])
+    }
+
+    // MARK: - 训练记录还没接上：界面不许说自己做得到
+
+    /// 「本周训练 N/5」和「最近练习」这两处，在当前工程里**永远不会动**：
+    /// 全工程没有任何一行往 `CoachState.sessions` 里写东西。不交代这件事，
+    /// 用户在终端练完一整场回到这一页，看到的还是 0 次、还是「还没有练习记录」。
+    func testUnwiredRecordingNoticeSaysWhatHappensAndWhatToDoNext() throws {
+        let text = try XCTUnwrap(TodayViewModel.unwiredRecordingNotice(isWired: false))
+        XCTAssertTrue(text.contains("本周训练"), "得指名道姓说清是哪两处不会动")
+        XCTAssertTrue(text.contains("最近练习"))
+        XCTAssertTrue(text.contains("下一步"), "只说「记录还没接上」不说下一步，用户还是不知道该干什么")
+    }
+
+    /// 记录接上（Phase 4）之后这句话必须自己消失，否则界面会对着一个已经能用的功能说它不能用。
+    func testUnwiredRecordingNoticeDisappearsOnceRecordingIsWired() {
+        XCTAssertNil(TodayViewModel.unwiredRecordingNotice(isWired: true))
+    }
+
+    /// `practiceRecordingIsWired` 是一句关于**代码现状**的断言，而不是随手写下的常量。
+    /// 它和真实代码脱钩的两个方向都很难看：
+    /// - 还是 false、但已经有人在写 sessions 了 → 页面对着能用的功能说它不能用；
+    /// - 改成了 true、但根本没人写 sessions → 页面又开始默默撒谎。
+    ///
+    /// 所以这里扫一遍 `Sources/`。扫源码这一招在本项目有先例
+    /// （`PreviewSafetyTests`、`QuestionBankViewTests`、`DesignSystemTests`）。
+    func testPracticeRecordingFlagMatchesWhetherAnyCodeWritesSessions() throws {
+        let files = try PreviewSafetyTests.swiftFiles(in: Self.sourcesDirectory)
+        XCTAssertGreaterThan(
+            files.count, 10,
+            "只扫到 \(files.count) 个源文件，这条测试多半在空转。下一步：确认目录还在——"
+                + Self.sourcesDirectory.path)
+
+        var writers: [String] = []
+        for file in files where file.lastPathComponent != "CoachState.swift" {
+            let code = DesignSystemTests.strippingLineComments(
+                try String(contentsOf: file, encoding: .utf8))
+            if Self.writesToSessions(code) { writers.append(file.lastPathComponent) }
+        }
+
+        if TodayViewModel.practiceRecordingIsWired {
+            XCTAssertFalse(
+                writers.isEmpty,
+                "practiceRecordingIsWired 是 true，但全工程没有任何一行往 state.sessions 里写。"
+                    + "今日训练页会照着这个值把「训练记录还没接上」那句交代收起来，"
+                    + "于是「本周训练 N/5」和「最近练习」重新变回不会动、也没人解释的两块。"
+                    + "下一步：要么把它改回 false，要么把写记录那段真的接上。")
+        } else {
+            XCTAssertTrue(
+                writers.isEmpty,
+                "\(writers.joined(separator: "、")) 已经在往 state.sessions 里写记录了，"
+                    + "但 practiceRecordingIsWired 还是 false，页面会继续对用户说"
+                    + "「这一版还不会把练习记录写进训练数据」——对着一个已经能用的功能说它不能用。"
+                    + "下一步：把 TodayViewModel.practiceRecordingIsWired 改成 true。")
+        }
+    }
+
+    /// 上面那条测试全靠 `writesToSessions` 认得出写入。它认不出的话，
+    /// 上面那条会一路绿到 Phase 4 之后——正是它要防的那种静默。
+    func testTheSessionWriteScannerActuallyDetectsAWrite() {
+        XCTAssertTrue(Self.writesToSessions("state.sessions.append(session)"))
+        XCTAssertTrue(Self.writesToSessions("            updated.sessions += [session]"))
+        XCTAssertTrue(Self.writesToSessions("state.sessions = state.sessions + [session]"))
+        XCTAssertTrue(Self.writesToSessions("sessions.append(session)"), "写在 CoachState 扩展里的形式")
+
+        XCTAssertFalse(Self.writesToSessions("Array(state.sessions.sorted { $0.startedAt > $1.startedAt })"),
+                       "只是读，不该被当成写")
+        XCTAssertFalse(Self.writesToSessions("private var sessions: [PracticeSession] {"),
+                       "计算属性的声明不该被当成写")
+        XCTAssertFalse(Self.writesToSessions("let practiced = app.state.sessions.count"))
+    }
+
+    // MARK: - 扫源码用的小工具
+
+    static var sourcesDirectory: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // IELTSCoachUITests
+            .deletingLastPathComponent()   // Tests
+            .deletingLastPathComponent()   // 仓库根
+            .appending(path: "Sources")
+    }
+
+    /// 这段代码里有没有往某个 `.sessions` 数组里写东西。
+    ///
+    /// 带点的几种覆盖 `state.sessions.append(...)` 这类最常见的写法；不带点的
+    /// `sessions.append(` / `sessions +=` 覆盖写在 `CoachState` 自己的扩展里的形式。
+    /// 刻意**不认**不带点的 `sessions = `：那会把 `let sessions = …` 这种局部变量也算进来。
+    static func writesToSessions(_ code: String) -> Bool {
+        [".sessions.append(", ".sessions.insert(", ".sessions.remove", ".sessions +=",
+         ".sessions = ", "sessions.append(", "sessions.insert(", "sessions +="]
+            .contains { code.contains($0) }
     }
 }

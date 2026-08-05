@@ -37,6 +37,35 @@ public struct TodayViewModel: Sendable {
     /// 「还差几次」必须是同一个数，否则会出现「3/5」旁边写着「还差 4 次」。
     public static let weeklyGoal = 5
 
+    /// 练完一场之后，有没有代码把这一场记进 `CoachState.sessions`。
+    ///
+    /// **现在是 `false`，这是核过的代码现状、不是估计**：全工程没有任何一行往
+    /// `state.sessions` 里写东西——`PracticeCommand` 走完一整场只调 `ReviewArchiver.archive`，
+    /// 而它只动 `issues` / `vocabulary` / `targets` / `plan` / `questions`；
+    /// `state.currentSession` 同样从未被赋值。接线归 Phase 4
+    /// （`docs/superpowers/plans/2026-08-06-phase4-transcript-and-history.md`，
+    /// 那份计划自己也写着「写这份计划时核对过：全工程没有任何一行代码往 state.sessions 里写过东西」）。
+    ///
+    /// 于是这一页的 `weekProgress` 与 `recentSessions` 在当前工程里**永远是 0 和空**。
+    /// 这个常量存在的唯一理由，就是让界面能把这件事说出来而不是装作没有
+    /// （铁律 6、铁律 7）。Phase 4 接上记录之后改成 `true`，那句交代自己就消失。
+    ///
+    /// `TodayViewModelTests.testPracticeRecordingFlagMatchesWhetherAnyCodeWritesSessions`
+    /// 扫 `Sources/` 钉着这个值：代码和它脱钩的两个方向都会变红。
+    public static let practiceRecordingIsWired = false
+
+    /// 「本周训练」和「最近练习」旁边要补的那句交代；记录接上之后是 `nil`。
+    ///
+    /// 参数可注入是为了让「接上之后这句话会不会消失」也有测试管得住——
+    /// 直接读常量的话，`true` 那一支永远跑不到。
+    public static func unwiredRecordingNotice(isWired: Bool = practiceRecordingIsWired) -> String? {
+        guard !isWired else { return nil }
+        return "这一版还不会把练习记录写进训练数据：在终端练完一整场之后，上面的「本周训练」次数、"
+            + "下面的「最近练习」都不会变，「继续上次练习」那条路线也不会出现——不是你的练习没生效。"
+            + "下一步：照常练。练出来的错题、词汇、复训目标和计划进度都会正常入库，"
+            + "复盘原文也会存进数据目录；训练记录要等下一版接上，接上之后这两处才会开始动。"
+    }
+
     public let state: CoachState
     private let today: Date
 
@@ -66,6 +95,12 @@ public struct TodayViewModel: Sendable {
     ///
     /// 顺序有意义：排在第一位的那条就是页面上唯一的主行动（规范第 4 节）。
     public var availableRoutes: [PracticeRoute] {
+        // 题库空 = 四条路线全走不通，一条都不排。
+        // 「继续上次练习」「复训一个旧问题」看着只依赖历史记录，其实同样要按 id 去题库反查
+        // 那道题（`TodayView.plannedQuestion`）——库空了它们哪也去不了，显示出来就是两个
+        // 点了没用的按钮。换季重新导入题库（先清空再导）时用户正好停在这一格上。
+        guard !state.questions.isEmpty else { return [] }
+
         var routes: [PracticeRoute] = []
         if !todayQuestions.isEmpty { routes.append(.planToday) }
         if !state.questions.isEmpty { routes.append(.freePick) }

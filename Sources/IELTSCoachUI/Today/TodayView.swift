@@ -36,12 +36,17 @@ struct TodayView: View {
                 header
                 // 题库空时整页只做一件事：把用户送去导入。
                 //
-                // 判据用「题库是不是空的」而不是「有没有可用路线」：题库空、但以前练过或
-                // 还留着复训目标时，`availableRoutes` 里仍会有「继续上次练习」「复训一个旧问题」，
-                // 而那两条都要拿题库里的题去练——库空了它们其实哪也去不了。
+                // 判据用「题库是不是空的」而不是「有没有可用路线」：两者现在等价
+                // （`availableRoutes` 在题库空时返回空数组），但它们说的不是同一件事——
+                // 「一条路线都排不出来」还有别的成因，那种情况该显示的是 `noRouteCard`
+                // 那句「到训练题库看一眼题库是不是正常」。对一个刚装好、还没导过题库的人说
+                // 「你的题库可能不正常」，只会让他去找一个根本不存在的毛病。
+                //
+                // `TodayViewTests.testEmptyBankTakesOverTheWholePageInsteadOfShowingRoutes` 钉着这个分支。
                 if app.state.questions.isEmpty {
                     emptyBank
                 } else {
+                    recordingNotice
                     routes
                     recentPractice
                 }
@@ -51,7 +56,7 @@ struct TodayView: View {
         }
         .background(Palette.canvas)
         .sheet(item: $startHint) { hint in
-            PracticeStartHintSheet(hint: hint) { startHint = nil }
+            PracticeStartHintSheet(hint: hint, onDismiss: { startHint = nil })
         }
     }
 
@@ -109,6 +114,35 @@ struct TodayView: View {
                     Text("还差 \(remaining) 次达成本周目标。")
                         .font(Typography.secondary)
                         .foregroundStyle(Palette.textSecondary)
+                }
+            }
+        }
+    }
+
+    // MARK: - 训练记录还没接上，这件事得说出来
+
+    /// 「本周训练 N/5」和「最近练习」这两处，在当前工程里**练完也不会动**——
+    /// 没有任何代码往 `state.sessions` 里写记录（见 `TodayViewModel.practiceRecordingIsWired`）。
+    ///
+    /// 不说这句话的话，用户照这一页自己弹出来的提示在终端练完一整场，回到这一页看到的还是
+    /// 「0/5 次」「还没有练习记录」，只会以为程序坏了（铁律 6、铁律 7）。
+    /// 记录接上之后 `unwiredRecordingNotice()` 返回 nil，这块自己就消失。
+    ///
+    /// 位置在本周进度（头部右侧）与「最近练习」之间：它解释的正是这两处。
+    /// 题库空的那一支刻意**不显示**它——那时整页只做「去导入题库」这一件事，
+    /// 多一块交代只会分散注意；导完题库回到这一页就会看到。
+    @ViewBuilder
+    private var recordingNotice: some View {
+        if let text = TodayViewModel.unwiredRecordingNotice() {
+            CoachCard {
+                Label {
+                    Text(text)
+                        .font(Typography.secondary)
+                        .foregroundStyle(Palette.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundStyle(Palette.warning)
                 }
             }
         }
@@ -294,9 +328,7 @@ struct TodayView: View {
                 Text("还没有练习记录")
                     .font(Typography.cardTitle)
                     .foregroundStyle(Palette.textPrimary)
-                Text("练完第一场之后，这里会按时间倒序列出最近五次：练的哪道题、当时定的目标、"
-                     + "复盘有没有存下来。下一步：用上面那张紫色卡片开始第一场；"
-                     + "想先看看有哪些题可以练，就去「训练题库」翻一翻。")
+                Text(noSessionHint)
                     .font(Typography.secondary)
                     .foregroundStyle(Palette.textSecondary)
                 Button("去训练题库看看有哪些题") { onGo(.questionBank) }
@@ -304,6 +336,23 @@ struct TodayView: View {
                     .padding(.top, Spacing.xs)
             }
         }
+    }
+
+    /// 这句话必须和上面那块 `recordingNotice` 对得上。
+    ///
+    /// 原来的写法无条件承诺「练完第一场之后，这里会按时间倒序列出最近五次」——而这一版练完
+    /// 它也不会变，那就成了同一屏上两条互相矛盾的话，用户多半照着做得到的那条去做，
+    /// 然后发现没用。本项目在权限页上吃过一次同屏矛盾指令的亏（见 `PermissionGateView` 的说明），
+    /// 修法一样：不在视图里挑着显示，而是让两处都跟着同一个 `practiceRecordingIsWired` 走。
+    private var noSessionHint: String {
+        guard TodayViewModel.practiceRecordingIsWired else {
+            return "这一版还不会把练习记录存进训练数据，所以练完之后这里仍然是空的"
+                + "（上面那条说明写了详情）。下一步：用上面那张紫色卡片挑一道题，照弹出来的提示到终端开练——"
+                + "练出来的错题、词汇和复训目标都会正常入库，这一场不会白练。"
+        }
+        return "练完第一场之后，这里会按时间倒序列出最近五次：练的哪道题、当时定的目标、"
+            + "复盘有没有存下来。下一步：用上面那张紫色卡片开始第一场；"
+            + "想先看看有哪些题可以练，就去「训练题库」翻一翻。"
     }
 
     // MARK: - 题库还是空的
@@ -412,6 +461,28 @@ struct PracticeStartHint: Identifiable {
     let questionLine: String?
     /// 要用户照着敲的命令，按先后顺序。
     let commands: [String]
+
+    /// 把命令写进剪贴板。`write` 是真正干活的那一下，返回是否写成功。
+    ///
+    /// **返回值必须消费**：`NSPasteboard.setString` 是 `@discardableResult`，丢掉它编译器
+    /// 不会吭声，而别的进程正占着剪贴板时它会返回 false——用户按 ⌘V 粘出来的是上一次复制的
+    /// 东西（很可能是一段别的命令），照着敲下去后果不好说。**成功也要有反馈**：
+    /// 点完按钮界面一个像素都不变的话，用户分不清是复制好了还是按钮坏了。
+    /// 这两条都照 `PermissionStatus.copyDiagnostics` 的范式来。
+    func copyCommands(using write: (String) -> Bool) -> ActionNotice {
+        guard write(commands.joined(separator: "\n")) else {
+            return ActionNotice(
+                text: "没能把命令写进剪贴板（多半是别的程序正占着它）。"
+                    + "下一步：直接选中上面那几行命令按 ⌘C 复制，再粘进「终端」运行。",
+                isFailure: true)
+        }
+        return ActionNotice(
+            text: commands.count > 1
+                ? "\(commands.count) 行命令都已复制到剪贴板。"
+                    + "下一步：打开「终端」，进到本工具的源码目录，按 ⌘V 粘贴后逐行回车。"
+                : "命令已复制到剪贴板。下一步：打开「终端」，进到本工具的源码目录，按 ⌘V 粘贴后回车。",
+            isFailure: false)
+    }
 }
 
 /// 本阶段点「开始练习」弹出来的交代。
@@ -423,6 +494,24 @@ struct PracticeStartHint: Identifiable {
 struct PracticeStartHintSheet: View {
     let hint: PracticeStartHint
     let onDismiss: () -> Void
+    /// 真正去写剪贴板的那一下。抽成闭包是为了让「写失败时到底会不会告诉用户」这件事
+    /// 有测试管得住（`View` 本身没法单元测试），与 `PermissionGateView` 的做法一致。
+    let writeToPasteboard: (String) -> Bool
+
+    /// 点了「拷贝命令」之后的反馈。`nil` 表示还没点过。
+    @State private var copyNotice: ActionNotice?
+
+    init(hint: PracticeStartHint,
+         onDismiss: @escaping () -> Void,
+         writeToPasteboard: @escaping (String) -> Bool = { text in
+             let pasteboard = NSPasteboard.general
+             pasteboard.clearContents()
+             return pasteboard.setString(text, forType: .string)
+         }) {
+        self.hint = hint
+        self.onDismiss = onDismiss
+        self.writeToPasteboard = writeToPasteboard
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
@@ -468,11 +557,19 @@ struct PracticeStartHintSheet: View {
                 }
             }
 
+            // 点完按钮的那句话。失败用 danger，成功用次一级的文字色——
+            // 成功也要说话，不然用户分不清「复制好了」和「按钮坏了」。
+            if let copyNotice {
+                Text(copyNotice.text)
+                    .font(Typography.secondary)
+                    .foregroundStyle(copyNotice.isFailure ? Palette.danger : Palette.textSecondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             HStack(spacing: Spacing.sm) {
                 Button("拷贝命令") {
-                    let pasteboard = NSPasteboard.general
-                    pasteboard.clearContents()
-                    pasteboard.setString(hint.commands.joined(separator: "\n"), forType: .string)
+                    copyNotice = hint.copyCommands(using: writeToPasteboard)
                 }
                 .buttonStyle(.bordered)
                 Spacer(minLength: Spacing.md)
@@ -499,10 +596,13 @@ struct PracticeStartHintSheet: View {
         onGo: { _ in })
 }
 
+/// 剪贴板也注入假的：在 Xcode 画布里点一下「拷贝命令」不该把用户真实的剪贴板冲掉。
+/// 传 `false` 是因为失败那条提示更长，版式先按它对——短的那条一定放得下。
 #Preview("点了开始练习之后") {
     PracticeStartHintSheet(
         hint: PracticeStartHint(route: .planToday,
                                 questionLine: "Part 1 · Do you work or are you a student?",
                                 commands: ["swift run coach practice p1-study-001"]),
-        onDismiss: {})
+        onDismiss: {},
+        writeToPasteboard: { _ in false })
 }
