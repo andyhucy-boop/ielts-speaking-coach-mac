@@ -14,13 +14,21 @@ public struct AXLocator: Sendable {
         self.pollInterval = pollInterval
     }
 
+    /// 本次等待实际使用的轮询间隔。
+    /// 不钳制的话，`pollInterval` 大于 `timeout` 时实际等待由前者主导，
+    /// 可远超调用方声明的超时——「禁止无限等待」就成了空话。
+    private func effectiveInterval(for timeout: TimeInterval) -> TimeInterval {
+        max(0.01, min(pollInterval, timeout / 2))
+    }
+
     public func waitForControl(_ candidates: [String], timeout: TimeInterval) throws -> AXNodeSnapshot {
         var lastNodes: [AXNodeSnapshot] = []
         let deadline = Date().addingTimeInterval(timeout)
+        let interval = effectiveInterval(for: timeout)
         repeat {
             lastNodes = access.snapshotTree()
             if let hit = ChatGPTLabels.matchControl(candidates, among: lastNodes) { return hit }
-            Thread.sleep(forTimeInterval: pollInterval)
+            Thread.sleep(forTimeInterval: interval)
         } while Date() < deadline
 
         let mismatches = ChatGPTLabels.structuralMismatches(candidates, among: lastNodes)
@@ -40,10 +48,11 @@ public struct AXLocator: Sendable {
     public func waitForComposer(timeout: TimeInterval) throws -> AXNodeSnapshot {
         var lastNodes: [AXNodeSnapshot] = []
         let deadline = Date().addingTimeInterval(timeout)
+        let interval = effectiveInterval(for: timeout)
         repeat {
             lastNodes = access.snapshotTree()
             if let hit = ChatGPTLabels.composer(among: lastNodes) { return hit }
-            Thread.sleep(forTimeInterval: pollInterval)
+            Thread.sleep(forTimeInterval: interval)
         } while Date() < deadline
 
         // 「有多个文本框、不敢猜」与「根本没有文本框」是两种完全不同的处境，
@@ -67,12 +76,16 @@ public struct AXLocator: Sendable {
     public func waitUntil(_ condition: ([AXNodeSnapshot]) -> Bool, timeout: TimeInterval,
                           describing what: String) throws {
         let deadline = Date().addingTimeInterval(timeout)
+        let interval = effectiveInterval(for: timeout)
         repeat {
             if condition(access.snapshotTree()) { return }
-            Thread.sleep(forTimeInterval: pollInterval)
+            Thread.sleep(forTimeInterval: interval)
         } while Date() < deadline
         throw BridgeError.stateNotReached(
-            "等了 \(Int(timeout)) 秒，\(what)仍未发生。"
-            + "下一步：看一眼 ChatGPT 窗口当前的状态；若与预期不符，运行 axprobe dump 收集诊断信息。")
+            "等了 \(Int(timeout)) 秒，\(what)仍未发生。这通常意味着刚才那一下点击虽然返回成功，"
+            + "但 ChatGPT 并没有真的响应。"
+            + "下一步：切到 ChatGPT 窗口看看它现在是什么状态——如果界面和你预期的不一样，"
+            + "手动把它调整到正确状态后重新开始；如果 ChatGPT 最近更新过，"
+            + "它的界面可能变了，请把这条错误告诉开发者。")
     }
 }

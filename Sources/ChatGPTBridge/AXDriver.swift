@@ -51,6 +51,16 @@ public final class AXDriver: CoachBridge {
     }
 
     public func startVoice() throws {
+        // 前置校验，防的是「验证没区分『变成了』和『本来就是』」这个陷阱：
+        // 语音已经在跑时按「启动」，ChatGPT 多半什么都不做，而下面的
+        // waitUntil(isVoiceActive) 会立刻通过——我们以为启动成功了，实际上用户是
+        // 接着上一场没结束的通话在练，本次的考官提示词（可能是不同的 Part、
+        // 不同的反馈模式）完全没生效，而 App 显示一切正常。
+        guard !isVoiceActive() else {
+            throw BridgeError.stateNotReached(
+                "ChatGPT 里已经有一场语音通话在进行中，不能再开一场。"
+                + "下一步：先在 ChatGPT 窗口里结束当前通话，再重新开始练习。")
+        }
         let button = try locator.waitForControl(ChatGPTLabels.startVoice, timeout: shortTimeout)
         guard access.press(button.element) else {
             throw BridgeError.actionFailed("按下语音按钮失败。"
@@ -64,6 +74,13 @@ public final class AXDriver: CoachBridge {
     public func isVoiceActive() -> Bool { ChatGPTLabels.isVoiceActive(access.snapshotTree()) }
 
     public func endVoice() throws {
+        // 同样是前置校验：没有通话在跑时「结束通话」若被当成成功，
+        // 会掩盖「我们对语音状态的判断本来就错了」这件事。
+        guard isVoiceActive() else {
+            throw BridgeError.stateNotReached(
+                "ChatGPT 里没有正在进行的语音通话，无从结束。"
+                + "下一步：看一眼 ChatGPT 窗口确认通话是否已经结束；若已结束，直接继续取复盘即可。")
+        }
         let button = try locator.waitForControl(ChatGPTLabels.stopVoice, timeout: shortTimeout)
         guard access.press(button.element) else {
             throw BridgeError.actionFailed("按下结束语音按钮失败。"
