@@ -165,4 +165,51 @@ final class AppStateTests: XCTestCase {
         XCTAssertNil(app.loadError)
         XCTAssertTrue(app.state.questions.isEmpty)
     }
+
+    // MARK: - 导入题库必须真的落盘（铁律 7）
+
+    private func importResult(_ questions: [Question], title: String = "季度题库") -> ImportResult {
+        ImportResult(
+            questions: questions,
+            source: QuestionSource(title: title, sourceUrl: "",
+                                   importedAt: "2026-08-06T00:00:00Z",
+                                   importLevel: "full-question", questionCount: questions.count),
+            warnings: [])
+    }
+
+    func testImportMergesIntoTheBankAndWritesItToDisk() throws {
+        let app = AppState(directory: directory, preflight: { .init(ok: true, messages: []) })
+
+        let outcome = try app.applyImport(importResult([
+            Question(id: "q1", part: 1, topic: "Home", prompt: "Do you live in a house?"),
+            Question(id: "q2", part: 2, topic: "Skills", prompt: "Describe a useful skill.")
+        ]))
+
+        XCTAssertEqual(outcome.importedCount, 2)
+        XCTAssertEqual(outcome.totalCount, 2)
+        XCTAssertEqual(app.state.questions.map(\.id), ["q1", "q2"],
+                       "导入完界面上的题库没跟着变，用户会以为导入没生效")
+
+        // **这一段是这条测试的牙齿。** 只改内存不落盘的话上面三条照样全绿，
+        // 而用户重开一次 App 题就没了。所以换一个全新的 StateStore 从磁盘再读一遍。
+        let onDisk = try StateStore(directory: directory).load()
+        XCTAssertEqual(onDisk.questions.map(\.id), ["q1", "q2"], "题库没有写进 state.json")
+        XCTAssertEqual(onDisk.questionSources.map(\.title), ["季度题库"],
+                       "没记下这批题是从哪份文件来的")
+    }
+
+    func testImportingTheSameQuestionAgainUpdatesItInsteadOfDuplicating() throws {
+        // 雅思题库每季度换题，二次导入是常态。同 id 必须覆盖，不能变成两道一模一样的题。
+        let app = AppState(directory: directory, preflight: { .init(ok: true, messages: []) })
+        _ = try app.applyImport(importResult([
+            Question(id: "q1", part: 1, topic: "Home", prompt: "旧的题干")
+        ]))
+
+        let outcome = try app.applyImport(importResult([
+            Question(id: "q1", part: 1, topic: "Home", prompt: "新的题干")
+        ], title: "秋季题库"))
+
+        XCTAssertEqual(outcome.totalCount, 1, "同一道题被导入成了两道")
+        XCTAssertEqual(app.state.questions.map(\.prompt), ["新的题干"], "重新导入没有覆盖旧题干")
+    }
 }

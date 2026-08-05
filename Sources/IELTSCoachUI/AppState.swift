@@ -75,6 +75,30 @@ public final class AppState {
         isCheckingPermission = false
     }
 
+    /// 把一次题库导入并进现有题库、落盘，然后刷新内存里的状态。
+    ///
+    /// 放在这里而不是让视图自己去开 `StateStore`：`store` 与 `directory` 都是私有的，
+    /// 而它们私有是有道理的——App 与命令行必须写同一个目录，多一处解析目录就多一处走岔的机会。
+    ///
+    /// **写盘失败必须抛出来。** 本项目发生过 `try?` 吞掉写盘失败之后照样打印「✅ 已写入」
+    /// （铁律 7）；题库导入尤其不能这样——用户会以为题已经在库里了，
+    /// 下次打开却一道都没有，而中间那次「成功」的提示让他根本不会怀疑导入这一步。
+    @discardableResult
+    public func applyImport(_ result: ImportResult) throws -> QuestionBankImportOutcome {
+        let total = try store.mutate { state -> Int in
+            // merge 按 id 去重、同 id 后者覆盖前者。雅思题库每季度换题，
+            // 二次导入是常态而非边缘情况——不能变成两道一模一样的题。
+            state.questions = QuestionBankImporter.merge(existing: state.questions,
+                                                         incoming: result.questions)
+            state.questionSources.append(result.source)
+            return state.questions.count
+        }
+        reload()
+        return QuestionBankImportOutcome(importedCount: result.questions.count,
+                                         totalCount: total,
+                                         warnings: result.warnings)
+    }
+
     /// 把读盘失败翻译成用户能照做的一句话。
     ///
     /// **不能直接用 `error.localizedDescription`**：`CoachError` 自带中文的「下一步」，
