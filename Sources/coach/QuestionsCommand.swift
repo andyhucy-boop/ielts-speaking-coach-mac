@@ -9,7 +9,18 @@ enum QuestionsCommand {
         }
         switch sub {
         case "import": return importBank(path: args.count > 1 ? args[1] : nil)
-        case "list": return list(partFilter: args.count > 1 ? Int(args[1]) : nil)
+        case "list":
+            if args.count > 1 {
+                // 不能用 Int(args[1]) 直接转 —— 输入 "1a" 时它返回 nil，
+                // 会静默退化成「列出全部」，用户以为自己在看 Part 1 的题。
+                guard let part = Int(args[1]), (1...3).contains(part) else {
+                    print("❌ 「\(args[1])」不是有效的 Part。")
+                    print("   下一步：用 coach questions list 1（或 2、3）；不带参数则列出全部。")
+                    return 2
+                }
+                return list(partFilter: part)
+            }
+            return list(partFilter: nil)
         default:
             print("未知子命令：\(sub)。可用：import、list")
             return 2
@@ -22,6 +33,13 @@ enum QuestionsCommand {
             return 2
         }
         let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+           isDirectory.boolValue {
+            print("❌ 「\(url.path)」是个文件夹，不是题库文件。")
+            print("   下一步：指定文件夹里那个具体的 .csv 或 .json 文件。")
+            return 2
+        }
         guard let text = try? String(contentsOf: url, encoding: .utf8) else {
             print("❌ 读不到文件：\(url.path)")
             print("   下一步：确认路径正确、文件是 UTF-8 编码的文本，然后重试。")
