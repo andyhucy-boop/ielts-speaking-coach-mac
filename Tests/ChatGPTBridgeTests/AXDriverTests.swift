@@ -106,3 +106,26 @@ final class AXDriverTests: XCTestCase {
         }
     }
 }
+
+final class ClipboardFallbackTests: XCTestCase {
+    func testReadsPlainTextFromPasteboard() throws {
+        let pasteboard = FakePasteboard(contents: "  <<<IELTS_REVIEW_JSON>>>x<<<END_IELTS_REVIEW_JSON>>>  ")
+        XCTAssertEqual(try ClipboardFallback.readReview(from: pasteboard),
+                       "<<<IELTS_REVIEW_JSON>>>x<<<END_IELTS_REVIEW_JSON>>>")
+    }
+
+    func testEmptyPasteboardGivesActionableChineseError() {
+        XCTAssertThrowsError(try ClipboardFallback.readReview(from: FakePasteboard(contents: ""))) { error in
+            let message = "\(error)"
+            XCTAssertTrue(message.contains("剪贴板"))
+            XCTAssertTrue(message.contains("下一步"))
+        }
+    }
+
+    func testTooShortContentIsRejected() {
+        // 用户可能没选中就按了 ⌘C，剪贴板里是上一次复制的零碎内容
+        XCTAssertThrowsError(try ClipboardFallback.readReview(from: FakePasteboard(contents: "ok"))) { error in
+            XCTAssertTrue("\(error)".contains("太短"))
+        }
+    }
+}

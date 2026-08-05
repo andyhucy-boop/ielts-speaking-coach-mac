@@ -52,3 +52,9 @@ final class FakeAXAccess: AXAccess, @unchecked Sendable {
     }
     func sendReturnKey() -> Bool { returnKeyCount += 1; return true }
 }
+
+/// 可编程的假剪贴板，供 ClipboardFallbackTests 使用。
+struct FakePasteboard: PasteboardAccess {
+    let contents: String
+    func readString() -> String? { contents }
+}
