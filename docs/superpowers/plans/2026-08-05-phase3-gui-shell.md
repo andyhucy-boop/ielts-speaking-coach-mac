@@ -171,6 +171,17 @@ CoachApp.main()
 
 用系统 AppKit 画，不引入任何图片素材，也不依赖设计工具。
 
+> **⚠️ 下面这段 `make-icon.swift` 有缺陷，已在实现中修正，不要照抄。**
+> `writePNG` 里的 `NSImage(size:)` + `lockFocus()` 会跟随当前屏幕的
+> `backingScaleFactor`：Retina（2.0）上请求 16×16 得到的是 32×32 像素，1× 显示器上
+> 才是 16×16——产物随机器变化。而 `iconutil` 遇到像素尺寸与文件名不符的 PNG 会
+> **静默跳过**该表示、退出码仍是 0，结果 .icns 只剩 6 种表示（16×16、32×32、
+> 128×128、256×256 四档被悄悄丢掉），脚本却照样打印「✅」。
+> 实际实现改用显式的 `NSBitmapImageRep(bitmapDataPlanes:pixelsWide:pixelsHigh:…)`
+> + `NSGraphicsContext(bitmapImageRep:)`，并新增 `scripts/verify-iconset.sh` 校验
+> 10 个 PNG 的像素尺寸与 .icns 内的表示是否齐全，不齐全就中文报错退出。
+> 以 `scripts/` 下的实际文件与 `Tests/IELTSCoachUITests/IconPipelineTests.swift` 为准。
+
 `scripts/make-icon.swift`：
 
 ```swift
