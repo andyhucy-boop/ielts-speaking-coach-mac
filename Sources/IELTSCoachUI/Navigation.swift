@@ -48,7 +48,14 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// 占位页上「将来会有什么」那一句。
+    /// 占位页上的说明：**将来会有什么 + 现在该干什么**。
+    ///
+    /// 两句缺一不可。只写「将来会有」等于把用户扔在一页死路上——铁律 6 的
+    /// 「发生了什么 + 下一步做什么」不只管错误信息，空状态与界面提示同样算数
+    /// （DESIGN-SYSTEM 第 4 节「空状态（必须有，不能留白）」）。
+    ///
+    /// 「下一步」那句里必须点名 `placeholderFallback` 那一页，好跟下面的按钮对上；
+    /// 两边指向不同的页面，用户不知道该信哪个。`NavigationTests` 守着这件事。
     ///
     /// 放在这里而不是视图里，是为了让「有没有哪一页会摆出一片空白」这件事有测试管得住——
     /// 视图里的 `switch` 写漏一个分支只会安静地返回空字符串，没人看得见。
@@ -56,14 +63,57 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Sendable {
     public var placeholderDescription: String {
         switch self {
         case .today, .questionBank, .reviewReports: return ""
-        case .plan: return "将来在这里选 7/14/30 天周期、定重点 Part，并看每日拆分。"
-        case .retraining: return "将来在这里挑一个复盘里的目标，带着它重练，再换题验证。"
-        case .history: return "将来在这里按月回看每次练习的题目、复盘和录音。"
-        case .issues: return "将来在这里看反复出现的问题，以及它们有没有变少。"
-        case .vocabulary: return "将来在这里看积累的词汇，并导出到 Anki。"
-        case .upgrade: return "将来在这里看新版本与更新说明。"
-        case .feedback: return "将来在这里反馈问题。"
+        case .plan:
+            return "将来在这里选 7/14/30 天周期、定重点 Part，并看每日拆分。"
+                + "下一步：计划页做出来之前，先到「今日训练」照常练；练过的都会留着，"
+                + "将来排计划时直接接上。"
+        case .retraining:
+            return "将来在这里挑一个复盘里的目标，带着它重练，再换题验证。"
+                + "下一步：先到「复盘报告」看上一次留下的目标，照着它再练一遍——"
+                + "这一页要做的就是把这件事自动化。"
+        case .history:
+            return "将来在这里按月回看每次练习的题目、复盘和录音。"
+                + "下一步：先到「复盘报告」翻最近几次练习；这一页没做完不影响记录，"
+                + "它们都存在数据目录里。"
+        case .issues:
+            return "将来在这里看反复出现的问题，以及它们有没有变少。"
+                + "下一步：先到「复盘报告」看每次练习点出来的问题，"
+                + "同一个毛病连着出现几次，就是眼下最该盯的那个。"
+        case .vocabulary:
+            return "将来在这里看积累的词汇，并导出到 Anki。"
+                + "下一步：先到「复盘报告」看每次练习给出的词汇升级建议；"
+                + "想现在就背，可以自己先抄下来。"
+        case .upgrade:
+            return "将来在这里看新版本与更新说明。"
+                + "下一步：这一页没做完不影响任何功能，直接到「今日训练」继续练即可。"
+        case .feedback:
+            return "将来在这里一键复制诊断信息（版本、系统、环境检查结果），你自己决定粘给谁。"
+                + "下一步：这一页没做完不影响练习，可以直接到「今日训练」继续练；"
+                + "现在就想报问题，先把现象和当时的报错原文原样记下来。"
         }
+    }
+
+    /// 占位页上那个按钮点下去要去的页面——**现在就做得到的那件事在哪一页**。
+    ///
+    /// DESIGN-SYSTEM 第 4 节要求空状态给三样东西：一句现状、一句下一步、一个能点的按钮。
+    /// 光有前两样，用户读完还得自己回去翻侧边栏。
+    ///
+    /// 落点必须是一页**真做出来了**的页面（`isImplemented == true`）：
+    /// 把人从一个「还没做」送到另一个「还没做」，比不给按钮更气人。
+    /// 已实现的页面返回 nil——那儿不该冒出一个劝用户走开的按钮。
+    public var placeholderFallback: SidebarItem? {
+        switch self {
+        case .today, .questionBank, .reviewReports: return nil
+        case .plan, .upgrade, .feedback: return .today
+        case .retraining, .history, .issues, .vocabulary: return .reviewReports
+        }
+    }
+
+    /// 占位页那个按钮上的字。由 `placeholderFallback` 推出来，不单独维护一份——
+    /// 按钮写着「去复盘报告」却跳到今日训练，是照着两个 `switch` 手写时的经典翻车。
+    public var placeholderActionTitle: String {
+        guard let target = placeholderFallback else { return "" }
+        return "去「\(target.title)」"
     }
 }
 

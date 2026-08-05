@@ -1,10 +1,23 @@
+import ChatGPTBridge
+import Foundation
+import IELTSCoachCore
 import SwiftUI
 
 public struct RootView: View {
-    @State private var app = AppState()
+    @State private var app: AppState
     @State private var selection: SidebarItem? = .today
 
-    public init() {}
+    /// 生产入口：真实数据目录 + 真实的环境检查。
+    public init() { self.init(app: AppState()) }
+
+    /// 注入用，**预览必须走这一个**。
+    ///
+    /// 不带参数的 `AppState()` 用的是生产默认值：`AppState.livePreflight` 会
+    /// `NSWorkspace.open` 真的把 ChatGPT 启起来（铁律 5），`DataDirectory.resolve()`
+    /// 又会在用户真实的「应用程序支持」目录里建目录和 `.state.lock`。
+    /// 也就是说，在预览里直接写无参的 `RootView()`，会让「打开画布看一眼布局」这件事
+    /// 产生真实副作用。`PreviewSafetyTests` 扫源码守着这件事。
+    init(app: AppState) { _app = State(initialValue: app) }
 
     public var body: some View {
         // 外面这层 ZStack 不是为了排版：`.task` 必须挂在一个身份稳定的容器上。
@@ -76,29 +89,46 @@ public struct RootView: View {
             case .today: TodayView(app: app)
             case .questionBank: QuestionBankView(app: app)
             case .reviewReports: ReviewReportView(app: app)
-            default: PlaceholderView(item: current)
+            default: PlaceholderView(item: current, onGo: { selection = $0 })
             }
         }
     }
 }
 
-/// 未实现页面的占位。写明「还没做」与将来会有什么——
-/// 空白页会让用户以为程序坏了。
+/// 未实现页面的占位。按 DESIGN-SYSTEM 第 4 节「空状态（必须有，不能留白）」给足三样：
+/// **一句现状**（「还没做」）、**一句下一步**（现在真做得到的事，见 `placeholderDescription`）、
+/// **一个能直接点的按钮**（跳到那件事所在的页面）。
+///
+/// 只有前两样也不够：光写一句「可以先去今日训练」，用户读完还得自己回去翻侧边栏。
 struct PlaceholderView: View {
     let item: SidebarItem
+    /// 点了按钮之后把侧边栏选中项换到哪一页。由 `RootView` 提供——
+    /// 占位页自己不持有导航状态。
+    let onGo: (SidebarItem) -> Void
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 12) {
             Image(systemName: item.systemImage).font(.largeTitle).foregroundStyle(.secondary)
             Text("「\(item.title)」还没做").font(.title3)
             Text(item.placeholderDescription)
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+            if let target = item.placeholderFallback {
+                Button(item.placeholderActionTitle) { onGo(target) }
+                    .buttonStyle(.borderedProminent)
+            }
         }
         .padding(32)
         .frame(maxWidth: 480)
     }
 }
 
-#Preview { RootView() }
+/// 预览一律走注入：假的环境检查（不碰真的 ChatGPT）+ 临时目录（不碰用户真实的训练数据）。
+/// 见 `RootView.init(app:)` 的说明。
+#Preview {
+    RootView(app: AppState(
+        directory: DataDirectory(root: URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "ielts-coach-preview")),
+        preflight: { BridgeReadiness(ok: true, messages: ["✅ 环境就绪（预览用的假结果）"]) }))
+}

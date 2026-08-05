@@ -36,9 +36,12 @@ final class NavigationTests: XCTestCase {
         }
     }
 
-    /// 未实现的七页必须说清「还没做」和「将来会有什么」。
+    /// 未实现的七页必须说清「还没做」「将来会有什么」和**现在该干什么**。
     /// 空白页会让用户以为程序坏了——这条与错误信息的标准是同一条（成品标准第 8 条）。
-    func testEveryUnimplementedPageSaysWhatWillBeThere() {
+    ///
+    /// 「下一步」这一句不是可选的：只说「将来会有」等于把用户扔在一页死路上。
+    /// 铁律 6 把「发生了什么 + 下一步做什么」明确扩展到了空状态与界面提示。
+    func testEveryUnimplementedPageSaysWhatWillBeThereAndWhatToDoNow() {
         let unimplemented = SidebarItem.allCases.filter { !$0.isImplemented }
         XCTAssertEqual(unimplemented.count, 7)
         for item in unimplemented {
@@ -47,6 +50,40 @@ final class NavigationTests: XCTestCase {
             XCTAssertTrue(item.placeholderDescription.contains("将来"),
                           "「\(item.title)」的占位文案没说清将来会有什么："
                           + item.placeholderDescription)
+            XCTAssertTrue(item.placeholderDescription.contains("下一步"),
+                          "「\(item.title)」的占位文案只说了「将来」，没说用户现在能做什么："
+                          + item.placeholderDescription)
+        }
+    }
+
+    /// DESIGN-SYSTEM 第 4 节「空状态（必须有，不能留白）」要三样东西：
+    /// 一句现状、一句下一步、**一个能直接点的按钮**。上面那条测试守前两样，这条守第三样。
+    ///
+    /// 按钮的落点必须是一页**真做出来了**的页面：把用户从一个「还没做」送到另一个「还没做」，
+    /// 比不给按钮更气人。
+    func testEveryUnimplementedPageHasAButtonThatLeadsSomewhereThatExists() throws {
+        for item in SidebarItem.allCases.filter({ !$0.isImplemented }) {
+            let target = try XCTUnwrap(
+                item.placeholderFallback,
+                "「\(item.title)」的占位页上没有任何能点的东西，用户读完只能自己乱翻侧边栏")
+            XCTAssertTrue(
+                target.isImplemented,
+                "「\(item.title)」的按钮把用户送到同样还没做的「\(target.title)」，等于原地打转")
+            XCTAssertTrue(
+                item.placeholderActionTitle.contains(target.title),
+                "「\(item.title)」的按钮文字没说清点下去会到哪一页：" + item.placeholderActionTitle)
+            XCTAssertTrue(
+                item.placeholderDescription.contains(target.title),
+                "「\(item.title)」的「下一步」那句话和按钮指的不是同一页，用户不知道该信哪个："
+                    + item.placeholderDescription)
+        }
+    }
+
+    /// 已经做出来的页面不该冒出一个「先去别处」的按钮——那是在告诉用户这页也没做。
+    func testImplementedPagesCarryNoPlaceholderAction() {
+        for item in SidebarItem.allCases.filter(\.isImplemented) {
+            XCTAssertNil(item.placeholderFallback, "「\(item.title)」已经做出来了，不该再劝用户走开")
+            XCTAssertTrue(item.placeholderActionTitle.isEmpty, "同上：\(item.placeholderActionTitle)")
         }
     }
 
