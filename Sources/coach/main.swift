@@ -17,6 +17,8 @@ guard let command = args.first else {
 switch command {
 case "doctor":
     exit(DoctorCommand.run())
+case "questions":
+    exit(QuestionsCommand.run(Array(args.dropFirst())))
 default:
     print("未知命令：\(command)。运行 coach 查看用法。")
     exit(2)
