@@ -147,4 +147,27 @@ final class ExaminerPromptTests: XCTestCase {
         let text = ReviewRequestPrompt.build(requestID: "sync-1", focusPart: .part2)
         XCTAssertTrue(text.contains("一律用中文"))
     }
+
+    func testFullMockThreadsPart2PrepMode() {
+        let countdown = ExaminerPrompt.build(
+            setup: setup(focusPart: .fullMock, part2PrepMode: .countdown))
+        XCTAssertTrue(countdown.contains("Announce one minute of preparation"),
+                      "全真模考里有 Part 2，准备时间模式必须传进去")
+
+        let learnerLed = ExaminerPrompt.build(
+            setup: setup(focusPart: .fullMock, part2PrepMode: .learnerControlled))
+        XCTAssertTrue(learnerLed.contains("say \"I'm ready\""))
+        XCTAssertFalse(learnerLed.contains("Announce one minute of preparation"),
+                       "用户选了自己决定，不该再出现倒计时指令")
+    }
+
+    func testFullMockDoesNotCancelImmediateCorrections() {
+        let text = ExaminerPrompt.build(
+            setup: setup(focusPart: .fullMock, feedbackTiming: .immediate))
+        XCTAssertTrue(text.contains("After each answer"))
+        XCTAssertTrue(text.contains("does NOT cancel"),
+                      "必须明确「不在各 Part 之间总结」不等于「整场不给反馈」，否则会静默覆盖当场点评")
+        XCTAssertFalse(text.contains("without pausing for feedback between them"),
+                       "这句歧义表述应已被替换")
+    }
 }

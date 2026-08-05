@@ -123,8 +123,10 @@ public enum ExaminerPrompt {
         case .fullMock:
             return """
             Section rules (full mock):
-            - Run Part 1, Part 2, and Part 3 in order without pausing for feedback between them.
+            - Run Part 1, Part 2, and Part 3 in order. Do not deliver a review, summary, or score between parts.
+              This does NOT cancel the per-answer correction rule stated above, if one is in effect.
             - Apply each part's own timing and questioning rules.
+            - For the Part 2 long turn: \(part2PrepRule(for: part2PrepMode))
             """
         }
     }
