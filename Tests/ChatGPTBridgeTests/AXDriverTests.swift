@@ -33,9 +33,21 @@ final class AXDriverTests: XCTestCase {
     // shortTimeout(5.0)/stateTimeout(当时是 8.0，本轮改成 25.0，见下方
     // testDefaultTimeoutsMatchRealMeasuredStartupDelay)，导致「预期失败」的测试要真的
     // 等到超时才拿到结果。这里显式传短超时，让整个测试类的耗时从约 13 秒降到 1 秒以内。
-    private func driver(_ access: FakeAXAccess) -> AXDriver {
+    //
+    // Task 10（第二次耗时回归）：光有 shortTimeout/stateTimeout 还不够。sendText 等 Send 按钮、
+    // waitForAssistantReply 的采样间隔、复制之后等剪贴板这三处的节奏，此前是写死在
+    // AXDriver 里的字面量（2.0 / 0.5 / 0.8 秒），测试无从缩短——本类 33 条测试因此白等
+    // 11.4 秒，占全套 16 秒的七成。现在这三处也从构造函数注入，**产品默认值一个没动**
+    // （由 testDefaultPacingValuesMatchTheMeasuredOnes 钉住），测试统一传短值。
+    private func driver(_ access: FakeAXAccess,
+                        sendButtonTimeout: TimeInterval = 0.05,
+                        replySampleInterval: TimeInterval = 0.01,
+                        clipboardSettleDelay: TimeInterval = 0.02) -> AXDriver {
         AXDriver(access: access, locator: AXLocator(access: access, pollInterval: 0.01),
-                 shortTimeout: 0.2, stateTimeout: 0.2)
+                 shortTimeout: 0.05, stateTimeout: 0.05,
+                 sendButtonTimeout: sendButtonTimeout,
+                 replySampleInterval: replySampleInterval,
+                 clipboardSettleDelay: clipboardSettleDelay)
     }
 
     // 【超时太短】的直接回归测试：用户逐秒采样 25 秒实测，Live 语音第 9 秒才出现
@@ -50,6 +62,28 @@ final class AXDriverTests: XCTestCase {
         XCTAssertEqual(sut.stateTimeout, 25.0,
                        "实测 Live 语音第 9 秒才出现 Voice chat active；旧默认 8 秒正好卡在前一秒，"
                        + "25 秒才留得出余量")
+    }
+
+    // 与上面那条同样的作用，守的是 Task 10 新注入的三个节奏值：它们能从构造函数传短值
+    // 是为了让测试跑得快，**产品默认值必须原样不动**（铁律 9）。这三个数都不是随手写的：
+    //
+    // - 2.0 秒等 Send 按钮：实测普通聊天下写完文字按钮才出现，而语音模式下第 4 秒起
+    //   它就永远不再出现——等太短会漏掉刚要出现的按钮，等太久则每次语音发送都白等。
+    // - 0.5 秒采样间隔：连续三次不增长才算回复完，间隔太密会把流式输出的一次停顿
+    //   误判成结束。
+    // - 0.8 秒等剪贴板：按下复制按钮到 ChatGPT 真的写进剪贴板之间有延迟，不等就会
+    //   读到刚被清空的空剪贴板。
+    //
+    // 谁把这三个默认值调小来「让测试快一点」，这条测试就变红。
+    func testDefaultPacingValuesMatchTheMeasuredOnes() {
+        let access = FakeAXAccess()
+        let sut = AXDriver(access: access, locator: AXLocator(access: access))
+        XCTAssertEqual(sut.sendButtonTimeout, 2.0,
+                       "等 Send 按钮的默认时长不能改——语音模式下它永远不出现，靠等满这段时间才退回回车")
+        XCTAssertEqual(sut.replySampleInterval, 0.5,
+                       "判断「回复完了」的采样间隔不能改——间隔太密会把流式输出的停顿当成结束")
+        XCTAssertEqual(sut.clipboardSettleDelay, 0.8,
+                       "按下复制按钮后等剪贴板的时长不能改——不等会读到刚被自己清空的空剪贴板")
     }
 
     func testPreflightFailsWhenTargetMissing() {
@@ -109,6 +143,38 @@ final class AXDriverTests: XCTestCase {
         try driver(access).sendText("你好")
         XCTAssertEqual(access.returnKeyCount, 1, "没有 Send 按钮时必须退回模拟回车")
         XCTAssertTrue(access.pressedElements.isEmpty, "没有按钮可按，不该留下任何 press 记录")
+    }
+
+    // 上面那条「没有 Send 按钮就退回回车」有个前提：得先真的等一会儿。实测 Send 按钮是
+    // **写完文字之后**才出现的，写入的那一瞬间树上还没有它——立刻放弃就会在普通聊天状态下
+    // 也走回车，而回车在普通聊天状态下实测无效（spec 2.3.4），提示词根本发不出去。
+    //
+    // 这条测试让按钮晚 0.02 秒才出现，并给足 1 秒的等待窗口：实现若不等（例如把
+    // waitForControl 的 timeout 写成 0，或干脆不注入 sendButtonTimeout）会立刻退回回车，
+    // 断言当场变红。它同时证明构造函数传进去的 sendButtonTimeout 真的被用上了，
+    // 不是一个没人读的空参数。
+    func testSendTextWaitsForTheSendButtonToAppearInsteadOfFallingBackImmediately() throws {
+        let access = FakeAXAccess()
+        access.nodes = [composer(1)]   // 写入文字的这一刻，Send 按钮还没出现
+        access.onPress = { _, nodes in
+            for i in nodes.indices where nodes[i].role == "AXTextArea" { nodes[i].value = "" }
+        }
+        // 整树替换而不是 append：nodes 会被轮询线程并发读写，赋一份新数组与本文件
+        // 其余 asyncAfter 用例的写法一致（见 testWaitForVoiceComposerKeepsWaiting…）。
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.02) {
+            access.nodes = [
+                AXNodeSnapshot(element: AXElementRef(rawID: 1, epoch: 0), role: "AXTextArea",
+                               value: "你好", descriptionText: ChatGPTLabels.composerDescription),
+                AXNodeSnapshot(element: AXElementRef(rawID: 2, epoch: 0), role: "AXButton",
+                               descriptionText: "Send", childCount: 1, childRoles: ["AXImage"])
+            ]
+        }
+
+        try driver(access, sendButtonTimeout: 1.0).sendText("你好")
+
+        XCTAssertEqual(access.pressedElements.map(\.rawID), [2],
+                       "Send 按钮是写完文字之后才出现的，必须等它出现再按，不能立刻退回回车")
+        XCTAssertEqual(access.returnKeyCount, 0, "等到了按钮就不该再模拟回车")
     }
 
     // 两条路都没能让输入框变空——必须响亮报错，不能静默判定成功（呼应第 2 条修复
@@ -367,15 +433,36 @@ final class AXDriverTests: XCTestCase {
             AXNodeSnapshot(element: AXElementRef(rawID: 1, epoch: 0), role: "AXStaticText", value: "")
         ]
         // 模拟流式输出：先出现一段还没达到门槛长度的文本，随后才涨到最终长度并停止变化。
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) {
+        // 两个时刻按 driver(_:) 的采样间隔（0.01 秒）取值——只要中间那段能被采到几次即可，
+        // 拖长只会让套件变慢（Task 10）。timeout 传的是 5 秒，慢机器上也不会误判超时。
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.03) {
             access.nodes = [AXNodeSnapshot(element: AXElementRef(rawID: 1, epoch: 0), role: "AXStaticText",
                                            value: String(finalText.prefix(20)))]
         }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) {
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.08) {
             access.nodes = [AXNodeSnapshot(element: AXElementRef(rawID: 1, epoch: 0), role: "AXStaticText",
                                            value: finalText)]
         }
         try driver(access).waitForAssistantReply(timeout: 5)
+    }
+
+    // 耗时回归的守门测试（Task 10）：采样间隔必须用构造时传进来的值。
+    // 写死 0.5 秒的话，「连续三次不增长」最少要 1.5 秒，光这三条 waitForAssistantReply
+    // 测试就要白等 4 秒。这里给 0.01 秒的间隔，正常应在几十毫秒内返回；
+    // 把实现改回写死的 0.5 秒，耗时会跳到 1.5 秒以上，这条断言当场变红——
+    // 也就是说这个回归下次会被测试抓住，而不是只表现为「套件慢了」。
+    func testWaitForAssistantReplySamplesAtTheIntervalItWasGiven() throws {
+        let access = FakeAXAccess()
+        access.nodes = [
+            AXNodeSnapshot(element: AXElementRef(rawID: 1, epoch: 0), role: "AXStaticText",
+                           value: String(repeating: "考官反馈内容", count: 10))   // 60 字符，一开始就够长
+        ]
+        let started = Date()
+        try driver(access, replySampleInterval: 0.01).waitForAssistantReply(timeout: 5)
+        let elapsed = Date().timeIntervalSince(started)
+        XCTAssertLessThan(elapsed, 0.5,
+                          "采样间隔应当用传入的 0.01 秒（三次采样约 0.03 秒）；实际耗时 \(elapsed) 秒，"
+                          + "说明实现里的间隔是写死的，测试没法把它调快")
     }
 
     func testWaitForAssistantReplyThrowsActionableErrorWhenTextNeverLongEnough() {
@@ -423,6 +510,27 @@ final class AXDriverTests: XCTestCase {
                        "必须按下最后一个 Copy 按钮，不能按用户自己消息的 Copy message，"
                        + "也不能按更早一轮的 Copy")
         XCTAssertEqual(captured, review)
+    }
+
+    // 同上，守的是「按下复制按钮之后等剪贴板」那一步。写死 0.8 秒时，两条走到这一步的
+    // 测试各白等 0.8 秒。传 0.02 秒应当在几十毫秒内返回；改回写死会跳到 0.8 秒以上，变红。
+    func testCopyLatestAssistantMessageWaitsOnlyTheClipboardDelayItWasGiven() throws {
+        let access = FakeAXAccess()
+        access.nodes = [control(1, "Copy")]
+        let pasteboard = FakePasteboard(contents: "")
+        let review = "<<<IELTS_REVIEW_JSON:sync-2>>>" + String(repeating: "复盘内容", count: 60)
+            + "<<<END_IELTS_REVIEW_JSON:sync-2>>>"
+        access.onPress = { _, _ in pasteboard.simulateExternalWrite(review) }
+
+        let started = Date()
+        let captured = try driver(access, clipboardSettleDelay: 0.02)
+            .copyLatestAssistantMessage(pasteboard: pasteboard, timeout: 0.5)
+        let elapsed = Date().timeIntervalSince(started)
+
+        XCTAssertEqual(captured, review)
+        XCTAssertLessThan(elapsed, 0.3,
+                          "等剪贴板的时长应当用传入的 0.02 秒；实际耗时 \(elapsed) 秒，"
+                          + "说明实现里的等待是写死的，测试没法把它调快")
     }
 
     func testCopyLatestAssistantMessageFailsActionablyWhenPressFails() {

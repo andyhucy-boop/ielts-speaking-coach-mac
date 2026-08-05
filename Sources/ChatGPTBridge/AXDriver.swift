@@ -7,19 +7,40 @@ import Foundation
 public final class AXDriver: CoachBridge, Sendable {
     private let access: any AXAccess
     private let locator: AXLocator
-    // 不标 private：只是为了让 AXDriverTests 能直接断言默认值本身是对的
-    // （见 testDefaultTimeoutsMatchRealMeasuredStartupDelay），不属于对外公开的 API——
-    // `coach` 可执行 target 从不读取这两个字段，只调用 AXDriver/CoachBridge 的方法。
+    // 下面这五个字段都不标 private：只是为了让 AXDriverTests 能直接断言默认值本身是对的
+    // （见 testDefaultTimeoutsMatchRealMeasuredStartupDelay 与
+    // testDefaultPacingValuesMatchTheMeasuredOnes），不属于对外公开的 API——
+    // `coach` 可执行 target 从不读取它们，只调用 AXDriver/CoachBridge 的方法。
     let shortTimeout: TimeInterval
     let stateTimeout: TimeInterval
+    /// 写完提示词后等 Send 按钮出现的时长。**实测：按钮是写完文字之后才出现的**，
+    /// 而语音模式下它从第 4 秒起就再没出现过（采样到第 25 秒）——所以既不能不等，
+    /// 也不能等太久：等满这段时间就退回模拟回车。
+    let sendButtonTimeout: TimeInterval
+    /// `waitForAssistantReply` 两次采样之间的间隔。判据是「够长的文本连续三次采样不再增长」，
+    /// 间隔太密会把流式输出中间的一次停顿误判成「回复完了」。
+    let replySampleInterval: TimeInterval
+    /// 按下复制按钮之后，留给 ChatGPT 把内容写进剪贴板的时间。不等就会读到刚被自己清空的
+    /// 空剪贴板，把「复制成功」误判成「剪贴板是空的」。
+    let clipboardSettleDelay: TimeInterval
     /// 决定 preflight 的提示该让用户勾选谁、该拿什么办法收集诊断信息。见 `HostEnvironment`。
     private let host: HostEnvironment
 
+    /// 后三个节奏参数以前是方法体里的字面量，测试无从缩短，导致 `AXDriverTests` 一个类
+    /// 就白等 11 秒（Task 10 的耗时回归）。**它们的默认值全部是实测定的，不许为了让测试
+    /// 跑得快去改默认值**——要短就在测试里显式传（`AXDriverTests.driver(_:)` 的做法），
+    /// 默认值本身由 `testDefaultPacingValuesMatchTheMeasuredOnes` 钉住。
     public init(access: any AXAccess, locator: AXLocator,
                 shortTimeout: TimeInterval = 5.0, stateTimeout: TimeInterval = 25.0,
+                sendButtonTimeout: TimeInterval = 2.0,
+                replySampleInterval: TimeInterval = 0.5,
+                clipboardSettleDelay: TimeInterval = 0.8,
                 host: HostEnvironment = .current) {
         self.access = access; self.locator = locator
         self.shortTimeout = shortTimeout; self.stateTimeout = stateTimeout
+        self.sendButtonTimeout = sendButtonTimeout
+        self.replySampleInterval = replySampleInterval
+        self.clipboardSettleDelay = clipboardSettleDelay
         self.host = host
     }
 
@@ -70,7 +91,8 @@ public final class AXDriver: CoachBridge, Sendable {
         // 都失败就报错。press/sendReturnKey 的返回值不单独判断：kAXPressAction 返回 true
         // 不代表 ChatGPT 真收到了（按钮被禁用、焦点跑掉时也可能返回 true），唯一可信的
         // 判据还是下面这条「输入框空了」。
-        if let send = try? locator.waitForControl(ChatGPTLabels.sendMessage, timeout: 2.0) {
+        if let send = try? locator.waitForControl(ChatGPTLabels.sendMessage,
+                                                  timeout: sendButtonTimeout) {
             _ = access.press(send.element)
         } else {
             _ = access.sendReturnKey()
@@ -168,7 +190,7 @@ public final class AXDriver: CoachBridge, Sendable {
                 stableTicks = 0
             }
             previousLongest = longest
-            Thread.sleep(forTimeInterval: 0.5)
+            Thread.sleep(forTimeInterval: replySampleInterval)
         }
         throw BridgeError.stateNotReached(
             "等了 \(Int(timeout)) 秒，ChatGPT 还没把考官指令回复完。"
@@ -252,7 +274,7 @@ public final class AXDriver: CoachBridge, Sendable {
             throw BridgeError.actionFailed("按下复制按钮失败。"
                 + "下一步：手动选中整段复盘按 ⌘C，然后按提示继续。")
         }
-        Thread.sleep(forTimeInterval: 0.8)   // 给剪贴板写入留时间
+        Thread.sleep(forTimeInterval: clipboardSettleDelay)   // 给剪贴板写入留时间
         return try ClipboardFallback.readReview(from: pasteboard)
     }
 }
