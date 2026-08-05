@@ -30,6 +30,15 @@ final class FakeAXAccess: AXAccess, @unchecked Sendable {
     /// 不能让"自动清空"成为默认行为，否则「操作后验证」这条防线在测试里永远测不出东西。
     var onSendReturnKey: ((inout [AXNodeSnapshot]) -> Void)?
 
+    /// 每次 `snapshotTree()` 取树**之前**执行，参数是本次取树的序号（从 1 开始）。
+    /// 用来模拟「界面随一次次采样而变化」——例如 ChatGPT 流式输出时越来越长的回复。
+    ///
+    /// 为什么按采样序号而不是按墙上时钟（`asyncAfter`）：被测代码的判据是
+    /// 「连续几次采样之间变没变」，按时钟摆状态的话，慢机器上同一段中间态会被多采几次，
+    /// 正确实现反而会提前认定「不再增长」而返回——测试时红时绿，且红的是对的实现。
+    /// 按序号摆状态则与机器快慢无关，每次跑的执行路径完全一样。
+    var onSnapshot: ((Int, inout [AXNodeSnapshot]) -> Void)?
+
     func isTargetInstalled() -> Bool { installed }
     func isTargetRunning() -> Bool { running }
     func isAccessibilityTrusted() -> Bool { trusted }
@@ -37,6 +46,7 @@ final class FakeAXAccess: AXAccess, @unchecked Sendable {
     func wakeAccessibilityTree(timeout: TimeInterval) -> Bool { wakeSucceeds }
     func snapshotTree() -> [AXNodeSnapshot] {
         snapshotCount += 1
+        onSnapshot?(snapshotCount, &nodes)
         currentEpoch += 1
         nodes = nodes.map { node in
             var stamped = node

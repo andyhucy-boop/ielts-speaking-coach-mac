@@ -298,8 +298,14 @@ final class AXDriverTests: XCTestCase {
         access.nodes = [composer(1)]   // 只有 "Message ChatGPT"——实测第 9~11 秒那个窗口
         // 直接构造节点而不是调用 self.voiceComposer(_:)：DispatchQueue.global().asyncAfter
         // 的闭包是 @Sendable 的，捕获 self（非 Sendable 的 XCTestCase 子类）会触发警告；
-        // 与本文件其余 asyncAfter 用例（如 testWaitForAssistantReplyWaitsForStreamingToStopBeforeReturning）
-        // 保持同样的写法。
+        // 与本文件另一处 asyncAfter 用例
+        // （testSendTextWaitsForTheSendButtonToAppearInsteadOfFallingBackImmediately）写法一致。
+        //
+        // 已知隐患（本次未改，见报告）：后台改 access.nodes 与 snapshotTree() 内部的
+        // 「读—map—写回」不是原子的，后台那次写有极小概率被盖掉，此测试随即空等到超时而假红。
+        // 本次跑突变验证时真的撞见过一次。想去掉这个隐患，用新加的 access.onSnapshot
+        // 按采样序号摆状态即可（见 FakeAXAccess），但 AXLocatorTests 里还有三处同样的写法，
+        // 应当一并处理，不适合在这条复审里顺手改。
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) {
             access.nodes = [AXNodeSnapshot(element: AXElementRef(rawID: 2, epoch: 0), role: "AXTextArea",
                                            descriptionText: ChatGPTLabels.voiceComposerDescription)]
@@ -428,22 +434,36 @@ final class AXDriverTests: XCTestCase {
 
     func testWaitForAssistantReplyWaitsForStreamingToStopBeforeReturning() throws {
         let access = FakeAXAccess()
-        let finalText = String(repeating: "考官反馈内容", count: 10)   // 60 字符
-        access.nodes = [
-            AXNodeSnapshot(element: AXElementRef(rawID: 1, epoch: 0), role: "AXStaticText", value: "")
-        ]
-        // 模拟流式输出：先出现一段还没达到门槛长度的文本，随后才涨到最终长度并停止变化。
-        // 两个时刻按 driver(_:) 的采样间隔（0.01 秒）取值——只要中间那段能被采到几次即可，
-        // 拖长只会让套件变慢（Task 10）。timeout 传的是 5 秒，慢机器上也不会误判超时。
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.03) {
-            access.nodes = [AXNodeSnapshot(element: AXElementRef(rawID: 1, epoch: 0), role: "AXStaticText",
-                                           value: String(finalText.prefix(20)))]
+        // 逐次采样看到的文本长度。关键在中间三档：**已经超过 minimumLength(60)、
+        // 但还在继续变长**——这正是「ChatGPT 还在往外吐字」的样子，也是唯一能把
+        // 「等它不再增长」和「一够长就返回」两种实现区分开的状态。
+        //
+        // 这条测试此前摆的中间态只有 20 字符（够不到门槛），两种实现表现完全一致，
+        // 于是把 waitForAssistantReply 的整段稳定判据换成 `if longest >= minimumLength { return }`
+        // 也照样全绿——而那正是「回复还没完就进语音 → 考官设定丢失」的故障路径。
+        let lengthsPerSample = [0, 72, 96, 150]      // 第 2 次采样起就已经够长，但一直在涨
+        let finalLength = 180                        // 第 5 次采样起停止增长
+        access.onSnapshot = { sample, nodes in
+            let length = sample <= lengthsPerSample.count ? lengthsPerSample[sample - 1] : finalLength
+            nodes = [AXNodeSnapshot(element: AXElementRef(rawID: 1, epoch: 0), role: "AXStaticText",
+                                    value: String(repeating: "考", count: length))]
         }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.08) {
-            access.nodes = [AXNodeSnapshot(element: AXElementRef(rawID: 1, epoch: 0), role: "AXStaticText",
-                                           value: finalText)]
-        }
+
         try driver(access).waitForAssistantReply(timeout: 5)
+
+        // 断言采样次数而不是耗时：耗时 =（采样次数 - 1）× 采样间隔，两者等价，
+        // 但采样次数不受机器快慢和调度抖动影响，不会在 CI 上时红时绿。
+        //
+        // 第 5 次采样才第一次看到最终文本，此后还要连续三次采到同样长度才算流式结束，
+        // 因此最早只能在第 8 次采样返回。少于 8 次 = 在它还在涨的时候就返回了。
+        XCTAssertGreaterThanOrEqual(access.snapshotCount, 8,
+                                    "文本已经够长但还在继续变长时就返回了（只采了 \(access.snapshotCount) 次）——"
+                                    + "真机上这等于 ChatGPT 还没说完就被判定回复完，"
+                                    + "带着残缺的考官设定进语音")
+        // 上界防的是反方向：把「连续三次」悄悄改大，每多一次真机上就多等 0.5 秒。
+        XCTAssertLessThanOrEqual(access.snapshotCount, 10,
+                                 "停止增长后等了 \(access.snapshotCount - 5) 次采样才返回，超过约定的三次；"
+                                 + "真机采样间隔 0.5 秒，每多一次就让用户多等半秒")
     }
 
     // 耗时回归的守门测试（Task 10）：采样间隔必须用构造时传进来的值。
