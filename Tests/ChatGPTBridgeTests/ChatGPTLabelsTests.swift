@@ -47,4 +47,32 @@ final class ChatGPTLabelsTests: XCTestCase {
             XCTAssertTrue(ChatGPTLabels.startVoice.contains(observed), "候选集合缺少实测标签：\(observed)")
         }
     }
+
+    func testComposerUsesTheOnlyTextAreaWhenDescriptionDoesNotMatch() {
+        // 只有一个文本框 → 无歧义，可以用
+        let onlyOne = AXNodeSnapshot(element: AXElementRef(rawID: 1, epoch: 0),
+                                     role: "AXTextArea", descriptionText: "改版后的新描述")
+        XCTAssertEqual(ChatGPTLabels.composer(among: [onlyOne])?.element,
+                       AXElementRef(rawID: 1, epoch: 0))
+    }
+
+    func testComposerRefusesToGuessAmongMultipleTextAreas() {
+        // 两个以上 → 必须失败，不能闭眼取第一个
+        let search = AXNodeSnapshot(element: AXElementRef(rawID: 1, epoch: 0),
+                                    role: "AXTextArea", descriptionText: "Search")
+        let rename = AXNodeSnapshot(element: AXElementRef(rawID: 2, epoch: 0),
+                                    role: "AXTextArea", descriptionText: "Rename chat")
+        XCTAssertNil(ChatGPTLabels.composer(among: [search, rename]),
+                     "有多个文本框时猜错的后果是把考官提示词写进搜索框，且用户毫无线索")
+        XCTAssertEqual(ChatGPTLabels.candidateComposers(among: [search, rename]).count, 2)
+    }
+
+    func testStructuralMismatchesReportsWrongRoleWithIconOnlyChild() {
+        // label 命中、只有一个 AXImage 子节点、但 role 不是控制类 —— 必须被报告
+        let odd = AXNodeSnapshot(element: AXElementRef(rawID: 9, epoch: 0), role: "AXGroup",
+                                 descriptionText: "Start voice chat",
+                                 childCount: 1, childRoles: ["AXImage"])
+        XCTAssertEqual(ChatGPTLabels.structuralMismatches(ChatGPTLabels.startVoice, among: [odd]).count, 1,
+                       "role 不符的元素也该进诊断，否则排查时看到的情况比实际更干净")
+    }
 }
