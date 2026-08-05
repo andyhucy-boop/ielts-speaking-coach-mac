@@ -113,14 +113,19 @@ public struct AXNodeSnapshot: Equatable, Sendable {
     public var title: String
     public var value: String
     public var descriptionText: String
+    /// kAXIdentifierAttribute。**不能省** —— axprobe dump 靠它区分元素，
+    /// 实测 640 个节点里有 152 个（24%）带这个属性。ChatGPT 改版后做取证对比时，
+    /// 标签本身会变（已见过三种语音按钮标签），identifier 是少数相对稳定的线索。
+    public var identifier: String
     public var childCount: Int
     public var childRoles: [String]
 
     public init(element: AXElementRef, role: String, subrole: String = "", title: String = "",
-                value: String = "", descriptionText: String = "",
+                value: String = "", descriptionText: String = "", identifier: String = "",
                 childCount: Int = 0, childRoles: [String] = []) {
         self.element = element; self.role = role; self.subrole = subrole
         self.title = title; self.value = value; self.descriptionText = descriptionText
+        self.identifier = identifier
         self.childCount = childCount; self.childRoles = childRoles
     }
 
