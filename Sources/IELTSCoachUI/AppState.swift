@@ -99,6 +99,23 @@ public final class AppState {
                                          warnings: result.warnings)
     }
 
+    /// 读出某次练习的复盘，拆成复盘报告页要显示的分区。
+    ///
+    /// 放在这里而不是让视图自己拼路径，理由和 `applyImport` 一样：`directory` 是私有的，
+    /// 而它私有是有道理的——App 与命令行必须读同一个目录，多一处解析目录就多一处走岔的机会。
+    /// `reportPath` 存的是相对数据目录的路径，视图手上没有那个目录，也不该有。
+    ///
+    /// **失败必须抛出来。** 复盘打不开时给一块空白，用户会以为练了半小时的记录没了；
+    /// 实际上原文一直在磁盘上，只是这一页得把路径和下一步告诉他（铁律 6、7）。
+    public func loadReview(for session: PracticeSession) throws -> ReviewDocument {
+        try ReviewReportLoader.load(session: session, in: directory)
+    }
+
+    /// 某次练习的复盘原文在磁盘上的绝对路径。界面用它做「在访达中显示」。
+    public func reviewURL(for session: PracticeSession) -> URL {
+        ReviewReportLoader.reportURL(for: session, in: directory)
+    }
+
     /// 把读盘失败翻译成用户能照做的一句话。
     ///
     /// **不能直接用 `error.localizedDescription`**：`CoachError` 自带中文的「下一步」，

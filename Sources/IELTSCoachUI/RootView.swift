@@ -88,7 +88,7 @@ public struct RootView: View {
             switch current {
             case .today: TodayView(app: app)
             case .questionBank: QuestionBankView(app: app)
-            case .reviewReports: ReviewReportView(app: app)
+            case .reviewReports: ReviewReportView(app: app, onGo: { selection = $0 })
             default: PlaceholderView(item: current, onGo: { selection = $0 })
             }
         }
