@@ -851,7 +851,11 @@ public final class AXDriver: CoachBridge {
         guard ok else { return BridgeReadiness(ok: false, messages: messages) }
 
         if !access.isTargetRunning() {
-            try? access.launchTarget()
+            do { try access.launchTarget() } catch {
+                messages.append("❌ 没能启动 ChatGPT：\(error.localizedDescription)。"
+                    + "下一步：手动打开 ChatGPT 并进入一个会话，然后重试。")
+                return BridgeReadiness(ok: false, messages: messages)
+            }
         }
         if !access.wakeAccessibilityTree(timeout: 8.0) {
             messages.append("⚠️ ChatGPT 的无障碍树没能唤醒，可能读不到对话内容。"
@@ -871,6 +875,14 @@ public final class AXDriver: CoachBridge {
             throw BridgeError.actionFailed("文字已写入输入框但没能发送。"
                 + "下一步：切到 ChatGPT 窗口手动按一下回车。")
         }
+        // 操作后验证。sendReturnKey 返回 true 不代表 ChatGPT 真收到了——
+        // 发送键被禁用、焦点跑掉时它也可能返回 true。而这条路径失败被当成成功的后果
+        // 特别严重：考官提示词没发出去，语音却正常启动，ChatGPT 就是个普通聊天机器人，
+        // 用户要练完一整场、等复盘出来是一团乱麻才发现不对。
+        // 判据：发送成功后输入框里不该还是我们刚写进去的那段文字。
+        try locator.waitUntil({ nodes in
+            ChatGPTLabels.composer(among: nodes).map { $0.value != text } ?? true
+        }, timeout: shortTimeout, describing: "提示词发送到 ChatGPT")
     }
 
     public func startVoice() throws {
@@ -915,11 +927,27 @@ public final class AXDriver: CoachBridge {
 
     /// 读回最新的助手消息。取 AXStaticText 里最长的一条——
     /// 复盘 JSON 远长于界面上任何其他文字，这个启发式在实测中稳定。
-    public func captureLatestAssistantMessage() throws -> String {
-        let texts = access.snapshotTree()
+    /// 读回复盘。`expectedMarker` 给出时**必须**命中它——
+    /// 只挑「最长的文本」是个假阳性温床：用户自己粘贴过的长文、更早轮次残留在树上的消息、
+    /// 设置面板里的长段说明，都可能比真复盘更长。取错的后果是存进档案的「复盘」根本不是复盘，
+    /// 而解析器只检查有没有那几个字段，很可能不报错。
+    public func captureLatestAssistantMessage(expectedMarker: String? = nil) throws -> String {
+        let allTexts = access.snapshotTree()
             .filter { $0.role == "AXStaticText" }
             .map(\.value)
-            .filter { $0.count >= 40 }
+
+        if let marker = expectedMarker {
+            let matching = allTexts.filter { $0.contains(marker) }
+            guard let best = matching.max(by: { $0.count < $1.count }) else {
+                throw BridgeError.elementNotFound(
+                    "在 ChatGPT 窗口里没找到带本次标记的复盘，它可能还没输出完、或者没按要求的格式输出。"
+                    + "下一步：等它输出完再重试；若已经输出完但格式不对，"
+                    + "在 ChatGPT 里选中整段复盘按 ⌘C，然后按提示继续。")
+            }
+            return best
+        }
+
+        let texts = allTexts.filter { $0.count >= 40 }
         guard let longest = texts.max(by: { $0.count < $1.count }) else {
             throw BridgeError.elementNotFound(
                 "没能从 ChatGPT 窗口读到足够长的文字，复盘可能还没生成完。"
@@ -1013,7 +1041,11 @@ public struct SystemPasteboard: PasteboardAccess {
 
 public enum ClipboardFallback {
     /// 复盘 JSON 至少这么长。低于此长度多半是用户没选中就按了 ⌘C。
-    public static let minimumLength = 40
+    ///
+    /// **40 太松**：光两个定界标记加起来就超过 40 字符，等于没有防护。
+    /// 真实的复盘 JSON 含 must_correct / answer_upgrades 等多个数组，实测都在数百字符以上。
+    /// 取 200 作为下限：足以挡掉误复制的零碎内容，又不至于误伤特别简短的复盘。
+    public static let minimumLength = 200
 
     public static func readReview(from pasteboard: any PasteboardAccess) throws -> String {
         let raw = (pasteboard.readString() ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
