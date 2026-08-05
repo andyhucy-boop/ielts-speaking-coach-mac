@@ -3,11 +3,16 @@ import Foundation
 
 public protocol PasteboardAccess: Sendable {
     func readString() -> String?
+    /// 清空剪贴板。**按复制按钮之前必须先调用它**——不清空的话，若按钮按下去了但目标应用
+    /// 没有真的写剪贴板（例如界面改版、复制功能悄悄失效），读到的会是清空前的旧内容，
+    /// 也就是「静默拿到错误数据」，比读不到更危险。见 `AXDriver.copyLatestAssistantMessage`。
+    func clear()
 }
 
 public struct SystemPasteboard: PasteboardAccess {
     public init() {}
     public func readString() -> String? { NSPasteboard.general.string(forType: .string) }
+    public func clear() { NSPasteboard.general.clearContents() }
 }
 
 public enum ClipboardFallback {

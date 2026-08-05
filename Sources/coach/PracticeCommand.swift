@@ -209,18 +209,35 @@ enum PracticeCommand {
         }
     }
 
-    /// 先试 AX 自动读，失败则降级到剪贴板。两条路都失败时给出可执行的下一步。
-    /// `expectedMarker` 必须是本次复盘请求的标记（见调用处），不能省略。
+    /// 取复盘：三级降级，每级失败都打印一句「为什么换下一条路」，让用户知道发生了什么，
+    /// 而不是默默换路。`expectedMarker` 必须是本次复盘请求的标记（见调用处），不能省略。
+    ///
+    /// ① 按 ChatGPT 自己的复制按钮 + 读剪贴板——主路径。复盘在 AX 树里被切成大量碎片
+    ///    节点（连定界标记本身都被拆成三段），逐节点匹配「包含完整标记」的旧路径（②）
+    ///    永远找不到；复制按钮由应用自身保证内容完整，且与内容有没有滚出屏幕无关
+    ///    （见 spec 2.3.9）。
+    /// ② AX 直接读（带标记）——万一复制按钮本身找不到（ChatGPT 又改了界面），还留一条
+    ///    路试试，不至于直接落到最麻烦的手动兜底。
+    /// ③ 提示用户手动 ⌘C——最终兜底，两条自动路径都失败时才用。
     private static func captureReview(driver: AXDriver, expectedMarker: String,
                                       enter: EnterWaiter) -> String? {
-        do { return try driver.captureLatestAssistantMessage(expectedMarker: expectedMarker) } catch {
-            print("⚠️  \(error.localizedDescription)")
-            print("\n请在 ChatGPT 里选中整段复盘按 ⌘C，然后回到这里按回车。")
-            enter.waitForPress()
-            do { return try ClipboardFallback.readReview(from: SystemPasteboard()) } catch {
-                print("❌ \(error.localizedDescription)")
-                return nil
-            }
+        do {
+            return try driver.copyLatestAssistantMessage(pasteboard: SystemPasteboard(), timeout: 10)
+        } catch {
+            print("⚠️  复制按钮这条路没走通，改试直接读 AX 树：\(error.localizedDescription)")
+        }
+
+        do {
+            return try driver.captureLatestAssistantMessage(expectedMarker: expectedMarker)
+        } catch {
+            print("⚠️  直接读 AX 树也没读到，改成手动兜底：\(error.localizedDescription)")
+        }
+
+        print("\n请在 ChatGPT 里选中整段复盘按 ⌘C，然后回到这里按回车。")
+        enter.waitForPress()
+        do { return try ClipboardFallback.readReview(from: SystemPasteboard()) } catch {
+            print("❌ \(error.localizedDescription)")
+            return nil
         }
     }
 

@@ -70,8 +70,23 @@ final class FakeAXAccess: AXAccess, @unchecked Sendable {
     }
 }
 
-/// 可编程的假剪贴板，供 ClipboardFallbackTests 使用。
-struct FakePasteboard: PasteboardAccess {
-    let contents: String
+/// 可编程的假剪贴板，供 ClipboardFallbackTests / AXDriverTests 使用。
+///
+/// 从 struct 换成 class：`clear()` 需要真的改掉内容，并且这个改动要能被调用方
+/// （`copyLatestAssistantMessage` 拿到的是 `any PasteboardAccess`）后续的 `readString()`
+/// 感知到。struct 是值语义，函数参数拿到的只是一份拷贝，在其内部调用再多 mutating
+/// 方法也不会影响调用方手里那个实例——用 class 才能让「测试里按下按钮的回调改动剪贴板」
+/// 与「production 代码随后读取剪贴板」看到的是同一份状态。
+final class FakePasteboard: PasteboardAccess, @unchecked Sendable {
+    private(set) var contents: String
+    private(set) var wasCleared = false
+
+    init(contents: String) { self.contents = contents }
+
     func readString() -> String? { contents }
+    func clear() { contents = ""; wasCleared = true }
+
+    /// 测试专用：模拟「按下复制按钮后，ChatGPT 真的把内容写进了剪贴板」。
+    /// 不叫 `write`，避免和某个真实协议方法同名造成误解——这纯粹是测试装置。
+    func simulateExternalWrite(_ text: String) { contents = text }
 }

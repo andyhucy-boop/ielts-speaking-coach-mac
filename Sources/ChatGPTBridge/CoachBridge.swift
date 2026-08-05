@@ -39,6 +39,8 @@ public protocol CoachBridge {
     func captureLatestAssistantMessage(expectedMarker: String?) throws -> String
     /// 等 ChatGPT 把上一条消息回复完，见 `AXDriver.waitForAssistantReply`。
     func waitForAssistantReply(timeout: TimeInterval, minimumLength: Int) throws
+    /// 按 ChatGPT 自己的复制按钮取回最新一条回复，见 `AXDriver.copyLatestAssistantMessage`。
+    func copyLatestAssistantMessage(pasteboard: any PasteboardAccess, timeout: TimeInterval) throws -> String
 }
 
 extension CoachBridge {

@@ -130,6 +130,50 @@ final class ChatGPTLabelsTests: XCTestCase {
                        AXElementRef(rawID: 6, epoch: 0))
     }
 
+    func testCopyAssistantMessageCandidatesCoverAllObservedLabels() {
+        for observed in ["Copy", "复制"] {
+            XCTAssertTrue(ChatGPTLabels.copyAssistantMessage.contains(observed), "候选集合缺少标签：\(observed)")
+        }
+    }
+
+    // 核心场景（派单点名要求）：界面上每条助手消息下方都有一个复制按钮，取第一个
+    // 会复制到最早那条回复，必须取最后一个。matchControl 返回第一个匹配，不能直接复用。
+    //
+    // 突变验证：把下面这行的 matchLastControl 换成 matchControl（等价于把实现里的
+    // nodes.last(where:) 换回 nodes.first(where:)），这条测试会红——
+    // XCTAssertEqual failed: ("1") is not equal to ("3")。
+    func testMatchLastControlReturnsLastAmongMultipleAssistantCopyButtons() {
+        let first = node(1, role: "AXButton", desc: "Copy", childRoles: ["AXImage"])
+        let second = node(2, role: "AXButton", desc: "Copy", childRoles: ["AXImage"])
+        let third = node(3, role: "AXButton", desc: "Copy", childRoles: ["AXImage"])
+        XCTAssertEqual(
+            ChatGPTLabels.matchLastControl(ChatGPTLabels.copyAssistantMessage,
+                                           among: [first, second, third])?.element,
+            AXElementRef(rawID: 3, epoch: 0),
+            "界面上每条助手消息下方都有一个复制按钮，必须取最后一个（最新一条）；"
+            + "取第一个会把复盘复制到最早那条回复")
+    }
+
+    // 两个复制按钮必须靠标签精确区分：用户自己那条消息的复制按钮标签是 "Copy message"
+    // （挨着 Edit message），ChatGPT 回复下方的复制按钮标签是 "Copy"（挨着 Good response）。
+    // 结构完全相同（单个 AXImage 子节点的 AXButton），只能靠标签区分。
+    func testMatchLastControlDoesNotConfuseUserCopyMessageWithAssistantCopy() {
+        let userCopy = node(1, role: "AXButton", desc: "Copy message", childRoles: ["AXImage"])
+        let assistantCopy = node(2, role: "AXButton", desc: "Copy", childRoles: ["AXImage"])
+        XCTAssertEqual(
+            ChatGPTLabels.matchLastControl(ChatGPTLabels.copyAssistantMessage,
+                                           among: [userCopy, assistantCopy])?.element,
+            AXElementRef(rawID: 2, epoch: 0),
+            "不能把用户自己消息的 Copy message 按钮当成 ChatGPT 回复的 Copy 按钮")
+    }
+
+    func testMatchLastControlRejectsStructuralMismatch() {
+        // 与 matchControl 对称：结构不符（非单个 AXImage 子节点）的同名元素不得被选中。
+        let row = node(2, role: "AXButton", desc: "Copy",
+                       childRoles: ["AXGroup", "AXButton", "AXButton"])
+        XCTAssertNil(ChatGPTLabels.matchLastControl(ChatGPTLabels.copyAssistantMessage, among: [row]))
+    }
+
     func testStructuralMismatchesReportsWrongRoleWithIconOnlyChild() {
         // label 命中、只有一个 AXImage 子节点、但 role 不是控制类 —— 必须被报告
         let odd = AXNodeSnapshot(element: AXElementRef(rawID: 9, epoch: 0), role: "AXGroup",

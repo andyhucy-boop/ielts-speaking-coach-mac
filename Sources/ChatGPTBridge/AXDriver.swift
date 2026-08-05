@@ -211,4 +211,36 @@ public final class AXDriver: CoachBridge {
         }
         return longest
     }
+
+    /// 用 ChatGPT 自己的复制按钮取回最新一条回复，然后从剪贴板读。
+    ///
+    /// 为什么不直接读 AX 文本：实测复盘在 AX 树里被切成大量碎片节点，
+    /// 连定界标记都被拆成三段，「找一个包含完整标记的节点」永远找不到。
+    /// 拼接碎片依赖节点顺序与拼接规则，ChatGPT 一改版就崩；
+    /// 用它自己的复制功能则由应用保证内容完整，且与内容有没有滚出屏幕无关（见 spec 2.3.9）。
+    public func copyLatestAssistantMessage(pasteboard: any PasteboardAccess,
+                                           timeout: TimeInterval) throws -> String {
+        guard let button = locator.waitForNode(matching: {
+            ChatGPTLabels.matchLastControl(ChatGPTLabels.copyAssistantMessage, among: $0)
+        }, timeout: timeout) else {
+            throw BridgeError.elementNotFound(
+                "没找到 ChatGPT 回复下方的复制按钮。"
+                + "下一步：把鼠标移到那条回复上，看看下面有没有出现一排小图标；"
+                + "若有但本工具找不到，可能是这一版 ChatGPT 改了界面，请把这条错误告诉开发者。"
+                + "你也可以直接选中整段复盘按 ⌘C，然后按提示继续。")
+        }
+
+        // 按钮之前先清空剪贴板：万一按钮按下去了但 ChatGPT 没真的写剪贴板（界面改版、
+        // 复制功能悄悄失效……），读到的会是清空前的旧内容——那正是本项目反复栽过的
+        // 「静默拿到错误数据」。清空之后，同样的失败会变成明确的「剪贴板是空的」报错，
+        // 而不是拿一份看起来正常、实际是上一次复盘的旧内容去解析、归档。
+        pasteboard.clear()
+
+        guard access.press(button.element) else {
+            throw BridgeError.actionFailed("按下复制按钮失败。"
+                + "下一步：手动选中整段复盘按 ⌘C，然后按提示继续。")
+        }
+        Thread.sleep(forTimeInterval: 0.8)   // 给剪贴板写入留时间
+        return try ClipboardFallback.readReview(from: pasteboard)
+    }
 }

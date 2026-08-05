@@ -386,6 +386,84 @@ final class AXDriverTests: XCTestCase {
             XCTAssertTrue("\(error)".contains("回复完"))
         }
     }
+
+    // spec 2.3.9：复盘在 AX 树里被切成大量碎片节点（连定界标记本身都被拆成三段），
+    // captureLatestAssistantMessage(expectedMarker:) 找的是「某个节点包含完整标记」，
+    // 这样的节点根本不存在。改用 ChatGPT 自己的复制按钮，再从剪贴板读。
+
+    func testCopyLatestAssistantMessageThrowsActionableErrorWhenButtonNotFound() {
+        let access = FakeAXAccess()
+        access.nodes = []   // 界面上完全没有复制按钮
+        let pasteboard = FakePasteboard(contents: "")
+        XCTAssertThrowsError(
+            try driver(access).copyLatestAssistantMessage(pasteboard: pasteboard, timeout: 0.1)
+        ) { error in
+            XCTAssertTrue("\(error)".contains("复制按钮"))
+            XCTAssertTrue("\(error)".contains("下一步"))
+        }
+        XCTAssertFalse(pasteboard.wasCleared, "按钮都没找到就不该动用户的剪贴板")
+    }
+
+    func testCopyLatestAssistantMessagePressesLastCopyButtonAndReadsClipboard() throws {
+        let access = FakeAXAccess()
+        access.nodes = [
+            control(1, "Copy message"),   // 用户自己那条消息的复制按钮——不能被按
+            control(2, "Copy"),           // 更早一轮助手回复的复制按钮
+            control(3, "Copy")            // 最新一条助手回复的复制按钮——要的是它
+        ]
+        let pasteboard = FakePasteboard(contents: "")
+        let review = "<<<IELTS_REVIEW_JSON:sync-1>>>" + String(repeating: "复盘内容", count: 40)
+            + "<<<END_IELTS_REVIEW_JSON:sync-1>>>"
+        // 模拟按下复制按钮后 ChatGPT 真的把内容写进了剪贴板。
+        access.onPress = { _, _ in pasteboard.simulateExternalWrite(review) }
+
+        let captured = try driver(access).copyLatestAssistantMessage(pasteboard: pasteboard, timeout: 0.5)
+
+        XCTAssertEqual(access.pressedElements.map(\.rawID), [3],
+                       "必须按下最后一个 Copy 按钮，不能按用户自己消息的 Copy message，"
+                       + "也不能按更早一轮的 Copy")
+        XCTAssertEqual(captured, review)
+    }
+
+    func testCopyLatestAssistantMessageFailsActionablyWhenPressFails() {
+        let access = FakeAXAccess()
+        access.nodes = [control(1, "Copy")]
+        access.pressSucceeds = false   // kAXPressAction 本身就失败
+        let pasteboard = FakePasteboard(contents: "")
+        XCTAssertThrowsError(
+            try driver(access).copyLatestAssistantMessage(pasteboard: pasteboard, timeout: 0.5)
+        ) { error in
+            XCTAssertTrue("\(error)".contains("按下复制按钮失败"))
+            XCTAssertTrue("\(error)".contains("下一步"))
+        }
+    }
+
+    // 防「静默拿到错误数据」的关键测试（派单点名要求）：剪贴板里是上一次复盘留下的
+    // 旧内容，这次复制按钮虽然按下去了，但 ChatGPT 没有真的写剪贴板（onPress 保持默认，
+    // 什么都不做）。若实现忘了在按钮之前调用 pasteboard.clear()，这里会静默返回
+    // 上面那段 200+ 字符的旧内容——看起来像一份正常复盘，实际文不对题。
+    //
+    // 突变验证：把 AXDriver.copyLatestAssistantMessage 里的 `pasteboard.clear()` 那一行
+    // 注释掉，这条测试会红——XCTAssertThrowsError 不会抛错，因为读到的是 staleReview。
+    func testCopyLatestAssistantMessageFailsRatherThanReturningStaleClipboardContentWhenChatGPTDoesNotWrite() {
+        let access = FakeAXAccess()
+        access.nodes = [control(1, "Copy")]
+        let staleReview = "<<<IELTS_REVIEW_JSON:sync-OLD>>>" + String(repeating: "上一次的旧复盘", count: 40)
+            + "<<<END_IELTS_REVIEW_JSON:sync-OLD>>>"
+        let pasteboard = FakePasteboard(contents: staleReview)
+        // access.onPress 保持默认（nil）：按钮真的按下去了，但界面/剪贴板都没有变化——
+        // 这正是「复制功能悄悄失效」的故障现场。
+
+        XCTAssertThrowsError(
+            try driver(access).copyLatestAssistantMessage(pasteboard: pasteboard, timeout: 0.5)
+        ) { error in
+            XCTAssertTrue("\(error)".contains("剪贴板是空的"),
+                          "按钮之前必须先清空剪贴板；不清空的话这里会静默返回上一次复盘的旧内容："
+                          + "\(error)")
+        }
+        XCTAssertTrue(pasteboard.wasCleared, "按下复制按钮之前必须调用一次 clear()")
+        XCTAssertEqual(access.pressedElements.map(\.rawID), [1], "按钮确实被按下了，只是剪贴板没被写")
+    }
 }
 
 final class ClipboardFallbackTests: XCTestCase {

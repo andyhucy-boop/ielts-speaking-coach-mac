@@ -27,6 +27,11 @@ public enum ChatGPTLabels {
     /// 旧会话仍保留在侧边栏，不丢数据。
     public static let newChat = ["New chat", "新建对话"]
 
+    /// ChatGPT 回复下方的复制按钮。
+    /// **不要写成 "Copy message"** —— 那是用户自己那条消息的复制按钮（挨着 Edit message），
+    /// 复制的是提示词而不是复盘。两者结构相同，只能靠标签精确区分。
+    public static let copyAssistantMessage = ["Copy", "复制"]
+
     /// 控制元素的合法 role。静音类是 AXCheckBox（subrole=AXToggleButton），
     /// 启停语音是 AXButton，两者结构判据相同（实测确认）。
     static let controlRoles: Set<String> = ["AXButton", "AXCheckBox"]
@@ -40,6 +45,20 @@ public enum ChatGPTLabels {
                                     among nodes: [AXNodeSnapshot]) -> AXNodeSnapshot? {
         for candidate in candidates {
             if let hit = nodes.first(where: {
+                controlRoles.contains($0.role) && $0.label == candidate && $0.isIconOnlyControl
+            }) { return hit }
+        }
+        return nil
+    }
+
+    /// 取**最后一个**匹配的控制元素。
+    /// 界面上每条助手消息下方都有一个复制按钮，取第一个会复制到最早那条回复。
+    /// `matchControl` 返回第一个匹配，此处必须取最后一个（深度优先顺序 ≈ 文档顺序，
+    /// 最后一个即最新一条）。
+    public static func matchLastControl(_ candidates: [String],
+                                        among nodes: [AXNodeSnapshot]) -> AXNodeSnapshot? {
+        for candidate in candidates {
+            if let hit = nodes.last(where: {
                 controlRoles.contains($0.role) && $0.label == candidate && $0.isIconOnlyControl
             }) { return hit }
         }
