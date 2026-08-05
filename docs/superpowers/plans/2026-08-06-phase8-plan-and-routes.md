@@ -73,7 +73,7 @@ ROADMAP 把 Phase 8 的依赖写成 Phase 6。真实的依赖关系是这样的�
 | 不做 | 为什么 | 归谁 |
 |---|---|---|
 | 按日历推进计划（「你落后 2 天」）| 计划里没有日期字段，进度只随「练完一题」前进。请假两天回来就被界面指责，只会让人不想练 | 永久不做，见 Task 5 的注释 |
-| 复盘失败时也推进计划进度 | 计划进度由 `ReviewArchiver.advancePlan` 在归档时前进。复盘取不回来时原文已落盘在 `pending-reviews/`，用 `coach reimport` 补进去即可，进度随之前进。在这里额外加一条「没复盘也算练过」的路径，会让用户开练 3 秒就退出也被算成完成 | 已有机制覆盖，本阶段不动 |
+| 复盘失败时也推进计划进度 | 计划进度由 `ReviewArchiver.advancePlan` 在归档时前进。复盘取不回来时原文已落盘在 `pending-reviews/`，**到「复盘报告」页点「重新导入待处理的复盘」补进去即可**（Phase 4 Task 11，跨阶段决策 2），进度随之前进。在这里额外加一条「没复盘也算练过」的路径，会让用户开练 3 秒就退出也被算成完成 | 已有机制覆盖，本阶段不动。**本阶段任何面向界面的文案都不许再让用户去终端跑 `coach reimport`**——那是成品标准第 2 条 |
 | 换题验证（同一目标换一道题再练）| 这是 Phase 6 复训中心的核心流程 | Phase 6 |
 | 每周训练次数目标可配置 | ROADMAP 第 5 节把它排在 Phase 7 | Phase 7 |
 | 深色模式 | 全部颜色已走令牌，Phase 7 改一个文件即可 | Phase 7 |
@@ -291,7 +291,7 @@ git commit -m "feat(core): 计划记住重点 Part，旧 state.json 仍可读"
   - `CoachSettings.feedbackTiming: FeedbackTiming`
   - `CoachSettings.part2PrepMode: Part2PrepMode`
   - `CoachSettings.defaultRouteFallback: String`（静态常量，值为 `"planToday"`）
-  - `CoachSettings.init(recordingEnabled:recordingConsentAt:weeklyGoal:defaultRoute:feedbackTiming:part2PrepMode:)`，后四个带默认值
+  - `CoachSettings.init(recordingEnabled:recordingConsentAt:transcriptEnabled:weeklyGoal:defaultRoute:feedbackTiming:part2PrepMode:)`，后五个带默认值（`transcriptEnabled` 来自 Phase 4、`weeklyGoal` 来自 Phase 7，本任务只是合并保留）
   - `CoachSettings.init(from: any Decoder) throws`（手写）
 
 > ### ⚠️ 跨阶段冲突（2026-08-06 复审补入，必读）
@@ -310,9 +310,17 @@ git commit -m "feat(core): 计划记住重点 Part，旧 state.json 仍可读"
 > - 有输出 → 按下面这份合并版替换，`weeklyGoal` 那几处一个字都不要动
 > - 没输出 → 说明 Phase 7 还没做，把 `weeklyGoal` 相关的行删掉再用（但要在报告里写明，Phase 7 届时得自己合并回来）
 >
-> **同理，若 Phase 4 已经往 `CoachSettings` 里加过「记录对话逐字稿」开关**
-> （`ROADMAP.md` 第 5 节要求的 `transcriptEnabled`，默认开），**也必须一并保留**——
-> 先 `grep -n "transcript" Sources/IELTSCoachCore/Model/CoachState.swift` 确认。
+> **Phase 4 Task 2 加的 `transcriptEnabled`（默认开）同样要保留。**
+> 下面 Step 3 的代码**已经把 Phase 4 与 Phase 7 两个阶段的字段都合并进去了**
+> （2026-08-06 复审补入——初稿只在这段文字里提醒，代码块里没有，而实现者照抄的是代码块）。
+> 动手前先跑 `grep -n "transcriptEnabled" Sources/IELTSCoachCore/Model/CoachState.swift`：
+>
+> - 有输出 → 按下面这份合并版替换，`transcriptEnabled` 那几处一个字都不要动
+> - 没输出 → 说明 Phase 4 还没做，把 `transcriptEnabled` 相关的五处删掉再用（并在报告里写明）
+>
+> **验收时跑一次 `swift test --filter TranscriptSettingsTests`（Phase 4 的 5 条）与
+> `swift test --filter WeeklyGoalTests`（Phase 7 的 9 条）——它们不知道这次重写发生过，
+> 这正是它们有价值的原因。红了就是抄丢了字段，去补字段，不要改测试。**
 
 **为什么是 String 而不是枚举：** `defaultRoute` 存的是 `PracticeRoute` 的 rawValue，而 `PracticeRoute` 定义在 `IELTSCoachUI` 里。**`IELTSCoachCore` 不允许依赖 UI**，所以 Core 只能存字符串。两个模块之间的对齐由 Task 7 的一条跨模块测试守住。
 
@@ -389,16 +397,24 @@ final class CoachSettingsCompatibilityTests: XCTestCase {
     }
 
     /// **跨阶段回归。** 本任务整体替换了 `CoachSettings`，最容易犯的错就是把
-    /// Phase 7 加的 `weeklyGoal` 顺手删掉——那样编译能过（默认参数顶上了），
-    /// 只是用户存过的每周目标在下一次写盘时被默认值盖掉，没有任何报错。
-    func testWeeklyGoalFromPhase7SurvivesThisRewrite() throws {
-        let json = #"{"recordingEnabled":false,"recordingConsentAt":"","weeklyGoal":3}"#
+    /// 前面阶段加的字段顺手删掉——那样编译能过（默认参数顶上了），
+    /// 只是用户存过的取值在下一次写盘时被默认值盖掉，没有任何报错。
+    ///
+    /// 一条测两个字段：Phase 4 的 `transcriptEnabled` 与 Phase 7 的 `weeklyGoal`。
+    /// **哪个阶段还没交付，就把对应的两行注释掉并在报告里写明，不要删整条。**
+    func testEarlierPhasesFieldsSurviveThisRewrite() throws {
+        let json = #"""
+        {"recordingEnabled":false,"recordingConsentAt":"",
+         "transcriptEnabled":false,"weeklyGoal":3}
+        """#
         let settings = try JSONDecoder().decode(CoachSettings.self, from: Data(json.utf8))
         XCTAssertEqual(settings.weeklyGoal, 3, "weeklyGoal 被这次重写弄丢了")
+        XCTAssertFalse(settings.transcriptEnabled, "transcriptEnabled 被这次重写弄丢了")
 
         let roundTripped = try JSONDecoder().decode(
             CoachSettings.self, from: try JSONEncoder().encode(settings))
         XCTAssertEqual(roundTripped.weeklyGoal, 3, "weeklyGoal 没有被编码回去")
+        XCTAssertFalse(roundTripped.transcriptEnabled, "transcriptEnabled 没有被编码回去")
     }
 
     /// **跨阶段回归。** Phase 5 的录音开关每拨一次就会走一遍
@@ -407,17 +423,20 @@ final class CoachSettingsCompatibilityTests: XCTestCase {
     /// 本任务新加的三项偏好与 Phase 7 的每周目标会被静默重置回默认值。
     func testTogglingTheRecordingSwitchKeepsEveryOtherSetting() {
         let original = CoachSettings(recordingEnabled: false, recordingConsentAt: "",
+                                     transcriptEnabled: false,
                                      weeklyGoal: 3, defaultRoute: "retrain",
                                      feedbackTiming: .immediate,
                                      part2PrepMode: .learnerControlled)
 
         let on = RecordingConsent.enable(original, at: "2026-08-06T10:00:00Z")
+        XCTAssertFalse(on.transcriptEnabled)
         XCTAssertEqual(on.weeklyGoal, 3)
         XCTAssertEqual(on.defaultRoute, "retrain")
         XCTAssertEqual(on.feedbackTiming, .immediate)
         XCTAssertEqual(on.part2PrepMode, .learnerControlled)
 
         let off = RecordingConsent.disable(on)
+        XCTAssertFalse(off.transcriptEnabled)
         XCTAssertEqual(off.weeklyGoal, 3)
         XCTAssertEqual(off.defaultRoute, "retrain")
         XCTAssertEqual(off.feedbackTiming, .immediate)
@@ -449,6 +468,8 @@ public struct CoachSettings: Codable, Equatable, Sendable {
 
     public var recordingEnabled: Bool
     public var recordingConsentAt: String
+    /// 「记录对话逐字稿」（Phase 4 Task 2 加的，本任务原样保留，不得删）
+    public var transcriptEnabled: Bool
     /// 每周训练目标次数（Phase 7 Task 1 加的，本任务原样保留，不得删）
     public var weeklyGoal: Int
     /// 用户偏好的练习路线（ROADMAP 第 5 节，默认「按计划练今天」）
@@ -458,6 +479,9 @@ public struct CoachSettings: Codable, Equatable, Sendable {
     /// Part 2 的一分钟准备怎么处理（ROADMAP 第 5 节，默认倒计时）
     public var part2PrepMode: Part2PrepMode
 
+    // ↓ 来自 Phase 4 Task 2，原样保留
+    public static let defaultTranscriptEnabled = true
+
     // ↓ 三个常量与 normalized(_:) 来自 Phase 7 Task 1，原样保留
     public static let defaultWeeklyGoal = 5
     public static let weeklyGoalRange = 1...21
@@ -466,15 +490,18 @@ public struct CoachSettings: Codable, Equatable, Sendable {
         return raw
     }
 
-    // 后四个参数带默认值，是为了不打断 CoachState.empty() 与 Phase 0–2 已有的调用点。
-    // weeklyGoal 排在第三位，与 Phase 7 定下的顺序一致——换位置会打断它已有的调用点。
+    // 后五个参数带默认值，是为了不打断 CoachState.empty() 与 Phase 0–2 已有的调用点。
+    // **参数顺序沿用前面阶段定下的位置**（transcriptEnabled 第三、weeklyGoal 第四），
+    // 换位置会打断 Phase 4 / Phase 7 已有的调用点。全带默认值，只传其中一个也能编译。
     public init(recordingEnabled: Bool, recordingConsentAt: String,
+                transcriptEnabled: Bool = CoachSettings.defaultTranscriptEnabled,
                 weeklyGoal: Int = CoachSettings.defaultWeeklyGoal,
                 defaultRoute: String = CoachSettings.defaultRouteFallback,
                 feedbackTiming: FeedbackTiming = .deferred,
                 part2PrepMode: Part2PrepMode = .countdown) {
         self.recordingEnabled = recordingEnabled
         self.recordingConsentAt = recordingConsentAt
+        self.transcriptEnabled = transcriptEnabled
         self.weeklyGoal = CoachSettings.normalized(weeklyGoal)
         self.defaultRoute = defaultRoute
         self.feedbackTiming = feedbackTiming
@@ -482,7 +509,7 @@ public struct CoachSettings: Codable, Equatable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case recordingEnabled, recordingConsentAt, weeklyGoal
+        case recordingEnabled, recordingConsentAt, transcriptEnabled, weeklyGoal
         case defaultRoute, feedbackTiming, part2PrepMode
     }
 
@@ -501,6 +528,10 @@ public struct CoachSettings: Codable, Equatable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         recordingEnabled = try c.decodeIfPresent(Bool.self, forKey: .recordingEnabled) ?? false
         recordingConsentAt = try c.decodeIfPresent(String.self, forKey: .recordingConsentAt) ?? ""
+        // Phase 4 Task 2 的那一行，原样保留。删了它，用户关掉的逐字稿开关会在
+        // 下一次写盘时被默认值盖回「开」，而且没有任何报错。
+        transcriptEnabled = try c.decodeIfPresent(Bool.self, forKey: .transcriptEnabled)
+            ?? CoachSettings.defaultTranscriptEnabled
         // Phase 7 Task 1 的那一行，原样保留。删了它，用户存过的每周目标会在
         // 下一次写盘时被默认值盖掉，而且没有任何报错。
         weeklyGoal = CoachSettings.normalized(
@@ -520,6 +551,14 @@ public struct CoachSettings: Codable, Equatable, Sendable {
 
 Run: `swift test --filter CoachSettingsCompatibilityTests`
 Expected: PASS（7 个测试；Phase 5 未交付时把录音那条注释掉，则是 6 个）
+
+Run: `swift test --filter TranscriptSettingsTests`
+Expected: PASS（Phase 4 的 5 条，一条都不能红）
+
+Run: `swift test --filter WeeklyGoalTests`
+Expected: PASS（Phase 7 的 9 条，一条都不能红）
+
+**上面两组是这次整体替换的守门员。任何一条红了，都是「字段被抄丢」——去把字段补回来，不要改测试。**
 
 Run: `swift test`
 Expected: 全绿
@@ -1778,7 +1817,16 @@ git commit -m "feat(ui): 默认练习路线与练习偏好默认值"
 - Create: `Tests/IELTSCoachUITests/PracticeRouteResolverTests.swift`
 
 **Interfaces:**
-- Consumes: `CoachState`（`plan`、`questions`、`sessions`、`targets`、`issues`）、`Question`、`PracticeSession`、`RetrainingTarget`、`RetrainingPolicy.rank(targets:issues:)`、`SessionSetup(question:focusPart:durationMinutes:goal:feedbackTiming:part2PrepMode:)`、`FocusPart`、`PracticeRoute`、`RouteDefaults`、`TodayViewModel`（仅测试里用）
+- Consumes: `CoachState`（`plan`、`questions`、`sessions`、`targets`、`issues`）、`Question`、`PracticeSession`、`RetrainingTarget`、`RetrainingPolicy.rank(targets:issues:)`、`SessionSetup(question:focusPart:durationMinutes:goal:feedbackTiming:part2PrepMode:)`、`FocusPart`、`PracticeRoute`、`RouteDefaults`、**`RetrainingSetupBuilder.goalText(for:)`（Phase 6 Task 8）**、`TodayViewModel`（仅测试里用）
+
+> **若 Phase 6 尚未交付**（`ls Sources/IELTSCoachUI/Retraining/RetrainingSetupBuilder.swift` 没有输出），
+> 把 `resolveRetrain` 里那一行换成等价的内联写法并在报告里写明，**行为必须完全一样**：
+> ```swift
+> let trimmed = target.label.trimmingCharacters(in: .whitespacesAndNewlines)
+> let label = trimmed.isEmpty
+>     ? target.targetKey.trimmingCharacters(in: .whitespacesAndNewlines) : trimmed
+> ```
+> Phase 6 交付后，**由 Phase 6 的实现者把这段换回调用 `goalText(for:)`**，两份判断不许长期并存。
 - Produces:
   - `enum RouteResolution: Equatable, Sendable { case ready(SessionSetup), unavailable(String) }`
   - `PracticeRouteResolver.resolve(route:state:selectedQuestionID:defaults:) -> RouteResolution`
@@ -1791,7 +1839,9 @@ Phase 3 的 `TodayViewModel.availableRoutes` 判断的是「前提成立」（�
 
 所以「能不能显示」直接由「能不能解析出 `SessionSetup`」决定，两者用同一段代码。
 
-**关于空目标：** `RetrainingPolicy.extractTarget` 对 `label` 用的是 `?? ""`，所以 label 完全可能是空的。空目标带进 `ExaminerPrompt.build`，「本次唯一目标」那一整段会被跳过（见 `ExaminerPrompt.swift` 第 156–163 行），于是「复训」和普通练习一模一样——不报错、不崩溃，只是白练一场。**静默地什么都没发生，是本项目已知最危险的失败形态**（spec 2.3.8 的原话）。必须拦住。
+**关于空目标：** `RetrainingPolicy.extractTarget` 对 `label` 用的是 `?? ""`，所以 label 完全可能是空的。空目标带进 `ExaminerPrompt.build`，「本次唯一目标」那一整段会被跳过（见 `ExaminerPrompt.swift` 第 156–163 行），于是「复训」和普通练习一模一样——不报错、不崩溃，只是白练一场。**静默地什么都没发生，是本项目已知最危险的失败形态**（spec 2.3.8 的原话）。
+
+**拦法由跨阶段决策 6（2026-08-06）定：回落成 `targetKey` 照常开练，不是拒绝开练。**（本任务初稿写的是返回 `.unavailable(…)`，已改。）拦的是「goal 变成空串」这件事，不是拦用户。Phase 6 的 `RetrainingSetupBuilder.goalText(for:)` 已经是这个口径，**两条路径必须走同一份实现**——否则从复训中心进和从今日训练页进会是两种行为，而这正是决策 6 要消除的东西。
 
 - [ ] **Step 1: 写失败的测试**
 
@@ -2000,14 +2050,20 @@ final class PracticeRouteResolverTests: XCTestCase {
     /// 复盘里 priority_target 的 label 可能是空的（RetrainingPolicy.extractTarget 用的是 ?? ""）。
     /// 空目标带进 ExaminerPrompt，「本次唯一目标」那一整段会被跳过，
     /// 于是「复训」和普通练习一模一样——不报错、不崩溃，只是白练一场。
-    /// 静默地什么都没发生，是本项目已知最危险的失败形态（spec 2.3.8）。
-    func testRetrainRefusesAnEmptyTargetLabel() {
+    ///
+    /// **跨阶段决策 6（2026-08-06）：回落成 `targetKey` 照常开练，不拒绝。**
+    /// 用户是来练英语的，因为一个内部字段是空的就不让他练，代价不成比例。
+    /// 这与 Phase 6 的 `RetrainingSetupBuilder.goalText(for:)` 是同一个口径——
+    /// **两条路径必须一致**，否则从复训中心进和从今日训练页进会是两种行为。
+    func testRetrainFallsBackToTheTargetKeySoTheGoalIsNeverBlank() {
         let s = state(questions: [q("a")],
                       sessions: [session("s1", question: "a", startedAt: "2026-08-01T10:00:00Z")],
                       targets: [target("t1", label: "   ", session: "s1")])
-        guard case .unavailable(let message) = PracticeRouteResolver.resolve(
-            route: .retrain, state: s) else { return XCTFail("没有文字的目标不该被当成能复训") }
-        XCTAssertTrue(message.contains("下一步"))
+        guard case .ready(let setup) = PracticeRouteResolver.resolve(
+            route: .retrain, state: s) else { return XCTFail("label 是空的不该挡住练习") }
+        XCTAssertEqual(setup.goal, "t1", "label 为空时要回落成 targetKey")
+        XCTAssertFalse(setup.goal.isEmpty,
+                       "goal 一旦是空串，复训会静默退化成普通练习——这是决策 6 真正要挡的东西")
     }
 
     func testRetrainUnavailableWhenTheSourceSessionIsGone() {
@@ -2249,15 +2305,15 @@ public enum PracticeRouteResolver {
             return .unavailable("还没有待复训的目标。"
                 + "下一步：先练一场并取回复盘，复盘会给出下一次的单点目标。")
         }
-        let label = target.label.trimmingCharacters(in: .whitespacesAndNewlines)
         // 空目标带进 ExaminerPrompt，「本次唯一目标」那一整段会被整块跳过，
         // 于是这场「复训」和普通练习一模一样——不报错、不崩溃，只是白练一场。
         // 静默地什么都没发生，是本项目已知最危险的失败形态（spec 2.3.8）。
-        guard !label.isEmpty else {
-            return .unavailable("这个复训目标没有文字说明（复盘里 priority_target 的 label 是空的），"
-                + "带进练习也起不到作用。"
-                + "下一步：重新练一场取回一份完整的复盘，或改用「从题库自由选题」自己写一个目标。")
-        }
+        //
+        // **跨阶段决策 6（2026-08-06）：不拒绝，回落成 targetKey 照常开练。**
+        // 用户是来练英语的，因为一个内部字段是空的就不让他练，代价不成比例。
+        // 直接复用 Phase 6 的那一份，**不要在这里再写一遍判断**——
+        // 同一件事两份实现，迟早会出现「从复训中心进」和「从今日训练页进」不一样。
+        let label = RetrainingSetupBuilder.goalText(for: target)
         guard let session = state.sessions.first(where: { $0.id == target.sourceSessionId }) else {
             return .unavailable("找不到这个目标是哪一次练习提出来的（那条训练记录可能被删过）。"
                 + "下一步：改用「从题库自由选题」挑一道题，把目标手动写进去。")
@@ -2305,9 +2361,10 @@ Expected: 全绿
 
 做两次：
 
-1. 把 `resolveRetrain` 里 `guard !label.isEmpty else { ... }` 整块删掉，并把最后一行的
-   `goal: label` 改成 `goal: target.label`
-   Expected: `testRetrainRefusesAnEmptyTargetLabel` **变红**
+1. 把 `resolveRetrain` 里的 `let label = RetrainingSetupBuilder.goalText(for: target)`
+   改成 `let label = target.label`（即取消回落）
+   Expected: `testRetrainFallsBackToTheTargetKeySoTheGoalIsNeverBlank` **变红**
+   *守的是决策 6：`goal` 是空串时复训会静默退化成普通练习，界面上一点异常都没有。*
 2. 把 `availableRoutes` 里的过滤闭包整个换成 `{ _ in true }`
    Expected: `testEveryShownRouteCanActuallyStart`、`testShownRoutesNeverExceedPhase3Preconditions`、
    `testUnavailablePreferredRouteDoesNotSneakIn`、`testNoRoutesAtAllWhenThereIsNothingToPractice`
@@ -2592,7 +2649,7 @@ Run: `ls Sources/IELTSCoachUI/Retraining/ 2>/dev/null; grep -rn "RetrainingCente
 > |---|---|---|
 > | part → FocusPart、Part 2 用 4 分钟 | 一样 | 一样 |
 > | `feedbackTiming` / `part2PrepMode` | 从 `RouteDefaults(settings:)` 取，**跟随用户设置** | 参数默认值 `.deferred` / `.countdown`，**调用方不传就永远是默认** |
-> | 目标 label 是空白时 | 返回 `.unavailable(…)`，明确拒绝并说明下一步 | 回落成 `targetKey`，照常开练 |
+> | 目标 label 是空白时 | ~~返回 `.unavailable(…)`，明确拒绝~~ → **已按决策 6 改成直接调 Phase 6 的 `goalText(for:)`**（Task 8 Step 3）| 回落成 `targetKey`，照常开练 |
 >
 > 第二行是本阶段必须处理的：本任务刚刚让用户能在学习计划页选「当场点出」和「自己决定」，
 > 而 `RetrainingCoordinator.start(...)` 调 `RetrainingSetupBuilder.makeSetup(target:question:)`
@@ -2604,8 +2661,9 @@ Run: `ls Sources/IELTSCoachUI/Retraining/ 2>/dev/null; grep -rn "RetrainingCente
 >    重载（或把现有的两个参数改成从 `RouteDefaults` 取），内部仍走原来的实现
 > 2. `RetrainingCoordinator` 在构造 setup 时传 `RouteDefaults(settings: state.settings)`
 >
-> **第三行（空 label 的两种处理）先不动**，两边各自都有测试守着，
-> 且都不会造成静默失败。它属于产品口径问题，已列进复审报告的「需要人定夺」。
+> **第三行已在 2026-08-06 由跨阶段决策 6 定案：统一成 Phase 6 的做法（回落成 `targetKey` 照常开练）。**
+> 落点是本阶段 **Task 8** 的 `resolveRetrain`，改动只有一行——直接调 `RetrainingSetupBuilder.goalText(for:)`。
+> **别再写第二份判断**：同一件事两份实现，迟早会出现「从复训中心进」和「从今日训练页进」不一样。
 
 - [ ] **Step 6: 验证**
 
@@ -2756,7 +2814,7 @@ git commit -m "docs: Phase 8 真机验收结果"
 | `PlanViewModelTests` | 8 | 「计划完成」永远不出现；缺题显示成空行；重复 id 闪退 |
 | `PlanDraftPreviewTests` | 7 | 预览说能生成、点下去却报错 |
 | `PracticeRoutePreferenceTests` | 5 | Core 与 UI 之间的字符串对不上 |
-| `PracticeRouteResolverTests` | 27 | **显示了却开不了练**；空目标带进复训白练一场 |
+| `PracticeRouteResolverTests` | 27 | **显示了却开不了练**；复训的 goal 变成空串、白练一场（决策 6：回落成 `targetKey`，不拒绝）|
 | 合计 | **79** | |
 
 判据始终是同一条：**把被测逻辑改成空实现，测试会不会红。** 本项目已经消灭过 15 处不满足这条的空转测试，本阶段的 13 次突变验证就是为了不再制造新的。

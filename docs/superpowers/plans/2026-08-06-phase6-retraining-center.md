@@ -50,9 +50,19 @@
 | # | 依赖 | 来自 | 怎么确认 | 不满足怎么办 |
 |---|---|---|---|---|
 | P1 | `PracticeStage` / `PracticeRunner`（含 `start(setup:)`、`finishPractice()`、`stage`）| Phase 3 Task 9 | `ls Sources/IELTSCoachUI/Session/` | 停下来报告：Phase 6 的流程无处挂载 |
-| P2 | **一场练习结束后，会有一条 `PracticeSession` 被写进 `state.sessions`** | Phase 4 | `grep -rn "sessions.append" Sources/IELTSCoachUI/` | **停下来报告。** 这是 Phase 4 的交付内容，不是 Phase 6 的；没有训练记录，复训进度、换题验证都无从谈起 |
+| P2 | **一场练习结束后，会有一条 `PracticeSession` 被写进 `state.sessions`** | Phase 4 | `grep -rn "upsertSession\|sessions.append" Sources/IELTSCoachUI/` | **停下来报告。** 这是 Phase 4 的交付内容，不是 Phase 6 的；没有训练记录，复训进度、换题验证都无从谈起 |
 | P3 | `PracticeRunner` 能报出刚归档那条记录的 id | Phase 4 | `grep -n "finishedSessionID" Sources/IELTSCoachUI/Session/PracticeRunner.swift` | 见下方「P3 的补法」，只加 2 行，属于本阶段可以自己补的范围 |
 | P4 | `PracticeSession.transcript` 里有内容（逐字稿）| Phase 4 | 练一场后看 `state.json` | **可降级**：Task 7 的证据装配在逐字稿为空时仍然可用，只是少一块内容，并会显示中文说明 |
+
+> ### Phase 4 的实施计划已于 2026-08-06 写完，P2 / P3 / P4 都由它交付（复审补记）
+>
+> 见 `docs/superpowers/plans/2026-08-06-phase4-transcript-and-history.md`。开工时仍按上表实测确认，别只信这段话。三条的实际形状：
+>
+> - **P2**：`PracticeRunner.finishPractice()` 里按 id **upsert**（不是无脑 append）——所以 `grep sessions.append` 只会命中 `upsertSession` 内部那一行。Phase 9 的 `save_session_review` 用同样的规则，**不要一边 append 一边 upsert**
+> - **P3**：`finishedSessionID` 已经有了，而且是**在归档成功之后**才赋值的，与下面「P3 的补法」那条要求一致。**补法不用做了**
+> - **P4**：`transcript` 里有内容，`role` 取 `"user"` / `"assistant"` / **`"unknown"`**。第三种是 Phase 4 刻意留的：说话人判不出来时**记 `unknown`，绝不猜**。`RetrainingEvidenceBuilder` 里 `$0.role == "user"` 那个筛选照旧能用，`unknown` 会被自然跳过——**这是可接受的降级，不要改成把 `unknown` 也算成学员说的话**
+>
+> 另外：**给 `PracticeSession` 加 retraining 字段时，新参数必须带默认值**——`PracticeRunner.upsertSession` 与 `coach practice` 都在构造 `PracticeSession`，不带默认值这两处会编译不过。
 | P5 | 设计令牌 `Palette`/`Spacing`/`Radius` 与组件 `CoachCard`/`PrimaryActionCard`/`SectionHeader`/`EmptyStateView` | Phase 3 Task 7 | `ls Sources/IELTSCoachUI/DesignSystem/` | 停下来报告 |
 | P6 | `SidebarItem` 十项导航与 `AppState` | Phase 3 Task 3 | `ls Sources/IELTSCoachUI/Navigation.swift Sources/IELTSCoachUI/AppState.swift` | 停下来报告 |
 | P7 | 复盘报告页（`ReviewReportViewModel`）| Phase 3 Task 5 | `ls Sources/IELTSCoachUI/Review/` | 停下来报告 |

@@ -62,6 +62,17 @@ macOS 的 TCC 机制决定了这一点：`AVCaptureDevice.requestAccess(for: .au
 
 **Task 1–8 不依赖 P4-1 / P4-2**，可以先做。只有 Task 9（把播放器嵌进训练记录页）和 Task 7 的最后一条测试需要它们。
 
+> ### Phase 4 的实施计划已于 2026-08-06 写完，上面两条都由它交付（复审补记）
+>
+> 见 `docs/superpowers/plans/2026-08-06-phase4-transcript-and-history.md`。开工时按上表的命令实测确认，别只信这段话。它交付的形状与本阶段有关的有四条：
+>
+> | | Phase 4 的实际形状 | 对本阶段的影响 |
+> |---|---|---|
+> | P4-1 | `Sources/IELTSCoachUI/History/HistoryView.swift` + `HistoryViewModel.swift`；行模型 `HistoryRow` 已带 `hasRecording: Bool`（只看 `recordingPath` 非空，**不看文件在不在**）| Task 9 直接改那个文件，不要新建。文件不在时的 `.missing` 提示仍是 Task 9 的活 |
+> | P4-2 | `PracticeRunner.finishPractice()` 里按 id upsert 进 `state.sessions`，私有方法 `upsertSession(id:reportPath:)` | **`recordingPath` 请给 `upsertSession` 加一个 `recordingPath: String?` 参数**，与 `reportPath` 同样处理（非 nil 才写）。不要另写一套会话落库逻辑 |
+> | 签名 | `PracticeRunner(bridge:pasteboard:directory:transcript:now:)`，**没有 `store:`**，`directory:` 默认 `.resolve()` | 见 Task 7 Step 1 那个 ⚠️ 块。`recording:` 加在 `now:` 前后都行，带默认值 `nil` |
+> | 删除 | Phase 4 的 `SessionDeleter` 已经会连带删录音文件（跨阶段决策 4）| Task 9 的 `RecordingPlaybackViewModel.delete()` 删的是「只删录音、保留记录」。两者不冲突，但**两个删除入口都要在界面上说清各自删了什么** |
+
 ---
 
 ## 一个已经定下来、不要再改的取舍：录音文件按「练习开始时刻」命名
@@ -2286,6 +2297,32 @@ final class FakeRecording: PracticeRecording, @unchecked Sendable {
 
 @MainActor
 final class PracticeRunnerRecordingTests: XCTestCase {
+    /// **每一个 runner 都必须拿到这个临时目录，一个都不能漏。**
+    ///
+    /// Phase 4 之后 `PracticeRunner.init` 的 `directory:` 参数默认值是 `.resolve()`，
+    /// 也就是**用户真实的数据目录**；而 `finishPractice()` 会往那里写一条训练记录、
+    /// 一份 reports/*.json 和一份 pending-reviews/*.txt。不传 `directory:` 的测试
+    /// 会在用户的 state.json 里种下几条假练习记录——**测试全绿，数据已经脏了**。
+    private var directory: DataDirectory!
+
+    override func setUpWithError() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "ielts-\(UUID().uuidString)")
+        directory = DataDirectory(root: root)
+        try directory.createIfNeeded()
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: directory.root)
+        directory = nil
+    }
+
+    private func runner(bridge: FakeBridge = FakeBridge(),
+                        recording: FakeRecording) -> PracticeRunner {
+        PracticeRunner(bridge: bridge, pasteboard: FakePasteboard(contents: ""),
+                       directory: directory, recording: recording)
+    }
+
     private static func setup() -> SessionSetup {
         SessionSetup(question: Question(id: "q1", part: 1, topic: "Home", prompt: "P"),
                      focusPart: .part1, durationMinutes: 5, goal: "")
@@ -2296,8 +2333,7 @@ final class PracticeRunnerRecordingTests: XCTestCase {
     func testRecordingStartsOnlyAfterTheExaminerPromptWasSent() async throws {
         let bridge = FakeBridge()
         let recording = FakeRecording()
-        let runner = PracticeRunner(bridge: bridge, pasteboard: FakePasteboard(contents: ""),
-                                    recording: recording)
+        let runner = self.runner(bridge: bridge, recording: recording)
 
         try await runner.start(setup: Self.setup())
 
@@ -2313,8 +2349,7 @@ final class PracticeRunnerRecordingTests: XCTestCase {
         let bridge = FakeBridge()
         let recording = FakeRecording()
         recording.beginOutcome = .failed("打不开麦克风。下一步：到系统设置里检查权限。")
-        let runner = PracticeRunner(bridge: bridge, pasteboard: FakePasteboard(contents: ""),
-                                    recording: recording)
+        let runner = self.runner(bridge: bridge, recording: recording)
 
         try await runner.start(setup: Self.setup())
 
@@ -2328,8 +2363,7 @@ final class PracticeRunnerRecordingTests: XCTestCase {
         let bridge = FakeBridge()
         let recording = FakeRecording()
         recording.beginOutcome = .skippedByUser
-        let runner = PracticeRunner(bridge: bridge, pasteboard: FakePasteboard(contents: ""),
-                                    recording: recording)
+        let runner = self.runner(bridge: bridge, recording: recording)
 
         try await runner.start(setup: Self.setup())
 
@@ -2342,8 +2376,7 @@ final class PracticeRunnerRecordingTests: XCTestCase {
         let bridge = FakeBridge()
         bridge.failAt = .startingVoice
         let recording = FakeRecording()
-        let runner = PracticeRunner(bridge: bridge, pasteboard: FakePasteboard(contents: ""),
-                                    recording: recording)
+        let runner = self.runner(bridge: bridge, recording: recording)
 
         try? await runner.start(setup: Self.setup())
 
@@ -2356,8 +2389,7 @@ final class PracticeRunnerRecordingTests: XCTestCase {
     func testRecordingIsFinalizedWhenTheReviewStepFails() async throws {
         let bridge = FakeBridge()
         let recording = FakeRecording()
-        let runner = PracticeRunner(bridge: bridge, pasteboard: FakePasteboard(contents: ""),
-                                    recording: recording)
+        let runner = self.runner(bridge: bridge, recording: recording)
         try await runner.start(setup: Self.setup())
 
         bridge.failAt = .capturingReview
@@ -2371,8 +2403,7 @@ final class PracticeRunnerRecordingTests: XCTestCase {
     func testCancelAlsoFinalizesTheRecording() async throws {
         let bridge = FakeBridge()
         let recording = FakeRecording()
-        let runner = PracticeRunner(bridge: bridge, pasteboard: FakePasteboard(contents: ""),
-                                    recording: recording)
+        let runner = self.runner(bridge: bridge, recording: recording)
         try await runner.start(setup: Self.setup())
 
         runner.cancel()
@@ -2389,8 +2420,7 @@ final class PracticeRunnerRecordingTests: XCTestCase {
             relativePath: "recordings/x.m4a", duration: 300,
             interruptions: [RecordingInterruption(at: Date(), recovered: true)],
             warning: "录音中途因为插拔耳机断了一下，已自动接上。下一步：回听时留意这一小段。")
-        let runner = PracticeRunner(bridge: bridge, pasteboard: FakePasteboard(contents: ""),
-                                    recording: recording)
+        let runner = self.runner(bridge: bridge, recording: recording)
         try await runner.start(setup: Self.setup())
 
         await runner.finishPractice()
@@ -2401,27 +2431,36 @@ final class PracticeRunnerRecordingTests: XCTestCase {
     /// 依赖 P4-2：Phase 4 必须已经让 PracticeRunner 往 state.sessions 里落会话记录。
     /// **若这条编译不过或断言失败，停下来报告，不要在本任务里补 Phase 4 的活。**
     func testTheRecordingPathIsStoredOnThePracticeSession() async throws {
-        let root = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appending(path: "ielts-\(UUID().uuidString)")
-        let directory = DataDirectory(root: root)
-        try directory.createIfNeeded()
-        defer { try? FileManager.default.removeItem(at: root) }
-
-        let store = StateStore(directory: directory)
         let recording = FakeRecording()
-        let runner = PracticeRunner(bridge: FakeBridge(), pasteboard: FakePasteboard(contents: ""),
-                                    store: store, recording: recording)
+        let runner = self.runner(recording: recording)
 
         try await runner.start(setup: Self.setup())
         await runner.finishPractice()
 
-        let saved = try store.load()
+        // 从同一个临时目录读回来。**不要另建一个指向别处的 StateStore**——
+        // 那样测的就不是 runner 到底写到哪儿去了。
+        let saved = try StateStore(directory: directory).load()
         XCTAssertEqual(saved.sessions.last?.recordingPath, "recordings/x.m4a")
     }
 }
 ```
 
-**注意：** `PracticeRunner` 的既有初始化参数（`bridge:`、`pasteboard:`、`store:` 等）以 Phase 3 落地的实际签名为准。上面的测试按最可能的形态写；**若实际签名不同，改测试去适配实际签名，不要为了迁就测试去改产品代码的参数名。**
+> ### ⚠️ `directory:` 不是可选的（2026-08-06 跨阶段复审改写，**必读**）
+>
+> 本计划初稿把 runner 写成 `PracticeRunner(bridge:pasteboard:recording:)`，并在一条测试里传 `store:`。
+> **Phase 4 落地后的实际签名是 `PracticeRunner(bridge:pasteboard:directory:transcript:now:)`**，
+> 没有 `store:` 这个参数（store 由它自己从 directory 派生），而 `directory:` 的默认值是 `.resolve()`
+> ——**用户真实的数据目录**。
+>
+> 同时 Phase 4 让 `finishPractice()` 真的开始往磁盘上写东西：一条 `PracticeSession`、
+> 一份 `reports/<id>.json`、一份 `pending-reviews/<id>.txt`。于是**任何一条不传 `directory:`
+> 又调了 `finishPractice()` 的测试，都会在用户的 `state.json` 里种下一条假练习记录**——
+> 测试全绿，训练记录页上凭空多出几场 "Home / P"，而且没有任何报错。
+>
+> 所以上面每一个 runner 都走 `self.runner(...)`，它必然带上临时目录。
+> **本任务新增测试时也一律走它，不要现场 `PracticeRunner(...)`。**
+>
+> 其余参数（`bridge:`、`pasteboard:`）以源码实际签名为准；**若实际签名与上面不同，改测试去适配实际签名，不要为了迁就测试去改产品代码的参数名**，但 `directory:` 这一条不在「可以将就」之列。
 
 - [ ] **Step 2: 运行，确认失败**
 

@@ -69,18 +69,42 @@ public enum Palette {
     public static let textSecondary = Color.black.opacity(0.56)
     public static let textOnAccent = Color.white
 
-    // 语义
-    public static let success = Color(red: 0.13, green: 0.60, blue: 0.35)
-    public static let warning = Color(red: 0.85, green: 0.55, blue: 0.10)
-    public static let danger = Color(red: 0.80, green: 0.20, blue: 0.20)
+    // 语义。**取值已按实测对比度调深过，见下方说明**
+    public static let success = Color(red: 0.09, green: 0.50, blue: 0.27)   // 约 5.02:1 / 4.58:1
+    public static let warning = Color(red: 0.60, green: 0.39, blue: 0.02)   // 约 5.05:1 / 4.60:1
+    public static let danger = Color(red: 0.80, green: 0.20, blue: 0.20)    // 约 5.14:1 / 4.68:1
 }
 ```
 
+**语义色为什么比设计稿深（2026-08-06 实测修正）：** 设计稿里的绿是 3.64:1、橙只有 2.72:1，
+都进不了下面那条「不可协商」的 4.5:1。这两个颜色不是装饰——它们要承载中文正文
+（例如「本周已完成」「这份 PDF 可能是扫描件」），读不清就是缺陷。所以调深到刚过线，
+色相保持不变。**看着比设计稿沉一点是刻意的，不是调色失误。**
+
+> ### ⚠️ 上面 `success` 与 `warning` 两个取值不达标（2026-08-06 跨阶段复审记，**待用户确认后改写本节**）
+>
+> 按下面「对比度底线」那张表实测：
+>
+> | 令牌 | 上面写的 | 对白卡片 | 对内容区底色 | 建议改成 | 改后 |
+> |---|---|---|---|---|---|
+> | `success` | `(0.13, 0.60, 0.35)` | **3.64:1** | 3.44:1 | `(0.09, 0.50, 0.27)` | 约 5.02:1 / 4.58:1 |
+> | `warning` | `(0.85, 0.55, 0.10)` | **2.72:1** | 2.57:1 | `(0.60, 0.39, 0.02)` | 约 5.05:1 / 4.60:1 |
+>
+> 两者都低于本节那条「不可协商」的 4.5:1，而 **Phase 8 明确要用 `Palette.warning` 显示一段中文正文**——那是正文，不是装饰。`danger`（约 5.14:1）达标，不动。
+>
+> **Phase 3 Task 7 与 Phase 10 Task 12 都已按建议值实现，并有测试拦着。**
+> 改后的颜色在浅色下会明显更深；**用户确认观感之后，把上面代码块里那两行直接改掉、删掉本注记**。
+> 若用户想换别的取值，唯一前提是仍 ≥ 4.5:1。
+
 ### 深色模式
 
-**Phase 3 只做浅色，但所有颜色必须走令牌**，这样 Phase 7 加深色模式时只改这一个文件，不用翻遍所有视图。
+**Phase 3 只做浅色，但所有颜色必须走令牌**，这样加深色模式时只改这一个文件，不用翻遍所有视图。
 
 **不要用反色实现深色模式**——深色下要用降饱和的色调变体，并单独验证对比度。
+
+> **归属更正（2026-08-06）：** 本节原写「Phase 7 加深色模式」。Phase 7 明确没做，8/9 也没接。
+> 跨阶段决策 7 已把深色模式收口到 **Phase 10 Task 12 / 13**：两套静态取值（`Palette.light` / `Palette.dark`）
+> + 跟随系统外观的动态令牌，**不提供手动切换**（理由见 Phase 10 Task 13）。
 
 ### 对比度底线（不可协商）
 
@@ -91,6 +115,10 @@ public enum Palette {
 | 大标题、图标 vs 背景 | 3:1 |
 
 **`textSecondary` 用 56% 黑而不是常见的 40%**，就是为了守住 4.5:1。灰上加灰是让界面显廉价的头号原因。
+
+**算对比度时必须先按 alpha 把前景合成到背景上，再算亮度。** `Color.black.opacity(0.56)` 的三个分量是**纯黑**，透明度全在 alpha 上——直接拿分量算会得到 21:1，而它在屏幕上只有 4.94:1。忽略 alpha 的对比度测试对每一个半透明令牌都是空转的，包括上面这条「56% 而不是 40%」本身。
+
+这三条底线现在由 `Tests/IELTSCoachUITests/DesignSystemTests.swift`（Phase 3，浅色）与 `Tests/IELTSCoachUITests/AppearanceContrastTests.swift`（Phase 10，两套外观的完整矩阵）逐对验证，不再靠目测。
 
 ---
 

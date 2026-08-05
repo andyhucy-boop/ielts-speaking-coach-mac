@@ -55,6 +55,12 @@
 
 **这种情况下不要停工，也不要自己顺手去实现 Phase 4。** 照本计划做完，然后在 Task 11 的验收报告里写明「`state.sessions` 为空，统计三格为 0，等 Phase 4 接上后复验」。
 
+> **2026-08-06 复审补记：Phase 4 的实施计划已经写完**（`plans/2026-08-06-phase4-transcript-and-history.md` Task 6），
+> `PracticeRunner.finishPractice()` 会按 id upsert 一条带 `startedAt` / `endedAt` / `transcript` / `reportPath` 的 `PracticeSession`。
+> 按正常执行顺序（3→4→5→6→7），你接手时**依赖 1 应该已经成立**，三格会有真实数字，
+> Task 11 的报告里不用再写「等 Phase 4 接上后复验」。
+> **但仍然按上面的方式实测确认**——降级路径别删，它守的是「命令行时期练的那些场次」。
+
 ### 依赖 2：session id 的取值必须前后一致
 
 `PracticeSession.id` 的注释写的是 `"YYYY-MM-DD-NNN"`，而 `PracticeCommand.swift` 第 115 行归档时用的 sessionID 是：
@@ -64,6 +70,11 @@ let sessionID = ISO8601DateFormatter().string(from: Date())
 ```
 
 即 `"2026-08-05T14:03:11Z"`。**两种形状都以 `YYYY-MM-DD` 开头**，所以本计划的 `CoachTime.parseDayPrefix` 两种都能解析出日期。若 Phase 4 把两者统一了，`SessionTimeline` 会走更精确的那条路（直接用 `PracticeSession.startedAt`）；若没统一，走日期兜底路径并在界面上给出警告。**两条路都已写进测试，不需要你做选择。**
+
+> **2026-08-06 复审补记：** 跨阶段决策 1 已定案并落进 Phase 4 Task 1——
+> **新产生的编号一律 `YYYY-MM-DD-NNN`，`startedAt` 也填好了**，所以会走精确那条路；
+> **但用户现有 `state.json` 里的 ISO8601 编号仍然存在**（`SessionID.validated` 的白名单特意含 `:` 与 `+`，
+> 就是为了不让已有记录失效）。**`CoachTime.parseDayPrefix` 那条兜底路径不要删。**
 
 ### Phase 3 必须已提供（若缺，先补，别绕过）
 
@@ -281,6 +292,22 @@ final class WeeklyGoalTests: XCTestCase {
                                      weeklyGoal: 0).weeklyGoal, 5)
     }
 
+    /// **跨阶段回归（2026-08-06 复审补入）。** 本任务整体替换了 `CoachSettings`，
+    /// 最容易犯的错就是把 Phase 4 加的 `transcriptEnabled` 顺手删掉——
+    /// 那样编译能过（新参数都带默认值），只是用户关掉的逐字稿开关会在下一次
+    /// 写盘时被默认值悄悄盖回「开」，没有任何报错。
+    ///
+    /// **Phase 4 尚未交付时，把这条整条注释掉并在报告里写明，不要删。**
+    func testTranscriptSwitchFromPhase4SurvivesThisRewrite() throws {
+        let json = #"{"recordingEnabled":false,"recordingConsentAt":"","transcriptEnabled":false}"#
+        let settings = try JSONDecoder().decode(CoachSettings.self, from: Data(json.utf8))
+        XCTAssertFalse(settings.transcriptEnabled, "transcriptEnabled 被这次重写弄丢了")
+
+        let roundTripped = try JSONDecoder().decode(
+            CoachSettings.self, from: try JSONEncoder().encode(settings))
+        XCTAssertFalse(roundTripped.transcriptEnabled, "transcriptEnabled 没有被编码回去")
+    }
+
     // MARK: - 落盘与读回
 
     func testWeeklyGoalPersistsThroughStateStore() throws {
@@ -413,8 +440,14 @@ public enum CoachTime {
 public struct CoachSettings: Codable, Equatable, Sendable {
     public var recordingEnabled: Bool
     public var recordingConsentAt: String
+    /// 「记录对话逐字稿」。**Phase 4 Task 2 加的，本任务原样保留，不得删。**
+    /// ROADMAP 第 5 节：开 / 关，默认开。
+    public var transcriptEnabled: Bool
     /// 每周训练目标次数。ROADMAP 第 5 节：用户可配置，默认 5 次。
     public var weeklyGoal: Int
+
+    /// ↓ 来自 Phase 4 Task 2，原样保留
+    public static let defaultTranscriptEnabled = true
 
     public static let defaultWeeklyGoal = 5
     /// 上限 21 = 一天三场。给上限是为了让界面上的 Stepper 有边界，
@@ -429,16 +462,20 @@ public struct CoachSettings: Codable, Equatable, Sendable {
     }
 
     // 合成的 memberwise init 是 internal 的，App target 与 MCP target 构造不了。
-    // weeklyGoal 给默认值，既有调用点（CoachState.empty、测试）不用改。
+    // 后两个参数给默认值，既有调用点（CoachState.empty、测试）不用改。
+    // **transcriptEnabled 排在 weeklyGoal 前面，与 Phase 4 定下的位置一致**——
+    // 换位置会打断 Phase 4 已有的调用点；两个都有默认值，只传 weeklyGoal: 照样能编译。
     public init(recordingEnabled: Bool, recordingConsentAt: String,
+                transcriptEnabled: Bool = CoachSettings.defaultTranscriptEnabled,
                 weeklyGoal: Int = CoachSettings.defaultWeeklyGoal) {
         self.recordingEnabled = recordingEnabled
         self.recordingConsentAt = recordingConsentAt
+        self.transcriptEnabled = transcriptEnabled
         self.weeklyGoal = CoachSettings.normalized(weeklyGoal)
     }
 
     enum CodingKeys: String, CodingKey {
-        case recordingEnabled, recordingConsentAt, weeklyGoal
+        case recordingEnabled, recordingConsentAt, transcriptEnabled, weeklyGoal
     }
 
     /// 手写解码：weeklyGoal 是 Phase 7 才加的字段，老的 state.json 里没有它。
@@ -450,11 +487,19 @@ public struct CoachSettings: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         recordingEnabled = try container.decodeIfPresent(Bool.self, forKey: .recordingEnabled) ?? false
         recordingConsentAt = try container.decodeIfPresent(String.self, forKey: .recordingConsentAt) ?? ""
+        // ↓ Phase 4 Task 2 的那一行，原样保留。删了它，用户关掉的逐字稿开关
+        //   会在下一次写盘时被默认值悄悄盖回「开」，而且没有任何报错。
+        transcriptEnabled = try container.decodeIfPresent(Bool.self, forKey: .transcriptEnabled)
+            ?? CoachSettings.defaultTranscriptEnabled
         weeklyGoal = CoachSettings.normalized(
             try container.decodeIfPresent(Int.self, forKey: .weeklyGoal))
     }
 }
 ```
+
+> **上面这份已经把 Phase 4 的 `transcriptEnabled` 合并进来了**（2026-08-06 复审补入——初稿只在文字里提醒，代码块里没有，而实现者照抄的是代码块）。
+> 动手前先跑 `grep -n "transcriptEnabled" Sources/IELTSCoachCore/Model/CoachState.swift`：
+> **没输出**说明 Phase 4 还没做，把上面 `transcriptEnabled` 相关的四处（字段、静态常量、init 参数与赋值、`CodingKeys` 与 `init(from:)` 各一行）删掉再用，并在报告里写明，Phase 4 届时自己合并回来。
 
 **与上游 Windows 版的兼容性：** 这是一次纯追加的字段变更，`schemaVersion` 仍是 3。上游读到不认识的 `weeklyGoal` 键会忽略它；本工具读到没有该键的旧文件会补默认值。两个方向都不会丢数据，因此不需要升 schemaVersion。
 
@@ -464,7 +509,10 @@ Run: `swift test --filter CoachTimeTests`
 Expected: PASS（8 个测试）
 
 Run: `swift test --filter WeeklyGoalTests`
-Expected: PASS（8 个测试）
+Expected: PASS（9 个测试；Phase 4 未交付而把跨阶段那条注释掉时，是 8 个）
+
+Run: `swift test --filter TranscriptSettingsTests`
+Expected: PASS —— **Phase 4 的 5 条一条都不能红。** 红了说明 `transcriptEnabled` 在这次整体替换里被抄丢了，**去把字段补回来，不要改那些测试**
 
 Run: `swift test`
 Expected: 全绿（既有测试一条都不能红——`CoachSettings` 的新参数有默认值，调用点无需改动）

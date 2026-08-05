@@ -191,6 +191,17 @@ Tests/
 > - 仍有 ISO8601 形状 → **两条路二选一，并在报告里写明选了哪条**：
 >   (a) 把 `:` 与 `+` 加进白名单（它们不构成路径穿越，只是文件名里不好看）；
 >   (b) 先统一 Phase 4 的写法。**不要沉默地保持现状。**
+>
+> ### ✅ 已由跨阶段决策 1 定案，且由 Phase 4 提前落地（2026-08-06 复审第二轮）
+>
+> **选的是 (a)**：新产生的编号一律 `YYYY-MM-DD-NNN`，但 `validated` 的白名单**含 `:` 与 `+`**——
+> 用户现有的 `state.json` 里已经有 ISO8601 形状的 id，拒绝它等于让已有练习记录全部失效。
+>
+> **`Sources/IELTSCoachCore/Model/SessionID.swift` 与 `CoachError.invalidSessionID` 已由 Phase 4 Task 1 建好。**
+> 先跑 `ls Sources/IELTSCoachCore/Model/SessionID.swift`：
+>
+> - 存在 → **不要新建、不要把冒号从白名单里删掉**，跑一次 `swift test --filter SessionIDTests` 确认全绿，直接进下一个任务
+> - 不存在 → Phase 4 还没做，照本任务实现，**但白名单里必须加上 `:` 与 `+`**（下面 Step 3 的代码要相应改）
 
 - [ ] **Step 1: 写失败的测试**
 
@@ -836,6 +847,19 @@ git commit -m "feat(core): 仪表盘聚合与错题排序"
 **为什么单独一个任务：** 这是成品标准第 7 条（「任何一步失败，已产生的内容都还在」）在本阶段的落点。用户练了半小时换来的复盘，不能因为解析出错就没了。`coach practice` 里已经有一份「先落盘再解析」的内联实现，本阶段把它做成可复用、有测试的东西，`save_session_review` 直接用。
 
 **不改 `PracticeCommand`。** 它现在跑得好好的，改它会把 Phase 2 的验收拖进来。留一句注释指过来即可。
+（**2026-08-06 复审补记：** Phase 4 Task 12 会为了会话编号与会话落库改 `PracticeCommand`。本任务仍然不用管它。）
+
+> ### ✅ 这个文件已由 Phase 4 Task 7 提前建好（2026-08-06 复审第二轮）
+>
+> 决策 2 要求「复盘取回失败后的补救做进界面」，Phase 4 因此提前建了 `PendingReviewStore`，
+> **`write` 与本任务这份逐字一致**，另外多了清点用的 `list` / `read` / `markImported` / `delete`
+> 与常量 `importedSuffix`。
+>
+> 先跑 `ls Sources/IELTSCoachCore/Storage/PendingReviewStore.swift`：
+>
+> - 存在 → 跑一次 `swift test --filter PendingReviewStoreTests` 确认全绿，**直接进下一个任务**，
+>   本任务不产生任何改动（在报告里写明「Phase 4 已交付，本任务只做验证」）
+> - 不存在 → 照本任务实现
 
 - [ ] **Step 1: 写失败的测试**
 
@@ -3071,8 +3095,9 @@ enum SaveSessionReviewTool {
                     "\(error.localizedDescription)\n"
                     + "好消息是原文没丢，已经存在 \(pendingURL.path)。"
                     + "下一步：打开这个文件看看 ChatGPT 到底输出了什么；"
-                    + "让它按 get_training_context 给的 reviewRequestPrompt 重新输出一次后再调一次本工具，"
-                    + "或者在终端运行 coach reimport 把已落盘的复盘补入库。")
+                    + "让它按 get_training_context 给的 reviewRequestPrompt 重新输出一次后再调一次本工具；"
+                    + "也可以在 App 的「复盘报告」页点「重新导入待处理的复盘」，"
+                    + "或在终端运行 coach reimport 把已落盘的复盘补入库。")
             }
 
             let timestamp = environment.timestamp
@@ -3114,7 +3139,8 @@ enum SaveSessionReviewTool {
                     "复盘里有 \(outcome.skipped.joined(separator: "、"))，但一条都没能归进档案。"
                     + "这通常意味着 ChatGPT 用的字段名和本工具读的对不上——归档 0 条不等于没错题。"
                     + "下一步：原文完整保存在 \(pendingURL.path)，"
-                    + "让 ChatGPT 按 reviewRequestPrompt 里写死的字段名重新输出一次，"
+                    + "让 ChatGPT 按 reviewRequestPrompt 里写死的字段名重新输出一次；"
+                    + "也可以在 App 的「复盘报告」页点「重新导入待处理的复盘」，"
                     + "或在终端运行 coach reimport 重新入库，这场练习不会白费。"
 
                 return Payload(

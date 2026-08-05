@@ -1318,47 +1318,101 @@ git commit -m "feat(ui): 今日训练页"
 
 对比度是能算的，因此能测。这是设计规范里唯一可自动验证的部分，务必测。
 
+> ### ⚠️ 两处必须照下面这份来，不要照 `DESIGN-SYSTEM.md` 的初稿抄（2026-08-06 跨阶段复审补入）
+>
+> **一、对比度必须先按 alpha 合成到背景上，再算亮度。**
+> `Palette.textSecondary` 是 `Color.black.opacity(0.56)`，而 `NSColor(...).redComponent`
+> 拿到的是**纯黑**——透明度全在 alpha 上。忽略 alpha 直接算，得到的是 21:1，
+> 而它在屏幕上真正的比值是 4.94:1。后果不只是数字不准：
+> **Step 5 那条突变验证（把 0.56 改成 0.40，`testSecondaryTextAlsoMeetsAA` 必须变红）在忽略 alpha 的算法下不会红**
+> ——0.40 黑的分量同样是 0，算出来还是 21:1。这份规范里最要紧的守门员会是失灵的。
+> 下面的 `contrast(_:on:)` 已经先合成再算。
+>
+> **二、`success` 与 `warning` 用 Step 3 里那组修正值，不要照第 2 节的原值抄。**
+> `DESIGN-SYSTEM.md` 第 2 节写的 `success = (0.13, 0.60, 0.35)` 实测对白卡片只有 **3.64:1**、
+> `warning = (0.85, 0.55, 0.10)` 只有 **2.72:1**，都低于同一节那条「不可协商」的 4.5:1；
+> 而 Phase 8 明确要用 `Palette.warning` 显示一段中文正文（**那是正文，不是装饰**）。
+> 下面新增的两条测试会把这件事钉住。第 2 节的取值表由 Phase 10 Task 12 统一更新（那里同时加深色）。
+
 ```swift
 import SwiftUI
 import XCTest
 @testable import IELTSCoachUI
 
 final class DesignSystemTests: XCTestCase {
-    /// WCAG 相对亮度
-    private func luminance(_ color: Color) -> Double {
-        let ns = NSColor(color).usingColorSpace(.sRGB)!
-        func channel(_ v: CGFloat) -> Double {
-            let c = Double(v)
-            return c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+    /// WCAG 相对亮度。**不看 alpha**——调用方负责先合成。
+    private func luminance(red: Double, green: Double, blue: Double) -> Double {
+        func channel(_ c: Double) -> Double {
+            c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
         }
-        return 0.2126 * channel(ns.redComponent)
-             + 0.7152 * channel(ns.greenComponent)
-             + 0.0722 * channel(ns.blueComponent)
+        return 0.2126 * channel(red) + 0.7152 * channel(green) + 0.0722 * channel(blue)
     }
 
-    private func contrast(_ a: Color, _ b: Color) -> Double {
-        let (l1, l2) = (luminance(a), luminance(b))
-        return (max(l1, l2) + 0.05) / (min(l1, l2) + 0.05)
+    private func components(_ color: Color) -> (r: Double, g: Double, b: Double, a: Double) {
+        // 取不出分量时返回全 NaN。**不要改成「取不出就当黑色」**——那会让对比度
+        // 变得非常好看，而 NaN 会让任何 XCTAssertGreaterThanOrEqual 当场失败，这正是想要的。
+        guard let ns = NSColor(color).usingColorSpace(.sRGB) else {
+            return (.nan, .nan, .nan, .nan)
+        }
+        return (Double(ns.redComponent), Double(ns.greenComponent),
+                Double(ns.blueComponent), Double(ns.alphaComponent))
+    }
+
+    /// 前景压在背景上之后的对比度。背景必须是不透明令牌。
+    ///
+    /// **这三行合成就是这个函数存在的意义。** 删掉它们，
+    /// 所有半透明令牌（textSecondary、sidebarText、cardBorder）都会「永远达标」，
+    /// 下面几条断言全部退化成空转。
+    private func contrast(_ foreground: Color, on background: Color) -> Double {
+        let fg = components(foreground)
+        let bg = components(background)
+        let r = fg.r * fg.a + bg.r * (1 - fg.a)
+        let g = fg.g * fg.a + bg.g * (1 - fg.a)
+        let b = fg.b * fg.a + bg.b * (1 - fg.a)
+        let front = luminance(red: r, green: g, blue: b)
+        let back = luminance(red: bg.r, green: bg.g, blue: bg.b)
+        return (max(front, back) + 0.05) / (min(front, back) + 0.05)
+    }
+
+    /// 半透明前景必须被合成，而不是被当成不透明色。
+    /// 56% 黑压在白底上观感等同 #747474，约 4.94:1；忽略 alpha 会算成 21:1。
+    func testAlphaIsCompositedInsteadOfIgnored() {
+        let ratio = contrast(Color.black.opacity(0.56), on: .white)
+        XCTAssertEqual(ratio, 4.94, accuracy: 0.2)
+        XCTAssertLessThan(ratio, 6.0, "把半透明前景当成不透明色算了")
     }
 
     func testPrimaryTextMeetsAA() {
-        XCTAssertGreaterThanOrEqual(contrast(Palette.textPrimary, Palette.canvas), 4.5)
-        XCTAssertGreaterThanOrEqual(contrast(Palette.textPrimary, Palette.card), 4.5)
+        XCTAssertGreaterThanOrEqual(contrast(Palette.textPrimary, on: Palette.canvas), 4.5)
+        XCTAssertGreaterThanOrEqual(contrast(Palette.textPrimary, on: Palette.card), 4.5)
     }
 
     func testSecondaryTextAlsoMeetsAA() {
         // 次要文字仍然是要读的，不能降到 3:1。
         // 灰上加灰是让界面显廉价的头号原因。
-        XCTAssertGreaterThanOrEqual(contrast(Palette.textSecondary, Palette.card), 4.5)
+        XCTAssertGreaterThanOrEqual(contrast(Palette.textSecondary, on: Palette.card), 4.5)
+        XCTAssertGreaterThanOrEqual(contrast(Palette.textSecondary, on: Palette.canvas), 4.5)
     }
 
     func testTextOnAccentMeetsAA() {
-        XCTAssertGreaterThanOrEqual(contrast(Palette.textOnAccent, Palette.accent), 4.5)
+        XCTAssertGreaterThanOrEqual(contrast(Palette.textOnAccent, on: Palette.accent), 4.5)
     }
 
     func testSidebarTextMeetsAA() {
-        XCTAssertGreaterThanOrEqual(contrast(Palette.sidebarText, Palette.sidebarBackground), 4.5)
-        XCTAssertGreaterThanOrEqual(contrast(Palette.sidebarTextSelected, Palette.sidebarBackground), 4.5)
+        XCTAssertGreaterThanOrEqual(contrast(Palette.sidebarText, on: Palette.sidebarBackground), 4.5)
+        XCTAssertGreaterThanOrEqual(
+            contrast(Palette.sidebarTextSelected, on: Palette.sidebarBackground), 4.5)
+    }
+
+    /// 语义色也要读得清。Phase 8 会用 `Palette.warning` 显示一段中文正文，
+    /// 那是正文不是装饰——设计稿的原值只有 2.72:1，进不了这条线。
+    func testSemanticColorsAreReadableAsText() {
+        for (name, color) in [("success", Palette.success),
+                              ("warning", Palette.warning),
+                              ("danger", Palette.danger)] {
+            XCTAssertGreaterThanOrEqual(contrast(color, on: Palette.card), 4.5, "\(name) 对卡片")
+            XCTAssertGreaterThanOrEqual(contrast(color, on: Palette.canvas), 4.5, "\(name) 对内容区底色")
+        }
     }
 
     func testSpacingScaleIsMultiplesOfFour() {
@@ -1376,7 +1430,18 @@ Expected: 编译失败 —— `Palette` 未定义
 
 - [ ] **Step 3: 实现**
 
-按 `DESIGN-SYSTEM.md` 第 2、3 节逐字实现 `Palette`、`Spacing`、`Radius`。
+按 `DESIGN-SYSTEM.md` 第 2、3 节逐字实现 `Palette`、`Spacing`、`Radius`，**只有 `success` 与 `warning` 两处例外**（见 Step 1 上面那个 ⚠️ 块）：
+
+```swift
+    // 第 2 节的原值 (0.13, 0.60, 0.35) 对白卡片只有 3.64:1，低于同一节的 4.5:1 底线。
+    public static let success = Color(red: 0.09, green: 0.50, blue: 0.27)   // 约 5.02:1 / 4.58:1
+    // 第 2 节的原值 (0.85, 0.55, 0.10) 对白卡片只有 2.72:1。Phase 8 会用它显示中文正文。
+    public static let warning = Color(red: 0.60, green: 0.39, blue: 0.02)   // 约 5.05:1 / 4.60:1
+    // danger 原值达标（约 5.14:1），不动。
+    public static let danger  = Color(red: 0.80, green: 0.20, blue: 0.20)
+```
+
+**这两个值看上去会比设计稿明显更深，这是必然的**——4.5:1 是不可协商的那条线。用户若觉得太暗可以再调，但调完必须仍 ≥ 4.5:1，`testSemanticColorsAreReadableAsText` 会拦住。**已列进 Task 11 的人工验收。**
 
 `Components.swift` 实现四个组件，规范见 `DESIGN-SYSTEM.md` 第 4 节：
 
@@ -1390,13 +1455,25 @@ Expected: 编译失败 —— `Palette` 未定义
 - [ ] **Step 4: 运行，确认通过**
 
 Run: `swift test --filter DesignSystemTests`
-Expected: PASS（5 个测试）
+Expected: PASS（8 个测试）
 
-- [ ] **Step 5: 突变验证**
+- [ ] **Step 5: 突变验证（三条，都要做）**
 
-把 `Palette.textSecondary` 的不透明度从 0.56 改成 0.40（这是很多人会「顺手调淡一点」的值），重跑：`testSecondaryTextAlsoMeetsAA` 必须变红。改回后确认全绿。
+**突变 A：** 把 `Palette.textSecondary` 的不透明度从 0.56 改成 0.40（这是很多人会「顺手调淡一点」的值），重跑：`testSecondaryTextAlsoMeetsAA` 必须变红（实测约 3.66:1）。改回后确认全绿。
 
 **这条守的正是「界面显廉价」最常见的成因**，而它平时没人能一眼指出来——只会觉得「有点糊但说不上哪儿不对」。
+
+**突变 B：** 把 `contrast(_:on:)` 里那三行合成
+```swift
+let r = fg.r * fg.a + bg.r * (1 - fg.a)
+```
+（连同 g、b）改成 `let r = fg.r`（连同 g、b），重跑：`testAlphaIsCompositedInsteadOfIgnored` 必须变红（比值变成 21:1）。改回后确认全绿。
+
+**突变 B 守的是突变 A 本身。** 忽略 alpha 时，0.56 改成 0.40 也不会让任何测试变红——那条守门员是空转的。**先做 B 再做 A**，确认 A 的红是真红。
+
+**突变 C：** 把 `Palette.warning` 改回 `DESIGN-SYSTEM.md` 第 2 节的原值 `Color(red: 0.85, green: 0.55, blue: 0.10)`，重跑：`testSemanticColorsAreReadableAsText` 必须变红并指出「warning 对卡片」。改回后确认全绿。
+
+三次的实际输出（哪条红了、报什么）都写进任务报告。
 
 - [ ] **Step 6: 提交**
 
@@ -1804,6 +1881,10 @@ Expected: 仍然显示「环境就绪」。**若又要求重新授权，说明�
 - 系统「减弱动态效果」打开后，界面是否无动画且功能正常
 - 系统文字调到最大时，是否不截断、不重叠
 - 统计数字变化时是否不抖动（等宽数字）
+
+**另外一条必须由用户拍板（2026-08-06 跨阶段复审补入）：**
+
+`Palette.success` 与 `Palette.warning` 相对 `DESIGN-SYSTEM.md` 第 2 节的取值**被调深了**（原值分别只有 3.64:1 与 2.72:1，低于同一节那条不可协商的 4.5:1）。它们在浅色下会明显更深。**请确认能接受**；不能接受就说，重调的唯一前提是仍 ≥ 4.5:1（`testSemanticColorsAreReadableAsText` 会拦）。
 
 - [ ] **Step 6: 记录并提交**
 
