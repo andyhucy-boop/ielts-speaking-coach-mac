@@ -165,7 +165,132 @@ CoachApp.main()
 // 占位文件，仅为满足 SPM 的 target 目录校验。Task 2 起会被真正的测试替换。
 ```
 
-- [ ] **Step 3: 写打包脚本**
+- [ ] **Step 3: 生成 App 图标**
+
+**没有图标的 `.app` 在程序坞里是一张白纸。** 这是用户看到这个产品的第一眼，属于「界面要美丽」的一部分。
+
+用系统 AppKit 画，不引入任何图片素材，也不依赖设计工具。
+
+`scripts/make-icon.swift`：
+
+```swift
+#!/usr/bin/env swift
+// 生成 App 图标。零外部依赖，只用系统 AppKit 绘制。
+// 用法：swift scripts/make-icon.swift <输出的 .iconset 目录>
+//
+// 图形：Big Sur 风格圆角方块（品牌紫渐变）+ 白色对话气泡 + 三根声波竖条。
+// 不放文字——16pt 下任何文字都会糊成一团。
+import AppKit
+
+let outDir = CommandLine.arguments.count > 1
+    ? CommandLine.arguments[1] : "./AppIcon.iconset"
+try? FileManager.default.createDirectory(
+    atPath: outDir, withIntermediateDirectories: true)
+
+let accentTop = NSColor(srgbRed: 0.435, green: 0.396, blue: 0.953, alpha: 1)
+let accentBottom = NSColor(srgbRed: 0.278, green: 0.231, blue: 0.788, alpha: 1)
+
+/// 在 1024×1024 画布上绘制，其余尺寸由此缩放而来。
+func renderMaster() -> NSImage {
+    let side: CGFloat = 1024
+    let image = NSImage(size: NSSize(width: side, height: side))
+    image.lockFocus()
+
+    // Big Sur 图标规范：图形占画布约 80%，四周留白
+    let inset = side * 0.10
+    let plate = NSRect(x: inset, y: inset,
+                       width: side - inset * 2, height: side - inset * 2)
+    let squircle = NSBezierPath(roundedRect: plate,
+                                xRadius: plate.width * 0.2237,
+                                yRadius: plate.width * 0.2237)
+    squircle.addClip()
+    NSGradient(starting: accentTop, ending: accentBottom)?
+        .draw(in: plate, angle: -90)
+
+    // 对话气泡
+    let b = NSRect(x: plate.minX + plate.width * 0.20,
+                   y: plate.minY + plate.height * 0.28,
+                   width: plate.width * 0.60, height: plate.height * 0.44)
+    let bubble = NSBezierPath(roundedRect: b,
+                              xRadius: b.height * 0.28, yRadius: b.height * 0.28)
+    // 气泡尾巴
+    let tail = NSBezierPath()
+    tail.move(to: NSPoint(x: b.minX + b.width * 0.24, y: b.minY + 2))
+    tail.line(to: NSPoint(x: b.minX + b.width * 0.20, y: b.minY - b.height * 0.20))
+    tail.line(to: NSPoint(x: b.minX + b.width * 0.48, y: b.minY + 2))
+    tail.close()
+    NSColor.white.setFill()
+    bubble.fill()
+    tail.fill()
+
+    // 三根声波竖条，高度不等——表示「说话」而不是「静音」
+    let ratios: [CGFloat] = [0.40, 0.72, 0.52]
+    let barW = b.width * 0.085
+    let gap = b.width * 0.115
+    let totalW = barW * 3 + gap * 2
+    var x = b.midX - totalW / 2
+    accentBottom.setFill()
+    for r in ratios {
+        let h = b.height * r
+        let bar = NSBezierPath(roundedRect: NSRect(x: x, y: b.midY - h / 2,
+                                                   width: barW, height: h),
+                               xRadius: barW / 2, yRadius: barW / 2)
+        bar.fill()
+        x += barW + gap
+    }
+
+    image.unlockFocus()
+    return image
+}
+
+func writePNG(_ source: NSImage, side: Int, to path: String) {
+    let target = NSImage(size: NSSize(width: side, height: side))
+    target.lockFocus()
+    NSGraphicsContext.current?.imageInterpolation = .high
+    source.draw(in: NSRect(x: 0, y: 0, width: side, height: side))
+    target.unlockFocus()
+
+    guard let tiff = target.tiffRepresentation,
+          let rep = NSBitmapImageRep(data: tiff),
+          let png = rep.representation(using: .png, properties: [:]) else {
+        FileHandle.standardError.write(
+            Data("❌ 生成 \(path) 失败。下一步：确认运行环境有图形上下文（不能在纯 SSH 会话里跑）。\n".utf8))
+        exit(1)
+    }
+    try? png.write(to: URL(fileURLWithPath: path))
+}
+
+let master = renderMaster()
+// iconutil 要求的固定文件名，缺一个就打不出 .icns
+for base in [16, 32, 128, 256, 512] {
+    writePNG(master, side: base, to: "\(outDir)/icon_\(base)x\(base).png")
+    writePNG(master, side: base * 2, to: "\(outDir)/icon_\(base)x\(base)@2x.png")
+}
+print("✅ 图标已生成到 \(outDir)")
+```
+
+`scripts/make-icon.sh`（把上面的产物转成 `.icns`）：
+
+```bash
+#!/bin/bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ICONSET="$ROOT/.build/AppIcon.iconset"
+
+rm -rf "$ICONSET"
+swift "$ROOT/scripts/make-icon.swift" "$ICONSET"
+iconutil -c icns "$ICONSET" -o "$ROOT/.build/AppIcon.icns"
+echo "✅ 已生成 $ROOT/.build/AppIcon.icns"
+```
+
+验证：
+
+Run: `chmod +x scripts/make-icon.sh && ./scripts/make-icon.sh && qlmanage -t -s 512 -o .build .build/AppIcon.icns`
+Expected: 生成 `.build/AppIcon.icns`，无报错
+
+**图标好不好看由人判断（Task 11）。** 这一步只保证「有图标、能生成、尺寸齐全」。若实现出来觉得难看，改 `renderMaster()` 即可，不影响其他任何任务。
+
+- [ ] **Step 4: 写打包脚本**
 
 `scripts/build-app.sh`，需 `chmod +x`：
 
@@ -195,6 +320,10 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BUILD_DIR/release/IELTSCoachApp" "$APP/Contents/MacOS/IELTSCoachApp"
 
+echo "▶︎ 生成图标…"
+"$ROOT/scripts/make-icon.sh"
+cp "$BUILD_DIR/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -204,6 +333,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleDisplayName</key><string>$APP_NAME</string>
     <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
     <key>CFBundleExecutable</key><string>IELTSCoachApp</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>0.3.0</string>
     <key>CFBundleVersion</key><string>1</string>
@@ -236,7 +366,7 @@ echo "✅ 已生成 $APP"
 codesign -d -r- "$APP" 2>&1 | grep designated || true
 ```
 
-- [ ] **Step 4: 验证**
+- [ ] **Step 5: 验证**
 
 Run: `swift build && swift test`
 Expected: 构建通过，190 个既有测试全绿
@@ -248,9 +378,9 @@ Run: `./scripts/build-app.sh && codesign -d -r- ".build/IELTS Speaking Coach.app
 Expected: **连跑两次，两次的 designated 完全一致**。这一条是本任务的核心验收——不一致就说明签名不稳定，TCC 授权会反复失效。
 
 Run: `open ".build/IELTS Speaking Coach.app"`
-Expected: 弹出一个窗口显示 "IELTS Speaking Coach"
+Expected: 弹出一个窗口显示 "IELTS Speaking Coach"，**且程序坞里的图标不是白纸**
 
-- [ ] **Step 5: 提交**
+- [ ] **Step 6: 提交**
 
 ```bash
 git add Package.swift Sources/IELTSCoachUI/ Sources/IELTSCoachApp/ Tests/IELTSCoachUITests/ scripts/

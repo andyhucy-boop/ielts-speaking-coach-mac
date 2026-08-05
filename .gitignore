@@ -4,3 +4,6 @@
 DerivedData/
 .DS_Store
 docs/phase0-dumps/
+
+# 用户自己的题库不入库（成品标准第 4 节：不内置商业题库）
+*.pdf
