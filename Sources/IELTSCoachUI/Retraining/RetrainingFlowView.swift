@@ -239,9 +239,13 @@ struct RetrainingFlowView: View {
     @ViewBuilder private var transcriptBody: some View {
         if let evidence {
             if evidence.learnerTurns.isEmpty {
+                // 那个开关在「训练记录」页右上角（`HistoryView.transcriptToggle`），
+                // **不在 ⌘, 那个设置窗口里**——那里只有录音那两块。
+                // 写成「到设置里找」的话，用户翻遍设置窗口也找不到，比不写下一步更糟。
+                // `RenderReachabilitySweepTests` 那条「控件得真在文案说的那一页上」钉着这一句。
                 hintCard("这一场的逐字稿里没有认得出是你说的话。"
                          + "下一步：上面的原话与原答照样可用；想让以后每一场都留下逐字稿，"
-                         + "到菜单「设置」里确认「记录对话逐字稿」是开着的。")
+                         + "到「训练记录」页右上角确认「记录对话逐字稿」是开着的。")
             } else {
                 listCard(title: "逐字稿里你说过的话",
                          lines: evidence.learnerTurns.map(\.text))

@@ -737,6 +737,77 @@ final class SourceGuardTests: XCTestCase {
                        "插值那处不该被当成字面标题：\(SourceGuard.literalClickTargets(in: code))")
     }
 
+    // MARK: - 文案指的那个控件，真在它说的那一页上吗
+
+    /// 文案经常被 `+` 拆成好几段写。不先拼回一段的话，
+    /// 「到「训练记录」页右上角」和「确认「记录对话逐字稿」…」分属两个字面量，
+    /// 「地点 + 控件」这一对就永远配不上——那条守卫会安静地永远绿。
+    func testCopySegmentsJoinLiteralsThatAreConcatenatedWithPlus() {
+        let code = """
+            hintCard("到「训练记录」页右上角"
+                     + "确认「记录对话逐字稿」是开着的。")
+            Text("另一段")
+            """
+        let segments = SourceGuard.copySegments(in: code)
+        XCTAssertTrue(segments.contains("到「训练记录」页右上角确认「记录对话逐字稿」是开着的。"),
+                      "用 `+` 连起来的文案没有被拼回一段：\(segments)")
+        XCTAssertTrue(segments.contains("另一段"), "没被连接的那一段也得单独在：\(segments)")
+    }
+
+    /// 「到某一页找某个控件」这一对要认得出来。
+    ///
+    /// 这是本项目实测漏过去的那一种：`RetrainingFlowView` 那句
+    /// 「到菜单「设置」里确认「记录对话逐字稿」是开着的」，控件真实存在（在训练记录页右上角），
+    /// 所以「文案指的控件存在吗」那条全绿；错的是它说的**位置**。
+    func testDirectionsPairAPageWithTheControlItPointsAt() {
+        let found = SourceGuard.directions(
+            in: "到菜单「设置」里确认「记录对话逐字稿」是开着的。",
+            locationNames: ["设置", "训练记录"],
+            controlTitles: ["记录对话逐字稿", "打开录音文件夹"])
+        XCTAssertEqual(found, [SourceGuard.Direction(location: "设置",
+                                                     control: "记录对话逐字稿")],
+                       "这一对没被认出来：\(found)")
+    }
+
+    /// 隔着一个分句的那种**不算指路**。
+    ///
+    /// 真源码里就有一句：「到「训练记录」页逐条删，或点下面的「打开录音文件夹」。」
+    /// 后半句那颗按钮说的是「下面的」——就在当前这一页上，跟前半句那一页无关。
+    /// 这条不写的话，守卫上线第一天就报假违规，然后被人以「误报太多」为由整条删掉。
+    func testDirectionsIgnoreAControlThatSitsInASeparateClause() {
+        let found = SourceGuard.directions(
+            in: "下一步：想删已有录音的话，到「训练记录」页逐条删，或点下面的「打开录音文件夹」。",
+            locationNames: ["训练记录"],
+            controlTitles: ["打开录音文件夹"])
+        XCTAssertEqual(found, [], "隔着一个逗号的那颗按钮被当成了指路：\(found)")
+    }
+
+    /// 「哪一页上有哪些控件」这份清单必须从真源码里推出来，而且**分得清页与页**。
+    ///
+    /// 这是整条守卫的地基：清单要是把全 App 的控件混成一坨，
+    /// 「这个控件在不在那一页」就永远为真——最坏的一种空转。
+    func testUILocationInventoryKnowsWhichPageEachControlLivesOn() throws {
+        let locations = try SourceGuard.uiLocations()
+
+        guard let history = locations.first(where: { $0.names.contains("训练记录") }) else {
+            return XCTFail("清单里没有「训练记录」这一页：\(locations)")
+        }
+        XCTAssertTrue(history.controls.contains("记录对话逐字稿"),
+                      "「记录对话逐字稿」这个开关就在训练记录页右上角，清单里却找不到：\(history)")
+
+        guard let settings = locations.first(where: { $0.names.contains("设置") }) else {
+            return XCTFail("清单里没有 ⌘, 那个设置窗口：\(locations)")
+        }
+        XCTAssertTrue(settings.controls.contains("保存我的回答录音"),
+                      "设置窗口那颗录音开关没扫到：\(settings)")
+        XCTAssertFalse(settings.controls.contains("记录对话逐字稿"),
+                       "设置窗口里并没有「记录对话逐字稿」。清单说有，"
+                           + "就等于把这条守卫关掉了：\(settings)")
+
+        // 十项侧边栏里已实现的五页 + 设置窗口。少于这个数说明推导写法失效了。
+        XCTAssertGreaterThanOrEqual(locations.count, 6, "扫到的页面太少：\(locations)")
+    }
+
     /// 元测试要去读测试自己的源码。读不到同样必须抛错。
     func testTestCodeReadsTheTestSourcesAndThrowsWhenThePathIsWrong() throws {
         let source = try SourceGuard.testCode("DesignSystemTests.swift")

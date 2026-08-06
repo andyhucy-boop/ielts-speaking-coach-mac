@@ -69,6 +69,10 @@ enum SourceGuard {
         case noButtonTitles
         case noToggleTitles
         case noViewBody(type: String)
+        case noSidebarTitles(found: Int, expected: Int)
+        case noUILocations(found: [String])
+        case settingsSceneNotFound
+        case viewTypeNotFound(type: String)
 
         var description: String {
             switch self {
@@ -123,6 +127,27 @@ enum SourceGuard {
                 return "\(type) 里找不到 `var body: some View`，"
                     + "「每一段渲染都得从 body 走得到」这条断言对它就无从谈起。"
                     + "下一步：确认这个类型还是不是一个 SwiftUI 视图。"
+            case .noSidebarTitles(let found, let expected):
+                return "`SidebarItem` 声明了 \(expected) 项，但 `title` 那个 switch 只读出 \(found) 个名字。"
+                    + "「文案指的那一页叫什么」这份对照表缺了几行，"
+                    + "指向那几页的文案就没人查得了。"
+                    + "下一步：确认 `title` 的写法没变（例如某一支改成了插值或查表）。"
+            case .noUILocations(let found):
+                return "从 `RootView` 的 detail switch 里只推出了 \(found.count) 个页面"
+                    + "（\(found.joined(separator: "、"))），太少了，多半是那个 switch 的写法变了。"
+                    + "页面清单一空，「文案指的控件在不在那一页」就恒真——最坏的一种空转。"
+                    + "下一步：确认 `RootView` 里还是 `switch current { case .today: TodayView(…) }` 这种写法。"
+            case .settingsSceneNotFound:
+                return "在 \(appSceneRelativePath) 里找不到 `Settings { … }` 那个场景，"
+                    + "也就无从知道 ⌘, 打开的窗口是哪一页。"
+                    + "指向「设置」的文案会因此完全没人查——而本项目正是在那里踩过一次坑"
+                    + "（把「记录对话逐字稿」说成在设置窗口里，其实在训练记录页）。"
+                    + "下一步：确认那个场景还在；真的删掉了，就同步把这一段推导删掉，"
+                    + "不要让它安静地退化成空清单。"
+            case .viewTypeNotFound(let type):
+                return "扫遍 \(uiSourceRelativeRoot) 找不到 `struct \(type)` 的声明，"
+                    + "定位不了它在哪个目录，那一页上有哪些控件就无从谈起。"
+                    + "下一步：类型改名或挪到别的模块了的话，同步改这里的推导。"
             }
         }
 
@@ -1279,6 +1304,251 @@ enum SourceGuard {
     static func literalClickTargets(in code: String) -> [String] {
         clickTargets(in: code).filter { !$0.contains("\\(") }
     }
+
+    // MARK: - 文案指的那个控件，真在它说的那一页上吗
+
+    /// 一个「用户找得到的地方」：文案里可以让用户走过去的一页或一个窗口。
+    struct UILocation: Equatable, CustomStringConvertible {
+        /// 文案里可以怎么称呼它。设置窗口有两个叫法，所以是数组不是单值。
+        let names: [String]
+        /// 画它的那些源码在哪个目录（相对 `Sources/IELTSCoachUI`）。
+        let directory: String
+        /// 这一页上字面写死的按钮与开关标题。
+        let controls: Set<String>
+
+        var description: String {
+            "\(names.joined(separator: " / "))（\(directory)/）：\(controls.sorted().joined(separator: "、"))"
+        }
+    }
+
+    /// 从一句文案里认出来的一条「到 X 那一页去找 Y 这个控件」。
+    struct Direction: Equatable, CustomStringConvertible {
+        let location: String
+        let control: String
+
+        var description: String { "到「\(location)」找「\(control)」" }
+    }
+
+    /// 把源码里**用 `+` 连起来的相邻字符串字面量**拼成一段，按出现顺序返回。
+    ///
+    /// **为什么必须先拼**：本项目的文案基本都是折行写的——
+    /// `"到「训练记录」页右上角" + "确认「记录对话逐字稿」是开着的。"`。
+    /// 逐个字面量看的话，地点在前一段、控件在后一段，「这一对」永远配不上，
+    /// 而配不上的后果不是报错，是这条守卫安静地永远绿。
+    ///
+    /// 边界：不认多行字符串（`"""`）与插值里再嵌字符串。界面模块里没有这两种写法。
+    static func copySegments(in code: String) -> [String] {
+        var segments: [String] = []
+        var current: String?
+        var index = code.startIndex
+        while index < code.endIndex {
+            guard code[index] == "\"", let literal = stringLiteral(startingAt: index, in: code) else {
+                index = code.index(after: index)
+                continue
+            }
+            current = (current ?? "") + literal.text
+            // 后面跟着的如果是 `+` 再接一个字面量，就是同一段文案的下一截。
+            if let next = continuationLiteralStart(after: literal.end, in: code) {
+                index = next
+                continue
+            }
+            segments.append(current ?? "")
+            current = nil
+            index = literal.end
+        }
+        if let tail = current { segments.append(tail) }
+        return segments
+    }
+
+    /// 读一个从 `start` 开始的字符串字面量：返回引号之间的内容，以及收尾引号之后的位置。
+    private static func stringLiteral(startingAt start: String.Index,
+                                      in code: String) -> (text: String, end: String.Index)? {
+        guard start < code.endIndex, code[start] == "\"" else { return nil }
+        var text = ""
+        var index = code.index(after: start)
+        var escaped = false
+        while index < code.endIndex {
+            let character = code[index]
+            if escaped {
+                escaped = false
+                text.append(character)
+            } else if character == "\\" {
+                escaped = true
+                text.append(character)
+            } else if character == "\"" {
+                return (text, code.index(after: index))
+            } else {
+                text.append(character)
+            }
+            index = code.index(after: index)
+        }
+        return nil
+    }
+
+    /// `end` 之后如果只隔着空白和一个 `+` 就又是一个字面量，返回那个字面量的起点。
+    private static func continuationLiteralStart(after end: String.Index,
+                                                 in code: String) -> String.Index? {
+        var index = end
+        func skipWhitespace() {
+            while index < code.endIndex, code[index].isWhitespace { index = code.index(after: index) }
+        }
+        skipWhitespace()
+        guard index < code.endIndex, code[index] == "+" else { return nil }
+        index = code.index(after: index)
+        skipWhitespace()
+        return index < code.endIndex && code[index] == "\"" ? index : nil
+    }
+
+    /// 从一段文案里认出「到 X 那一页去找 Y 这个控件」。
+    ///
+    /// 只认**同一小句里紧挨着的一对**：地点在前、控件在后，中间不许隔着分句标点，
+    /// 也不许隔得太远。这两条限制不是为了省事，是为了不误报——真源码里有一句
+    /// 「到「训练记录」页逐条删，或点下面的「打开录音文件夹」」，
+    /// 后半句那颗按钮说的是当前这一页，跟前半句那一页无关。
+    /// 误报几次，这条守卫就会被人整条删掉。
+    ///
+    /// 带插值的 `「\(x)」` 一律跳过：取值要跑起来才知道，扫源码判不了。
+    static func directions(in segment: String,
+                           locationNames: Set<String>,
+                           controlTitles: Set<String>) -> [Direction] {
+        let tokens = bracketTokens(in: segment)
+        var found: [Direction] = []
+        for (offset, token) in tokens.enumerated() where offset + 1 < tokens.count {
+            let next = tokens[offset + 1]
+            guard locationNames.contains(token.text), controlTitles.contains(next.text) else {
+                continue
+            }
+            let gap = segment[token.end..<next.start]
+            guard gap.count <= maximumDirectionGap,
+                  !gap.contains(where: { clauseSeparators.contains($0) }) else { continue }
+            found.append(Direction(location: token.text, control: next.text))
+        }
+        return found
+    }
+
+    /// 地点与控件之间最多能隔多少个字。「页右上角确认」是 6 个字，
+    /// 放宽到 12 是留给别的说法（「里的」「那一页顶上」），再宽就开始把不相干的两截凑成一对了。
+    private static let maximumDirectionGap = 12
+
+    /// 分句标点。隔着其中任何一个，前后就不是同一句指路了。
+    ///
+    /// **ASCII 逗号不在里面**：`到「录音设置」（⌘,）点「打开录音文件夹」` 那句里的逗号
+    /// 是快捷键 ⌘, 的一部分，算成分句的话，那一句就没人查了。
+    private static let clauseSeparators: Set<Character> = ["。", "；", "！", "？", "，", "、", ";", "\n"]
+
+    /// 一段文字里的 `「…」`，连同它在原文里的位置。带插值的跳过。
+    private static func bracketTokens(
+        in text: String) -> [(text: String, start: String.Index, end: String.Index)] {
+        var tokens: [(String, String.Index, String.Index)] = []
+        var cursor = text.startIndex
+        while let open = text.range(of: "「", range: cursor..<text.endIndex),
+              let close = text.range(of: "」", range: open.upperBound..<text.endIndex) {
+            let inner = String(text[open.upperBound..<close.lowerBound])
+            if !inner.contains("\\(") {
+                tokens.append((inner, open.lowerBound, close.upperBound))
+            }
+            cursor = close.upperBound
+        }
+        return tokens.map { (text: $0.0, start: $0.1, end: $0.2) }
+    }
+
+    /// ⌘, 那个窗口在文案里的两种叫法。
+    ///
+    /// 它不在侧边栏里，名字也不来自本项目的源码——菜单项「设置」是 macOS 给的，
+    /// 而 `RecordingPlayerView` 那句话里管它叫「录音设置」。所以这两个名字只能写在这儿。
+    /// 写漏一个的后果是「指向那个窗口的文案没人查」，所以 `SourceGuardTests` 钉着它们。
+    static let settingsWindowNames = ["设置", "录音设置"]
+
+    /// 界面上有哪些「用户找得到的地方」，每个地方上有哪些按钮和开关。
+    ///
+    /// 三份来源全部从源码推，没有一份是手写清单：
+    ///
+    /// - **哪一页由谁画**：`RootView` 的 detail `switch current`；
+    /// - **那一页叫什么**：`SidebarItem.title`；
+    /// - **⌘, 那个窗口是谁**：App 层的 `Settings { … }` 场景。
+    ///
+    /// 推不出来一律抛错，绝不返回空清单——空清单会让「这个控件在不在那一页」恒真。
+    static func uiLocations() throws -> [UILocation] {
+        var entries: [(names: [String], type: String)] = []
+
+        let titles = try sidebarTitles()
+        for branch in try switchBranches(over: "current", in: try code("RootView.swift")) {
+            guard let caseName = branch.cases.first, let title = titles[caseName],
+                  let type = firstViewTypeName(in: branch.body) else { continue }
+            entries.append((names: [title], type: type))
+        }
+        guard entries.count >= 4 else { throw Failure.noUILocations(found: entries.map(\.type)) }
+
+        let appCode = try repositoryCode(appSceneRelativePath)
+        guard let settingsBody = try? memberBody(of: "Settings", in: appCode),
+              let settingsType = firstViewTypeName(in: settingsBody) else {
+            throw Failure.settingsSceneNotFound
+        }
+        entries.append((names: settingsWindowNames, type: settingsType))
+
+        let files = try swiftFiles()
+        var located: [UILocation] = []
+        for entry in entries {
+            guard let file = try files.first(where: { url in
+                let source = stripLineComments(
+                    try read(contentsOf: url, describedAs: try relativePath(of: url)))
+                return source.range(of: #"\bstruct\s+\#(entry.type)\b"#, options: .regularExpression)
+                    != nil
+            }) else {
+                throw Failure.viewTypeNotFound(type: entry.type)
+            }
+            let directory = try relativePath(of: file).split(separator: "/").dropLast()
+                .joined(separator: "/")
+            located.append(UILocation(names: entry.names,
+                                      directory: directory,
+                                      controls: try literalControlTitles(under: directory)))
+        }
+        return located
+    }
+
+    /// 侧边栏每一项的 case 名 → 它在界面上的名字，从 `SidebarItem.title` 那个 `switch` 读。
+    ///
+    /// 「应该有几项」也从源码读（`enum SidebarItem` 声明的 case 数），不写死一个 10：
+    /// 写死的话，将来加了第十一项、`title` 那个 `switch` 漏写一支，这里照样绿。
+    static func sidebarTitles() throws -> [String: String] {
+        let navigation = try code("Navigation.swift")
+        let declared = try declaredCaseNames(inEnum: "SidebarItem", of: navigation)
+        let body = try memberBody(of: "public var title", in: navigation)
+        var titles: [String: String] = [:]
+        for branch in try switchBranches(over: "self", in: body) {
+            guard let literal = captures(of: #"return\s+"([^"\\]+)""#, in: branch.body).first else {
+                continue
+            }
+            for name in branch.cases { titles[name] = literal }
+        }
+        guard titles.count == declared.count else {
+            throw Failure.noSidebarTitles(found: titles.count, expected: declared.count)
+        }
+        return titles
+    }
+
+    /// 一段代码里第一个被构造出来的视图/场景类型名。
+    private static func firstViewTypeName(in code: String) -> String? {
+        captures(of: #"\b([A-Z][A-Za-z0-9_]*(?:View|Scene))\s*\("#, in: code).first
+    }
+
+    /// 某个目录下字面写死的按钮与开关标题。
+    ///
+    /// **这一个不抛「一个都没扫到」**：不是每一页上都有按钮，那是正常的。
+    /// 「扫描写法整体失效」由模块级的 `literalButtonTitles()` / `literalToggleTitles()` 管。
+    static func literalControlTitles(under relativeDirectory: String) throws -> Set<String> {
+        var titles: Set<String> = []
+        for url in try swiftFiles(under: relativeDirectory) {
+            let source = stripLineComments(
+                try read(contentsOf: url, describedAs: try relativePath(of: url)))
+            titles.formUnion(captures(of: #"Button\s*\(\s*"([^"\\]+)""#, in: source))
+            titles.formUnion(captures(of: #"Toggle\s*\(\s*"([^"\\]+)""#, in: source))
+        }
+        return titles
+    }
+
+    /// App 层那个场景文件。侧边栏之外的窗口（⌘, 设置）只在这里能查到是谁画的。
+    static let appSceneRelativePath = "Sources/IELTSCoachApp/main.swift"
 
     // MARK: - 断言：这段渲染必须在
 

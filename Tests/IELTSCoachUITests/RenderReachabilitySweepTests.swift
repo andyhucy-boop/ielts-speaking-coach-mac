@@ -19,12 +19,20 @@ import XCTest
 /// 所以这里换成结构性的问法——**从 `body` 出发，顺着调用关系能不能走到每一个 `some View` 成员？**
 /// 新写一段渲染却忘了摆进去，同样会在这里报出来。
 ///
-/// ## 二、文案里指的按钮，界面上不存在
+/// ## 二、文案里指的控件，界面上不存在
 ///
-/// 铁律 4 要的「下一步」最常见的形态就是「点某颗按钮」。指错了比不写还糟——用户会一直找。
-/// 已实测：解析失败那句话里嵌着「点『补生成复盘报告』」，而全 App 没有这颗按钮。
+/// 铁律 4 要的「下一步」最常见的形态就是「点某颗按钮 / 拨某个开关」。指错了比不写还糟——
+/// 用户会一直找。已实测：解析失败那句话里嵌着「点『补生成复盘报告』」，而全 App 没有这颗按钮。
+///
+/// ## 三、控件是有，但不在文案说的那一页上
+///
+/// 第二类只问「这个控件存不存在」，于是漏过一处：`RetrainingFlowView` 那句
+/// 「到菜单『设置』里确认『记录对话逐字稿』是开着的」——那个开关**确实存在**
+/// （在「训练记录」页右上角），错的是位置。⌘, 打开的设置窗口里只有录音那两块，
+/// 用户照着找必然找不到。所以「存在」之外还要问一句「在他被指去的那一页上吗」。
 ///
 /// **边界**：扫源码不执行代码。「调用还在但条件永远为假」拦不住，排版好不好看也拦不住。
+/// 第三类只认「到 X …『Y』」这种同一小句里紧挨着的一对，换个说法绕开是可能的。
 final class RenderReachabilitySweepTests: XCTestCase {
 
     // MARK: - 一、每一段渲染都得从 body 走得到
@@ -155,5 +163,58 @@ final class RenderReachabilitySweepTests: XCTestCase {
         XCTAssertFalse(buttons.contains("补生成复盘报告"),
                        "「补生成复盘报告」是命令行时代的说法，界面上没有这颗按钮。"
                            + "真要做出来的话，把它做成一颗 Button 再改这条测试。")
+    }
+
+    // MARK: - 三、文案说那个控件在哪一页，它就得真在那一页上
+
+    /// 「存在」和「在他被指去的那一页上」是两件事。
+    ///
+    /// 上面第二类只问前者，于是本项目漏过一处：`RetrainingFlowView` 那句
+    /// 「到菜单「设置」里确认「记录对话逐字稿」是开着的」——那个开关**确实存在**
+    /// （在「训练记录」页右上角），而 ⌘, 打开的设置窗口里只有录音那两块。
+    /// 用户照这句话去找必然找不到，比不写更糟：他会一直翻。
+    ///
+    /// 判据：文案里点名一页、紧接着点名一个控件时，那个控件必须真的声明在那一页的源码目录里。
+    /// 「哪一页由谁画」从 `RootView` 的 detail switch 读，「那一页叫什么」从
+    /// `SidebarItem.title` 读，设置窗口从 App 层那个 `Settings { … }` 场景读——
+    /// 三份都不是手写清单（`SourceGuardTests` 钉着这份推导）。
+    ///
+    /// **边界**：只认「到 X …「Y」」这种同一小句里紧挨着的一对。隔着逗号、句号的不算
+    /// （真源码里就有一句「到「训练记录」页逐条删，或点下面的「打开录音文件夹」」，
+    /// 那颗按钮说的是当前这一页），所以换个说法绕开是可能的——那部分归人工验收。
+    func testEveryControlNamedTogetherWithAPageActuallyLivesOnThatPage() throws {
+        let locations = try SourceGuard.uiLocations()
+        let names = Set(locations.flatMap(\.names))
+        let controls = try SourceGuard.literalControlTitles()
+        var checked = 0
+        var report: [String] = []
+
+        for url in try SourceGuard.swiftFiles() {
+            let path = try SourceGuard.relativePath(of: url)
+            let code = SourceGuard.stripLineComments(
+                try SourceGuard.read(contentsOf: url, describedAs: path))
+            for segment in SourceGuard.copySegments(in: code) {
+                for direction in SourceGuard.directions(in: segment, locationNames: names,
+                                                        controlTitles: controls) {
+                    checked += 1
+                    guard let named = locations.first(where: { $0.names.contains(direction.location) }),
+                          !named.controls.contains(direction.control) else { continue }
+                    let elsewhere = locations
+                        .filter { $0.controls.contains(direction.control) }
+                        .flatMap(\.names).map { "「\($0)」" }.joined(separator: " / ")
+                    report.append("\(path)：\(direction)，但那一页（\(named.directory)/）上没有这个控件"
+                                      + (elsewhere.isEmpty ? "（全 App 都找不到它）"
+                                         : "；它其实在 \(elsewhere)"))
+                }
+            }
+        }
+
+        XCTAssertTrue(report.isEmpty,
+                      "下面这些「下一步」把用户指去了错的地方（铁律 4：下一步必须是真做得到的一步）：\n"
+                          + report.map { "  • " + $0 }.joined(separator: "\n")
+                          + "\n下一步：把文案里那个位置改成这个控件真正所在的那一页；"
+                          + "确实该把控件挪过去的话，先挪控件再改文案。")
+
+        XCTAssertGreaterThanOrEqual(checked, 3, "一句「到某页找某控件」都没扫到，这条测试等于空转")
     }
 }
