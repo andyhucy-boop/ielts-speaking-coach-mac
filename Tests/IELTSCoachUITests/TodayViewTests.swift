@@ -29,7 +29,7 @@ final class TodayViewTests: XCTestCase {
         XCTAssertTrue(
             code.contains("struct TodayView"),
             "没扫到 TodayView 的源码，这条测试等于空转。下一步：确认文件还在——"
-                + Self.viewSource.path)
+                + Self.viewRelativePath)
 
         XCTAssertTrue(
             code.contains("PracticeSheet("),
@@ -70,7 +70,7 @@ final class TodayViewTests: XCTestCase {
         XCTAssertTrue(
             code.contains("struct TodayView"),
             "没扫到 TodayView 的源码，这条测试等于空转。下一步：确认文件还在——"
-                + Self.viewSource.path)
+                + Self.viewRelativePath)
 
         XCTAssertTrue(
             code.contains("if app.state.questions.isEmpty {"),
@@ -82,7 +82,7 @@ final class TodayViewTests: XCTestCase {
         // 声明一次、用一次。只数「出现过」的话，把分支里那句 `emptyBank` 删掉、
         // 只留下面那个 `private var emptyBank` 的声明，这条断言照样绿。
         XCTAssertGreaterThanOrEqual(
-            DesignSystemTests.occurrences(of: "emptyBank", in: code), 2,
+            SourceGuard.occurrences(of: "emptyBank", in: code), 2,
             "emptyBank 只在源码里出现了一次，也就是光有声明、没人用它——题库空时画出来的是别的东西。"
                 + "下一步：确认题库空的那一支显示的确实是那张导入引导。")
     }
@@ -100,7 +100,7 @@ final class TodayViewTests: XCTestCase {
         XCTAssertTrue(
             code.contains("struct TodayView"),
             "没扫到 TodayView 的源码，这条测试等于空转。下一步：确认文件还在——"
-                + Self.viewSource.path)
+                + Self.viewRelativePath)
 
         XCTAssertTrue(
             code.contains("TodayViewModel.unwiredRecordingNotice("),
@@ -111,7 +111,7 @@ final class TodayViewTests: XCTestCase {
 
         // 同上：光有 `private var recordingNotice` 的声明不算数，页面 body 里得真的摆上它。
         XCTAssertGreaterThanOrEqual(
-            DesignSystemTests.occurrences(of: "recordingNotice", in: code), 2,
+            SourceGuard.occurrences(of: "recordingNotice", in: code), 2,
             "recordingNotice 只在源码里出现了一次，也就是写好了却没摆进页面，用户一个字也看不到。"
                 + "下一步：把它放回 body 里（本周进度与「最近练习」之间）。")
 
@@ -126,17 +126,11 @@ final class TodayViewTests: XCTestCase {
 
     // MARK: - 扫源码用的小工具
 
-    static var viewSource: URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()   // IELTSCoachUITests
-            .deletingLastPathComponent()   // Tests
-            .deletingLastPathComponent()   // 仓库根
-            .appending(path: "Sources/IELTSCoachUI/Today/TodayView.swift")
-    }
+    static let viewRelativePath = "Today/TodayView.swift"
 
     /// 注释里必然要解释「为什么这么写」，连注释一起扫的话这些测试会被自己的说明绊倒。
-    static func todayViewCode() throws -> String {
-        DesignSystemTests.strippingLineComments(
-            try String(contentsOf: viewSource, encoding: .utf8))
-    }
+    ///
+    /// 走 `SourceGuard`：文件挪了位置或改了名会**抛错**，而不是拿一段空串继续跑——
+    /// 空串会让下面每条 `contains` 恒假、每条 `!contains` 恒真。
+    static func todayViewCode() throws -> String { try SourceGuard.code(viewRelativePath) }
 }

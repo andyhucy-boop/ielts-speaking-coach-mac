@@ -13,35 +13,33 @@ import XCTest
 /// （「你的 CSV 第 7 行缺 id，那道题没进来」），而那些警告不看就再也不会知道。
 ///
 /// `swift test` 不画界面，也量不出滚动位置，所以这里退一步扫源码：结果必须走 `.sheet`
-/// 弹出来，与滚动位置无关。扫源码这一招在本项目有先例
-/// （`PreviewSafetyTests`、`DesignSystemTests.testDesignSystemTakesFontsFromTypographyTokens`）。
+/// 弹出来，与滚动位置无关。扫源码用的是共用的 `SourceGuard`——它读不到文件会抛错，
+/// 不会拿一段空串把下面每条断言都变成永远绿。
 ///
 /// **这条测试的边界要说清**：它只能证明「有一个绑到导入结果的模态呈现」，
-/// 证明不了弹出来的东西好不好看、排版对不对 —— 那部分仍归 Task 11 人工验收。
+/// 证明不了弹出来的东西好不好看、排版对不对 —— 那部分仍归人工验收。
 /// 但「用户看不看得见」这一条不是版面观感，它决定这一页有没有完成计划要求的事。
+/// （弹窗里那些警告到底有没有被画出来，由 `QuestionBankImportResultSheetTests` 守。）
 final class QuestionBankViewTests: XCTestCase {
+
+    private static let view = "QuestionBank/QuestionBankView.swift"
+
     func testImportResultIsPresentedAsASheetInsteadOfPaintedIntoTheScrollingPage() throws {
-        let source = try String(contentsOf: Self.viewSource, encoding: .utf8)
-        // 注释里必然要解释「为什么是 sheet」，连注释一起扫的话这条测试会被自己的说明绊倒。
-        let code = DesignSystemTests.strippingLineComments(source)
+        SourceGuard.assertRenders(
+            "struct QuestionBankView", in: Self.view,
+            because: "没扫到 QuestionBankView 的源码，这条测试等于空转。下一步：确认文件还在。")
 
-        // 防空转：文件挪了位置或改了名，上面读到的会是一段空字符串，下面全部退化成永远绿。
-        XCTAssertTrue(
-            code.contains("struct QuestionBankView"),
-            "没扫到 QuestionBankView 的源码，这条测试等于空转。下一步：确认文件还在——"
-                + Self.viewSource.path)
-
-        XCTAssertTrue(
-            code.contains(".sheet(item: $feedback)"),
-            "导入结果没有弹出来，而是画进了滚动页面里。触发按钮在页面最底下、页面远超一屏，"
+        SourceGuard.assertRenders(
+            ".sheet(item: $feedback)", in: Self.view,
+            because: "导入结果没有弹出来，而是画进了滚动页面里。触发按钮在页面最底下、页面远超一屏，"
                 + "画在页面里的结果会落在屏幕外，用户选完文件回来什么交代也看不到，"
                 + "计划要求逐条显示的那些警告尤其。"
                 + "下一步：把结果交给 `.sheet(item: $feedback)` 呈现，"
                 + "或换一种同样与滚动位置无关的办法（并同步改这条测试）。")
 
-        XCTAssertTrue(
-            code.contains("QuestionBankImportFeedback"),
-            "页面没有引用 QuestionBankImportFeedback，上面那条断言很可能扫到了别的 sheet。"
+        SourceGuard.assertRenders(
+            "QuestionBankImportFeedback", in: Self.view,
+            because: "页面没有引用 QuestionBankImportFeedback，上面那条断言很可能扫到了别的 sheet。"
                 + "下一步：确认导入结果确实是由这个类型驱动呈现的。")
     }
 
@@ -56,35 +54,22 @@ final class QuestionBankViewTests: XCTestCase {
     ///
     /// 边界同上：扫源码证明不了运行时行为，只能证明这一页没有绕开那个入口。
     func testTheImportPathGoesThroughTheOneComposedEntryPoint() throws {
-        let source = try String(contentsOf: Self.viewSource, encoding: .utf8)
-        let code = DesignSystemTests.strippingLineComments(source)
+        SourceGuard.assertRenders(
+            "struct QuestionBankView", in: Self.view,
+            because: "没扫到 QuestionBankView 的源码，这条测试等于空转。下一步：确认文件还在。")
 
-        XCTAssertTrue(
-            code.contains("struct QuestionBankView"),
-            "没扫到 QuestionBankView 的源码，这条测试等于空转。下一步：确认文件还在——"
-                + Self.viewSource.path)
-
-        XCTAssertTrue(
-            code.contains("QuestionBankImport.importFile(at:"),
-            "这一页没有走 `QuestionBankImport.importFile(at:)`。认格式、取文字、解析三步"
+        SourceGuard.assertRenders(
+            "QuestionBankImport.importFile(at:", in: Self.view,
+            because: "这一页没有走 `QuestionBankImport.importFile(at:)`。认格式、取文字、解析三步"
                 + "在界面里自己拼一遍的话，取文字那一步一旦写成按 UTF-8 读文件，"
                 + "真实 PDF 就再也导不进来，而没有任何一条测试会红。"
                 + "下一步：把导入改回调 `QuestionBankImport.importFile(at:)`（它已被"
                 + "`QuestionBankPDFImportTests` 覆盖），或换一种同样可测的收口方式并同步改这条测试。")
 
-        XCTAssertFalse(
-            code.contains("String(contentsOf: url"),
-            "这一页又开始自己按文本读用户选中的文件了。PDF 不是文本文件，这样读必然失败，"
+        SourceGuard.assertOmits(
+            "String(contentsOf: url", in: Self.view,
+            because: "这一页又开始自己按文本读用户选中的文件了。PDF 不是文本文件，这样读必然失败，"
                 + "而报出来的「另存为 UTF-8」对一份 PDF 是做不到的事。"
                 + "下一步：读文件交给 `QuestionBankFileReader.text(at:format:)`（`importFile` 已经在用）。")
-    }
-
-    /// 被扫的文件。
-    static var viewSource: URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()   // IELTSCoachUITests
-            .deletingLastPathComponent()   // Tests
-            .deletingLastPathComponent()   // 仓库根
-            .appending(path: "Sources/IELTSCoachUI/QuestionBank/QuestionBankView.swift")
     }
 }

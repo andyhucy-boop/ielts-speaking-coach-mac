@@ -276,16 +276,17 @@ final class TodayViewModelTests: XCTestCase {
     /// 所以这里扫一遍 `Sources/`。扫源码这一招在本项目有先例
     /// （`PreviewSafetyTests`、`QuestionBankViewTests`、`DesignSystemTests`）。
     func testPracticeRecordingFlagMatchesWhetherAnyCodeWritesSessions() throws {
-        let files = try PreviewSafetyTests.swiftFiles(in: Self.sourcesDirectory)
+        let sources = try Self.sourcesDirectory
+        let files = try SourceGuard.swiftFiles(in: sources, describedAs: "Sources")
         XCTAssertGreaterThan(
             files.count, 10,
             "只扫到 \(files.count) 个源文件，这条测试多半在空转。下一步：确认目录还在——"
-                + Self.sourcesDirectory.path)
+                + sources.path)
 
         var writers: [String] = []
         for file in files where file.lastPathComponent != "CoachState.swift" {
-            let code = DesignSystemTests.strippingLineComments(
-                try String(contentsOf: file, encoding: .utf8))
+            let code = SourceGuard.stripLineComments(
+                try SourceGuard.read(contentsOf: file, describedAs: file.lastPathComponent))
             if Self.writesToSessions(code) { writers.append(file.lastPathComponent) }
         }
 
@@ -323,12 +324,10 @@ final class TodayViewModelTests: XCTestCase {
 
     // MARK: - 扫源码用的小工具
 
+    /// 全工程的源码根。**不写死绝对路径**——由 `SourceGuard` 从测试文件往上找到含
+    /// `Package.swift` 的那一层，换台机器照样能跑（成品标准第 10 条）。
     static var sourcesDirectory: URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()   // IELTSCoachUITests
-            .deletingLastPathComponent()   // Tests
-            .deletingLastPathComponent()   // 仓库根
-            .appending(path: "Sources")
+        get throws { try SourceGuard.repositoryRoot().appending(path: "Sources") }
     }
 
     /// 这段代码里有没有往某个 `.sessions` 数组里写东西。

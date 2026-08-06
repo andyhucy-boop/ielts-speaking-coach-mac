@@ -107,54 +107,45 @@ final class DesignSystemTests: XCTestCase {
         }
     }
 
+    /// 逐个钉住取值。**上面那条「是 4 的倍数」远远不够**：实测把 `Spacing.lg` 从 24 改成 8、
+    /// 把 `Radius.card` 从 12 改成 40，整套测试一条都不红——8 和 40 都是 4 的倍数，
+    /// 而 `Radius` 压根没被那条覆盖。
+    ///
+    /// 后果是整个界面的观感一起走样：卡片内边距从 24 掉到 8，那份「留白很足」的高级感
+    /// （第 3 节明写「不要为了多塞内容压缩留白」）当场没了；圆角 40 则把卡片变成药丸。
+    /// 这类改动一个字的编译错误都不会有，也不会有任何一条测试拦着，只会让人觉得
+    /// 「说不上哪儿不对」——正是本项目最怕的那种缺陷。
+    ///
+    /// 令牌值和第 3 节的代码块逐字对齐；要改就先改那份规范，再改这里。
+    func testSpacingAndRadiusTokensMatchTheSpecTable() {
+        XCTAssertEqual(Spacing.xs, 4, "Spacing.xs 与第 3 节对不上")
+        XCTAssertEqual(Spacing.sm, 8, "Spacing.sm 与第 3 节对不上")
+        XCTAssertEqual(Spacing.md, 16, "Spacing.md 与第 3 节对不上")
+        XCTAssertEqual(Spacing.lg, 24, "Spacing.lg 与第 3 节对不上（卡片内边距就是它）")
+        XCTAssertEqual(Spacing.xl, 32, "Spacing.xl 与第 3 节对不上（页面内边距就是它）")
+        XCTAssertEqual(Spacing.section, 40, "Spacing.section 与第 3 节对不上")
+
+        XCTAssertEqual(Radius.card, 12, "Radius.card 与第 3 节对不上")
+        XCTAssertEqual(Radius.control, 8, "Radius.control 与第 3 节对不上")
+        XCTAssertEqual(Radius.pill, 999, "Radius.pill 与第 3 节对不上")
+
+        // 第 4 节：卡片用「发丝边框」分层，不用投影。粗一档就从分层变成描边。
+        XCTAssertEqual(BorderWidth.hairline, 1, "BorderWidth.hairline 与第 4 节对不上")
+
+        // 刻度必须是严格递增的，否则「xs 比 md 大」这种手误照样能逐条对齐地写进去。
+        let scale = [Spacing.xs, Spacing.sm, Spacing.md, Spacing.lg, Spacing.xl, Spacing.section]
+        XCTAssertEqual(scale, scale.sorted(), "间距刻度不是递增的：\(scale)")
+    }
+
     // MARK: - 字体表（DESIGN-SYSTEM 第 1 节）
 
-    /// 设计系统里的字体必须走令牌，不许在视图里直接写语义字体或单独指定字重。
+    /// 「视图不许自己拼字体」这条已经搬去 `DesignTokenSweepTests`，并且扩到了整个
+    /// `Sources/IELTSCoachUI/`、认全同义写法（`.font(`、`Font.`、`.weight(`）。
     ///
-    /// **这条守的是第 1 节字体表的「字重」那一列。** 字重是这张表里最容易掉的一格：
-    /// `Font.caption` 的默认字重是 regular（不像 `.headline` 自带 semibold），
-    /// 少写一句字重编译照过、跑起来也不报错，只是渲染出来比规范轻一档——
-    /// 而 `.caption` 的标签本来就压在 56% 黑上，再轻一档正是那种「说不上哪儿不对」。
-    /// 已经掉过一次：`SectionHeader` 的编号 + 英文标签曾经只有语义字体没有字重。
-    ///
-    /// 字重没法从渲染结果上断言（`swift test` 不画界面），所以退一步扫源码：
-    /// 只要视图不自己拼字体，字重就只能来自 `Typography`，而 `Typography` 有下面两条测试钉着。
-    /// 扫源码这一招在本项目有先例（`PreviewSafetyTests`、Phase 10 Task 18）。
-    ///
-    /// **只扫 `DesignSystem/` 这一个目录。** Task 7 之前的占位页（`RootView` 等）按铁律 8
-    /// 用的是系统语义字体加系统语义颜色，它们由 Task 4–6 重写时再一起收编。
-    func testDesignSystemTakesFontsFromTypographyTokens() throws {
-        let files = try Self.swiftFiles(in: Self.designSystemDirectory)
-        XCTAssertFalse(
-            files.isEmpty,
-            "一个设计系统源文件都没扫到，这条测试等于空转。下一步：确认目录还在——"
-                + Self.designSystemDirectory.path)
-
-        // 在视图里拼字体的三种写法。三种都会绕开 Typography，也就绕开了字体表的字重那一列。
-        let forbidden = [
-            ("font(.", "直接写了语义字体"),
-            ("fontWeight(", "在视图里单独指定字重"),
-            (".bold()", "在视图里单独加粗")
-        ]
-        var tokenUses = 0
-        for file in files {
-            let source = Self.strippingLineComments(try String(contentsOf: file, encoding: .utf8))
-            tokenUses += Self.occurrences(of: ".font(Typography.", in: source)
-            for (pattern, what) in forbidden {
-                XCTAssertFalse(
-                    source.contains(pattern),
-                    "\(file.lastPathComponent) 里\(what)（「\(pattern)」）。"
-                        + "这样字重就由这一处视图说了算，DESIGN-SYSTEM 第 1 节字体表管不到它。"
-                        + "下一步：换成 Typography 里对应的那一档；表里没有的档位，"
-                        + "先往 Typography 里加一个令牌再用。")
-            }
-        }
-        // 防空转：把组件里的字体全删光，上面那圈断言同样会全绿。
-        XCTAssertGreaterThanOrEqual(
-            tokenUses, 5,
-            "设计系统里几乎没有用 Typography 令牌设字体（只找到 \(tokenUses) 处），"
-                + "这条测试很可能在空转。下一步：确认组件是不是真的还在设字体。")
-    }
+    /// 原来那一版只扫 `DesignSystem/` 一个目录，而且只认「点开头」的 `font(.`——
+    /// **实测把 `.font(Typography.label)` 换成 `.font(Font.caption)` 就溜过去了。**
+    /// 扫描规则现在收在 `SourceGuard` 里，且它自己有一整组自测
+    /// （`SourceGuardTests`）证明每种同义写法都拦得住。
 
     /// 字体表逐行钉住。左边是令牌，右边是第 1 节表里那一行的「SwiftUI 语义字体 + 字重」。
     ///
@@ -189,38 +180,7 @@ final class DesignSystemTests: XCTestCase {
 
     // MARK: - 扫源码用的小工具
 
-    /// 被扫的目录：设计系统三件套。
-    static var designSystemDirectory: URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()   // IELTSCoachUITests
-            .deletingLastPathComponent()   // Tests
-            .deletingLastPathComponent()   // 仓库根
-            .appending(path: "Sources/IELTSCoachUI/DesignSystem")
-    }
-
-    /// 与 `PreviewSafetyTests` 共用一份遍历逻辑，别再抄一遍。
-    static func swiftFiles(in directory: URL) throws -> [URL] {
-        try PreviewSafetyTests.swiftFiles(in: directory)
-    }
-
-    /// 去掉 `//` 之后的内容。文档注释里出现「反例长什么样」是很自然的写法，
-    /// 不去掉的话这条测试会被自己的注释绊倒。
-    ///
-    /// 注意：这个处理看不懂字符串字面量里的 `//`（例如 URL）。设计系统这三个文件里没有，
-    /// 真要写就先把这里改成正经的词法扫描。
-    static func strippingLineComments(_ source: String) -> String {
-        source.split(separator: "\n", omittingEmptySubsequences: false).map { line in
-            line.range(of: "//").map { String(line[line.startIndex..<$0.lowerBound]) } ?? String(line)
-        }.joined(separator: "\n")
-    }
-
-    static func occurrences(of needle: String, in source: String) -> Int {
-        var count = 0
-        var cursor = source.startIndex
-        while let found = source.range(of: needle, range: cursor..<source.endIndex) {
-            count += 1
-            cursor = found.upperBound
-        }
-        return count
-    }
+    // 原来这里自己带着一份「遍历目录 / 去注释 / 数次数」的实现，`QuestionBankViewTests`、
+    // `TodayViewTests`、`PracticeSheetTests` 都跨类引用它。那份实现现在收进了
+    // `Support/SourceGuard.swift`：一处实现、一组自测，而且读不到源码时会抛错而不是给空串。
 }

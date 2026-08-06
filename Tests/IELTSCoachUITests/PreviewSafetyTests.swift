@@ -18,15 +18,16 @@ import XCTest
 /// 扫源码这一招在本项目有先例（Phase 10 Task 18 用同样的办法守「问题反馈页不许联网」）。
 final class PreviewSafetyTests: XCTestCase {
     func testNoPreviewConstructsTheLiveAppState() throws {
-        let files = try Self.swiftFiles(in: Self.uiSourceDirectory)
-        XCTAssertFalse(
-            files.isEmpty,
-            "一个界面源文件都没扫到，这条测试等于空转。下一步：确认目录还在——"
-                + Self.uiSourceDirectory.path)
+        // 目录不在、或一个文件都没扫到，`SourceGuard` 会抛错而不是给个空数组——
+        // 空数组会让下面整个循环一次都不跑，而这条测试照样是绿的。
+        let files = try SourceGuard.swiftFiles()
 
         var scannedPreviews = 0
+        var previewMarkers = 0
         for file in files {
-            let source = try String(contentsOf: file, encoding: .utf8)
+            let source = try SourceGuard.read(contentsOf: file,
+                                              describedAs: file.lastPathComponent)
+            previewMarkers += SourceGuard.occurrences(of: "#Preview", in: source)
             for body in Self.previewBodies(in: source) {
                 scannedPreviews += 1
                 for forbidden in ["AppState()", "RootView()"] {
@@ -56,30 +57,22 @@ final class PreviewSafetyTests: XCTestCase {
             scannedPreviews, 0,
             "一个 #Preview 都没扫到。要么预览全被删了（那这条测试可以一起删），"
                 + "要么 previewBodies 的解析写坏了、这条测试已经在空转。下一步：两种都得看一眼。")
+        // **每一个 `#Preview` 都得被切出来。** 只断言「切到了至少一个」的话，
+        // 解析器少切一个（比如遇到空预览体就提前收工）就等于那几个预览悄悄没人守了——
+        // 而它们恰恰是会真的启动 ChatGPT 的那种代码。
+        XCTAssertEqual(
+            scannedPreviews, previewMarkers,
+            "源码里有 \(previewMarkers) 个 `#Preview`，只切出来 \(scannedPreviews) 个预览体，"
+                + "剩下的没有被检查。下一步：看 `previewBodies` 的大括号配对是不是漏了某种写法。")
     }
 
     // MARK: - 扫源码用的小工具
 
-    /// 被扫的目录：界面模块的全部源码。
-    static var uiSourceDirectory: URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()   // IELTSCoachUITests
-            .deletingLastPathComponent()   // Tests
-            .deletingLastPathComponent()   // 仓库根
-            .appending(path: "Sources/IELTSCoachUI")
-    }
+    // 遍历目录、读文件、大括号配对这三件事都收在 `Support/SourceGuard.swift` 里，
+    // 那边有一整组自测钉着「读不到源码时必须抛错」。这里只留预览体的切分。
 
-    static func swiftFiles(in directory: URL) throws -> [URL] {
-        guard let walker = FileManager.default.enumerator(
-            at: directory, includingPropertiesForKeys: nil) else {
-            throw XCTSkip("无法遍历 \(directory.path)")
-        }
-        return walker.compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }.sorted {
-            $0.path < $1.path
-        }
-    }
-
-    /// 取出源码里每个 `#Preview` 后面那对大括号中间的内容（大括号配对，能吃下嵌套）。
+    /// 取出源码里每个 `#Preview` 后面那对大括号中间的内容（大括号配对，能吃下嵌套，
+    /// 跳过字符串字面量里的括号——配对逻辑与 `SourceGuard.memberBody` 共用一份）。
     ///
     /// 注意：这个解析看不懂注释。源文件的注释里别写反引号包起来的 `#Preview` + 左大括号，
     /// 否则会把后面的代码当成预览体扫进来。
@@ -88,21 +81,11 @@ final class PreviewSafetyTests: XCTestCase {
         var cursor = source.startIndex
         while let marker = source.range(of: "#Preview", range: cursor..<source.endIndex) {
             cursor = marker.upperBound
-            guard let open = source[cursor...].firstIndex(of: "{") else { break }
-            var depth = 0
-            var index = open
-            while index < source.endIndex {
-                if source[index] == "{" { depth += 1 }
-                if source[index] == "}" {
-                    depth -= 1
-                    if depth == 0 {
-                        bodies.append(String(source[source.index(after: open)..<index]))
-                        break
-                    }
-                }
-                index = source.index(after: index)
-            }
-            cursor = index < source.endIndex ? source.index(after: index) : source.endIndex
+            // 用区间推进游标，而不是「拿内容再去原文里找一遍」——
+            // 两个预览体一模一样时，那种找法会原地打转。
+            guard let body = SourceGuard.balancedBodyRange(after: cursor, in: source) else { break }
+            bodies.append(String(source[body]))
+            cursor = body.upperBound
         }
         return bodies
     }
