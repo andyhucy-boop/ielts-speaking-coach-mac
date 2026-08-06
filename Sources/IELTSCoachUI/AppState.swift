@@ -1,5 +1,6 @@
 import ChatGPTBridge
 import Foundation
+import IELTSCoachAudio
 import IELTSCoachCore
 import Observation
 
@@ -33,6 +34,9 @@ public final class AppState {
     private let preflight: @Sendable () -> BridgeReadiness
     private let makeBridge: @Sendable () -> any CoachBridge & Sendable
     private let makeTranscriptSampler: @Sendable () -> any TranscriptSampling
+    /// 造这一场的录音器。**每场一台**：`PracticeRecordingCoordinator` 手上是
+    /// 开练那一刻的开关快照与权限快照，复用同一台等于永远用第一场的那一份。
+    private let makeRecording: @Sendable (RecordingStore, CoachSettings) -> any PracticeRecording
     /// 首次环境检查是否已经发起过。见 `startInitialPermissionCheckIfNeeded()`。
     private var didStartInitialCheck = false
 
@@ -63,16 +67,45 @@ public final class AppState {
         AXTranscriptSampler(access: LiveAXAccess())
     }
 
+    /// 生产环境真正用的那一台录音器。**构造它本身没有副作用**——不开麦克风、不建文件，
+    /// `begin()` 不被调用就什么都不发生（与 `liveBridge` 同理，铁律 5）。
+    ///
+    /// **麦克风权限在每次开练那一刻查一次**（`currentStatus()` 只读系统状态，不弹窗）：
+    /// 用户可能刚在系统设置里把权限给上，若要重启 App 才认，他会以为是这个应用坏了。
+    ///
+    /// 开关关着时协调器连采集器都不造，直接返回 `.skippedByUser`
+    /// （见 `PracticeRecordingCoordinator.begin`），所以这里不必先判一次开关——
+    /// 「录不录」的规则只留在 `RecordingConsent` 一处，两处各判一次迟早会走岔。
+    ///
+    /// **为什么权限查询是参数而不是写死的：** Phase 5 计划的 Global Constraints 写明
+    /// 「单元测试里绝不允许碰真硬件，不许构造 `SystemMicrophoneAuthorizer`」——
+    /// `swift test` 跑的是没有 bundle id、没有 Info.plist 的命令行进程。
+    /// 把它做成带默认值的参数，测试就能把**这一份生产代码**原样跑一遍
+    /// （只换掉那个查询），而不是另测一个长得像的替身：换成替身的话，
+    /// 谁把这里改成一个什么都不录的空实现，测试也不会红。
+    nonisolated public static func liveRecording(
+        authorizer: @escaping @Sendable () -> any MicrophoneAuthorizing = { SystemMicrophoneAuthorizer() }
+    ) -> @Sendable (RecordingStore, CoachSettings) -> any PracticeRecording {
+        { store, settings in
+            PracticeRecordingCoordinator(store: store,
+                                         settings: settings,
+                                         permission: authorizer().currentStatus())
+        }
+    }
+
     public init(directory: DataDirectory = .resolve(),
                 preflight: @escaping @Sendable () -> BridgeReadiness = AppState.livePreflight,
                 makeBridge: @escaping @Sendable () -> any CoachBridge & Sendable = AppState.liveBridge,
                 makeTranscriptSampler: @escaping @Sendable () -> any TranscriptSampling
-                    = AppState.liveTranscriptSampler) {
+                    = AppState.liveTranscriptSampler,
+                makeRecording: @escaping @Sendable (RecordingStore, CoachSettings)
+                    -> any PracticeRecording = AppState.liveRecording()) {
         self.directory = directory
         self.store = StateStore(directory: directory)
         self.preflight = preflight
         self.makeBridge = makeBridge
         self.makeTranscriptSampler = makeTranscriptSampler
+        self.makeRecording = makeRecording
         // 这里只读本地磁盘（毫秒级）。环境检查**不在**构造函数里做，见下面两个方法的说明。
         reload()
     }
@@ -199,15 +232,31 @@ public final class AppState {
     /// 那是用户自己的选择，不该渲染成警告）。开关在**开练这一刻**读一次，
     /// 而不是练到一半跟着变：一场练习记一半逐字稿，比记全或不记都难解释。
     ///
-    /// 这一步曾经漏掉过：Phase 4 的十三个任务没有一个认领「把采样器接到 App 上」，
+    /// **录音同理，也是在这里接上的**：录音器每场造一台，拿到的是开练这一刻的
+    /// 开关快照与麦克风权限快照。「用户开没开、系统给没给」的判断全在录音器里做
+    /// （`RecordingConsent`），这里不重复判一遍——两处各判一次，迟早会走岔。
+    ///
+    /// 这一步曾经漏掉过两次：Phase 4 的十三个任务没有一个认领「把采样器接到 App 上」，
     /// 于是 `AXTranscriptSampler` 在整个 App 里从来没有被造出来过，真机上练一场
-    /// 逐字稿一定是空的，而界面上看不出任何异样。守着它的是 `AppStateTests` 里
-    /// 「采样器必须真的接到练习上」那一组三条。
+    /// 逐字稿一定是空的，而界面上看不出任何异样；Phase 5 的十一个任务同样没有一个认领
+    /// 「把录音器接到 App 上」，后果是真机上练一场一秒都不会被录下来，
+    /// 而全套测试照样全绿。守着这两件事的是 `AppStateTests` 里
+    /// 「采样器必须真的接到练习上」与「录音也必须真的接到练习上」那两组。
     public func makePracticeRunner() -> PracticeRunner {
-        PracticeRunner(bridge: makeBridge(),
-                       pasteboard: SystemPasteboard(),
-                       directory: directory,
-                       transcript: state.settings.transcriptEnabled ? makeTranscriptSampler() : nil)
+        // **开练前先从磁盘重读一次设置。** 录音开关是在系统「设置」窗口（⌘,）里拨的，
+        // 那个窗口有它自己的 StateStore，不经过本 AppState；只信内存里这一份的话，
+        // 用户刚打开录音、转身开练，交给录音器的还是启动 App 那一刻的旧值——
+        // 设置窗口里开关明明开着，练完却一个录音都没有，而且不会有任何报错。
+        // 读的是本地一个小 JSON，毫秒级；读失败时 `reload()` 会把中文说明放进 `loadError`，
+        // 沿用上一次读到的设置继续，不静默（铁律 7）。
+        reload()
+        let settings = state.settings
+        return PracticeRunner(bridge: makeBridge(),
+                              pasteboard: SystemPasteboard(),
+                              directory: directory,
+                              transcript: settings.transcriptEnabled ? makeTranscriptSampler() : nil,
+                              recording: makeRecording(RecordingStore(directory: directory),
+                                                       settings))
     }
 
     /// 造一份「重新导入待处理的复盘」的视图模型：**与本 AppState 同一个数据目录**。

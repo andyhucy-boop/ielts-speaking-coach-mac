@@ -60,7 +60,7 @@ macOS 的 TCC 机制决定了这一点：`AVCaptureDevice.requestAccess(for: .au
 
 **P4-2 特别要当心。** 写这份计划时（2026-08-06）命令行版 `Sources/coach/PracticeCommand.swift` **根本没有往 `state.sessions` 里追加过任何东西**——它只把复盘归档，会话记录是空的。Phase 4 必须补上这一条，否则「训练记录页」和本阶段的「回听」都无处可挂。
 
-**Task 1–8 不依赖 P4-1 / P4-2**，可以先做。只有 Task 9（把播放器嵌进训练记录页）和 Task 7 的最后一条测试需要它们。
+**Task 1–8 不依赖 P4-1 / P4-2**，可以先做。只有 Task 9（把播放器嵌进训练记录页）、Task 7 的最后一条测试、以及 Task 7b 的第一条测试需要它们。
 
 > ### Phase 4 的实施计划已于 2026-08-06 写完，上面两条都由它交付（复审补记）
 >
@@ -2548,14 +2548,40 @@ Expected: 全绿
 Run: `swift test --filter PracticeRunnerRecordingTests`
 Expected: `testRecordingIsFinalizedWhenTheStartSequenceFailsMidway` **变红**
 
-**突变 B（录音失败拖垮练习）：** 把 `case .failed(let message):` 分支改成把 `stage` 置为 `.failed(message)`：
+**突变 B（录音失败拖垮练习）：** 在 `start(setup:)` 里 `beginRecording()` 的**下一行**插一句，
+让录音起不来就把整场练习判死：
+
+```swift
+            beginRecording()
+            if let notice = recordingNotice { stage = .failed(notice); return } // ← 突变 B
+            stage = .practicing
+```
 
 Run: `swift test --filter PracticeRunnerRecordingTests`
-Expected: `testAFailedRecordingDoesNotStopThePractice` **变红**
+Expected: `testAFailedRecordingDoesNotStopThePractice` **变红**，报的是
+`XCTAssertEqual failed: ("failed(...)") is not equal to ("practicing") - 录音失败不该让练习失败`
 
 两次都改回，重跑确认全绿。**把四次输出原样写进报告。**
 
 突变 B 守的是：一个没给麦克风权限的用户，本来只是听不了回放，若因此连练都练不了，那就是拿一个可选功能把主功能废掉了。
+
+> ### ⚠️ 突变 B 原来是假的（2026-08-06 复审就地更正，**必读**）
+>
+> 本计划初稿的突变 B 写的是「把 `case .failed(let message):` 分支改成把 `stage` 置为 `.failed(message)`」。
+> **那个突变实测不会变红**——复审亲手做过：照原文改完跑 `swift test --filter PracticeRunnerRecordingTests`，
+> 结果是「Executed 11 tests, with 0 failures」。
+>
+> 原因是计划自相矛盾：本任务 Step 3 第 2 条要求 `beginRecording()` 在 `stage = .practicing`
+> **之前**调用（实现照做了），于是在那个 switch 里设的任何 `stage` 都会被下一行的
+> `stage = .practicing` 原地覆盖掉。换句话说，那不是一个「破坏行为的改动」，
+> 而是一个**根本没有效果**的改动——它证明不了任何测试有牙齿。
+>
+> **这条被守住的行为本身没问题**：换成上面这个真的会改变行为的突变，
+> `testAFailedRecordingDoesNotStopThePractice` 确实变红。所以要改的是计划，不是产品代码。
+>
+> 教训（对后面每一个任务都成立）：**写突变之前先问「这一改会让产品行为真的变吗」。**
+> 一个被下一行覆盖掉的赋值、一个没人读的字段、一段死代码，改了都不算突变。
+> 突变验证的意义是证明测试有约束力；用一个空转的突变去做，证明出来的只有「它没红」。
 
 - [ ] **Step 6: 提交**
 
@@ -2566,6 +2592,92 @@ git add Sources/IELTSCoachUI/Session/PracticeRunner.swift \
         Tests/IELTSCoachUITests/PracticeRunnerRecordingTests.swift
 git commit -m "feat(ui): 把录音接进练习流程，失败路径也不丢录音"
 ```
+
+---
+
+## Task 7b: 把录音接到 App 上（2026-08-06 复审补的任务，**Task 8 开工前必须已完成**）
+
+> **这个任务是复审补进来的，因为整份 Phase 5 计划漏了它。** 原计划十一个任务里
+> `makePracticeRunner` 出现 0 次，`PracticeRecordingCoordinator` 只在 Task 6（造它）出现过，
+> Task 8 / 9 / 10 / 11 的 Files 清单里都没有 `AppState.swift`。后果是：Task 7 把录音接进了
+> `PracticeRunner`（那是对的，Task 7 明写「既有调用点一处都不用改」），但**没有任何一个任务
+> 负责把录音器交到 `PracticeRunner` 手上**——`AppState.makePracticeRunner()` 不传 `recording:`，
+> 默认值 nil，于是真机上这个 .app 永远不会录音，而全套测试仍然全绿。
+> Task 11 Step 3 明写要在练习界面上看到「● 正在录音」、在训练记录里看到「有录音」标记，
+> 那一步会当场做不到。
+>
+> **这是 Phase 4 那个缺口原样长出的第二遍**：Phase 4 的十三个任务也没有一个认领
+> 「把 `AXTranscriptSampler` 接到 App 上」，`AppState.swift` 里那段注释讲的就是这件事。
+> 一个组件写好了、测好了、却没人负责把它插到 App 上——**这是本项目已经犯过两次的错，
+> 后面每个阶段的计划都要专门留一个「接线」任务**。
+>
+> 编号用 `7b` 而不是重排 8–11，是为了不让别处引用的任务号全部作废。
+
+**Files:**
+- Modify: `/Users/huchengyuan/Projects/ielts-speaking-coach-mac/Sources/IELTSCoachUI/AppState.swift`
+- Modify: `/Users/huchengyuan/Projects/ielts-speaking-coach-mac/Tests/IELTSCoachUITests/AppStateTests.swift`
+
+**Interfaces:**
+- Consumes: `PracticeRecordingCoordinator`（Task 6）、`SystemMicrophoneAuthorizer`（Task 1）、`RecordingStore`（Task 3）、`CoachSettings`、`PracticeRunner.init(recording:)`（Task 7）
+- Produces:
+  - `AppState.liveRecording(authorizer:) -> @Sendable (RecordingStore, CoachSettings) -> any PracticeRecording` —— 生产默认那一台。`authorizer` 带默认值 `{ SystemMicrophoneAuthorizer() }`，**唯一理由是让测试能把这份生产代码原样跑一遍而不构造它**（Global Constraints：单元测试绝不允许碰真硬件）
+  - `AppState.init(..., makeRecording:)` —— 新增参数带默认值 `AppState.liveRecording()`，既有调用点一处都不用改
+  - `makePracticeRunner()` 真的把录音器传给 `PracticeRunner`
+
+### 三条必须遵守的接线规则
+
+1. **每场造一台录音器。** `PracticeRecordingCoordinator` 手上是开练那一刻的开关快照与
+   麦克风权限快照，复用同一台等于永远用第一场的那一份
+2. **开练前从磁盘重读一次设置。** 录音开关是在系统「设置」窗口（⌘,，Task 8）里拨的，
+   那个窗口有它自己的 `StateStore`，不经过 `AppState`。只信内存里那份的话，用户刚打开开关、
+   转身开练，录音器收到的还是启动 App 那一刻的旧值——开关看着是开的，练完却一个录音都没有，
+   而且没有任何报错
+3. **「录不录」的判断不在 `AppState` 里重做一遍。** 开关关着时协调器自己返回 `.skippedByUser`
+   （`RecordingConsent.readiness`）。两处各判一次，迟早会走岔
+
+- [x] **Step 1: 写失败的测试**（`Tests/IELTSCoachUITests/AppStateTests.swift`，新增一组四条）
+
+照着同文件里「采样器必须真的接到练习上（复审 BI-2）」那一组的样子写，用假录音器与假 Bridge，
+不碰麦克风、不碰真实 ChatGPT（铁律 5）：
+
+1. `testPracticeStartedFromTheAppReallyRecords` —— 从 `makePracticeRunner()` 拿到的驱动器
+   真的在录（`beginCount == 1`、`isRecording`），且录音路径真的落进了 `state.sessions`
+   那条记录（守「接上了」）
+2. `testTheRecorderGetsTheSwitchThatIsOnDiskRightNow` —— 用**另一个** `StateStore` 打开录音开关
+   （模拟设置窗口），再 `makePracticeRunner()`，断言交到录音器工厂手上的 `CoachSettings`
+   开关是开的、同意时间戳也在，且它拿到的 `RecordingStore` 与训练数据同一个目录（守「开关真的算数」）
+3. `testTheRecorderIsNotToldTheSwitchIsOnWhenItIsOff` —— 开关关着时交出去的快照也必须是关的
+   （守隐私方向：没有它，「一律按开着传」也是绿的）
+4. `testTheProductionDefaultReallyBuildsARecordingCoordinator` —— `AppState.liveRecording()`
+   造出来的真的是 `PracticeRecordingCoordinator`（守「真机上录的是真麦克风」；
+   前三条都是假录音器，把生产默认换成空实现它们照样全绿）。
+   **跑的必须是那份生产代码本身**，只把权限查询换成假的（`authorizer:`）——
+   照抄一份长得像的替身去测，等于没测
+
+- [x] **Step 2: 运行，确认失败**
+
+Run: `swift test --filter AppStateTests`
+Expected: 编译失败 —— `type 'AppState' has no member 'liveRecording'`、`extra argument 'makeRecording' in call`
+
+- [x] **Step 3: 实现**（`AppState.swift`）
+
+加 `liveRecording(authorizer:)` 静态工厂（默认那份 `SystemMicrophoneAuthorizer().currentStatus()`
+只读系统状态、不弹窗，构造协调器本身没有副作用）、`makeRecording` 存储属性与带默认值的初始化参数；
+`makePracticeRunner()` 里先 `reload()` 再取 `state.settings`，把 `RecordingStore(directory:)`
+与这份设置交给工厂，结果传给 `PracticeRunner(recording:)`。
+
+- [x] **Step 4: 运行，确认通过**：`swift test --filter AppStateTests` → 25 passed；`swift test` → 794 passed
+
+- [x] **Step 5: 突变验证（四处）**
+
+| 突变 | 改法 | 该变红的 |
+|---|---|---|
+| W1 | `makePracticeRunner()` 里去掉 `recording:` 参数（即复审发现的原状） | `testPracticeStartedFromTheAppReallyRecords` |
+| W2 | 去掉 `makePracticeRunner()` 开头的 `reload()` | `testTheRecorderGetsTheSwitchThatIsOnDiskRightNow` |
+| W3 | 交出去之前 `settings.recordingEnabled = true` | `testTheRecorderIsNotToldTheSwitchIsOnWhenItIsOff` |
+| W4 | `liveRecording(authorizer:)` 返回的闭包改成一个永远 `.skippedByUser` 的空实现 | `testTheProductionDefaultReallyBuildsARecordingCoordinator` |
+
+- [x] **Step 6: 提交**（与 Task 7 的计划更正同一个提交）
 
 ---
 

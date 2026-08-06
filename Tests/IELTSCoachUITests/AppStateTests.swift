@@ -1,8 +1,48 @@
 import ChatGPTBridge
 import Foundation
+import IELTSCoachAudio
 import IELTSCoachCore
 import XCTest
 @testable import IELTSCoachUI
+
+/// 假的麦克风权限查询。**测试里绝不允许构造 `SystemMicrophoneAuthorizer`**
+/// （Phase 5 计划 Global Constraints）：`swift test` 跑的是没有 bundle id、
+/// 没有 Info.plist 的命令行进程；何况真实实现的返回值取决于跑测试这台机器授过什么权，
+/// 直接依赖它的测试今天绿明天红。
+///
+/// 这里一律答「没授权」：本文件只关心「造出来的是不是那台真协调器」，
+/// 而没授权是最安全的那个答案——就算谁误调了 `begin()` 也一定录不起来。
+private struct StubMicrophoneAuthorizer: MicrophoneAuthorizing {
+    func currentStatus() -> MicrophonePermissionState { .denied }
+    func requestAccess() async -> MicrophonePermissionState { .denied }
+}
+
+/// 记下「App 到底把什么交到了录音器手上」的假工厂。**不碰麦克风（铁律 5）。**
+///
+/// 断言落在「交出去的开关快照与目录」上而不是「工厂被调了几次」：调用次数对不对，
+/// 换不来用户练完之后真的有一个能回放的文件。
+private final class RecordingFactorySpy: @unchecked Sendable {
+    private let lock = NSLock()
+    private let recording: any PracticeRecording
+    private var handedStore: RecordingStore?
+    private var handedSettings: CoachSettings?
+
+    init(_ recording: any PracticeRecording = FakeRecording()) { self.recording = recording }
+
+    var store: RecordingStore? { lock.withLock { handedStore } }
+    var settings: CoachSettings? { lock.withLock { handedSettings } }
+
+    /// 注入给 `AppState` 的那一份工厂。
+    var make: @Sendable (RecordingStore, CoachSettings) -> any PracticeRecording {
+        { [self] store, settings in
+            lock.withLock {
+                handedStore = store
+                handedSettings = settings
+            }
+            return recording
+        }
+    }
+}
 
 /// 可数次数的假 preflight。**全程不接触真实 ChatGPT（铁律 5）。**
 /// 计数会在后台线程上被改（`recheckPermission` 特意把检查挪出主线程），所以要加锁。
@@ -552,20 +592,140 @@ final class AppStateTests: XCTestCase {
                           + "而所有拿假采样器写的测试都照样全绿。")
     }
 
-    // MARK: - 上面三条用的装置
+    // MARK: - 录音也必须真的接到练习上（Phase 5 复审 2026-08-06）
 
-    /// 注入假 Bridge 与假采样器的 `AppState`。**不碰真实 ChatGPT（铁律 5）。**
+    // 上面那个缺口在 Phase 5 原样长出了第二遍：整份 Phase 5 计划的十一个任务里，
+    // 没有一个认领「把 `PracticeRecordingCoordinator` 接到 App 上」——`makePracticeRunner()`
+    // 不传 `recording:`，默认值是 nil，于是 `PracticeRunner.beginRecording()` 里的
+    // `recording?.begin(...)` 得到 nil，走 `.none` 分支安静地什么都不做。后果是
+    // **真机上这个 .app 永远不会录音**：录音开关拨到哪儿都一样，练习界面上不会出现
+    // 「正在录音」，训练记录里不会有任何录音，而且没有任何一处报错。
+    // `PracticeRunnerRecordingTests` 那十一条全绿也证明不了「App 会给录音器」，
+    // 因为它们自己把录音器传了进去。
+    //
+    // 下面三条各守一段，缺一段这个缺口就能再溜回来：
+    // 1. 从 `makePracticeRunner()` 拿到的驱动器真的在录，路径真的进了训练记录（守「接上了」）
+    // 2. 交给录音器的开关快照与目录是**磁盘上此刻**那一份（守「设置窗口里拨的开关真的算数」）
+    // 3. 生产默认那一份工厂造出来的真的是 `PracticeRecordingCoordinator`（守「真机上录的是真麦克风」）
+
+    /// 从 `makePracticeRunner()` 拿到的那台驱动器**真的会录音**，
+    /// 而且这次的录音路径真的落进了 `state.sessions` 里那条记录。
+    ///
+    /// 全程用假 Bridge 与假录音器，不碰真实 ChatGPT、不碰麦克风（铁律 5）。
+    func testPracticeStartedFromTheAppReallyRecords() async throws {
+        let recording = FakeRecording()
+        let app = Self.appState(directory: directory, sampler: Self.scriptedSampler(),
+                                recording: recording)
+
+        let runner = app.makePracticeRunner()
+        try await runner.start(setup: Self.setup())
+
+        XCTAssertEqual(recording.beginCount, 1,
+                       "App 根本没把录音器交给驱动器：真机上练一场，一秒都不会被录下来。")
+        XCTAssertTrue(runner.isRecording, "练习界面上那行「正在录音」永远不会出现。")
+
+        try await runner.finishPractice()
+
+        let session = try XCTUnwrap(try StateStore(directory: directory).load().sessions.first)
+        XCTAssertEqual(session.recordingPath, "recordings/x.m4a",
+                       "训练记录里这一场没有录音，Task 9 的内嵌播放器届时永远没得可放。")
+    }
+
+    /// 交给录音器的那份开关快照，必须是**磁盘上此刻**那一份。
+    ///
+    /// 录音开关是在系统「设置」窗口（⌘,，Task 8）里拨的，那个窗口有它自己的 `StateStore`，
+    /// 不经过这个 `AppState`。只信内存里那份的话，用户刚打开开关、转身开练，
+    /// 录音器收到的还是启动 App 那一刻的旧值——设置窗口里开关明明开着，练完却一个录音都没有，
+    /// 而且不会有任何报错。这是本项目最不能接受的那种失败：界面显示的状态和真实行为对不上。
+    ///
+    /// 顺带守住目录：录音器的 `RecordingStore` 必须和训练数据在同一个目录下，
+    /// 否则录音落在别处，训练记录里那条相对路径指向的文件根本不存在。
+    func testTheRecorderGetsTheSwitchThatIsOnDiskRightNow() throws {
+        let factory = RecordingFactorySpy()
+        let app = Self.appState(directory: directory, sampler: Self.scriptedSampler(),
+                                factory: factory)
+        XCTAssertFalse(app.state.settings.recordingEnabled, "前提没成立：录音开关默认就该是关的")
+
+        // 模拟「用户刚在设置窗口里打开了录音开关」：另一个 StateStore，不经过这个 AppState。
+        try StateStore(directory: directory).mutate {
+            $0.settings = RecordingConsent.enable($0.settings, at: "2026-08-06T22:00:00+08:00")
+        }
+        _ = app.makePracticeRunner()
+
+        let handed = try XCTUnwrap(factory.settings)
+        XCTAssertTrue(handed.recordingEnabled,
+                      "用户在设置窗口里打开的录音开关没送到录音器手上——"
+                          + "开关看着是开的，练完却什么都没录，且没有任何报错。")
+        XCTAssertEqual(handed.recordingConsentAt, "2026-08-06T22:00:00+08:00",
+                       "同意时间戳没跟着送到，`RecordingConsent.readiness` 会判成 blocked。")
+        XCTAssertEqual(try XCTUnwrap(factory.store).directory.root, directory.root,
+                       "录音会落在另一个目录里，训练记录里那条相对路径指向的文件根本不存在。")
+    }
+
+    /// 开关关着时，交到录音器手上的快照也必须是**关着**的。
+    ///
+    /// 只有上面那条的话，「一律按开着传」也是绿的——而那意味着用户没开这个功能、
+    /// 也没同意过，麦克风却在练习时开着。录音的隐私成本正是它默认关掉的理由。
+    func testTheRecorderIsNotToldTheSwitchIsOnWhenItIsOff() throws {
+        let factory = RecordingFactorySpy()
+        let app = Self.appState(directory: directory, sampler: Self.scriptedSampler(),
+                                factory: factory)
+
+        _ = app.makePracticeRunner()
+
+        let handed = try XCTUnwrap(factory.settings)
+        XCTAssertFalse(handed.recordingEnabled,
+                       "用户没开录音开关，App 却按开着的告诉录音器——麦克风会在他不知情时打开。")
+        XCTAssertTrue(handed.recordingConsentAt.isEmpty)
+    }
+
+    /// 生产默认那一份工厂造出来的必须是真的 `PracticeRecordingCoordinator`。
+    ///
+    /// 上面三条都是拿假录音器测的：把生产默认换成一个什么都不做的空实现，它们照样全绿，
+    /// 而真机上一秒都录不下来——这正是那个缺口的形状，所以这一层也得有人守。
+    ///
+    /// **跑的是生产代码本身**，只把权限查询换成假的：Phase 5 计划的 Global Constraints
+    /// 写明「单元测试里绝不允许碰真硬件，不许构造 `SystemMicrophoneAuthorizer`」
+    /// （`swift test` 跑的是没有 bundle id、没有 Info.plist 的命令行进程）。
+    ///
+    /// **构造协调器没有副作用**：不开麦克风、不建文件，`begin()` 不被调用就什么都不发生
+    /// （与 `AppState.liveBridge` 同理）。这里更是把开关关着的设置传进去，
+    /// 就算谁误调了 `begin()` 也只会拿到 `.skippedByUser`。
+    func testTheProductionDefaultReallyBuildsARecordingCoordinator() {
+        let recording = AppState.liveRecording(authorizer: { StubMicrophoneAuthorizer() })(
+            RecordingStore(directory: directory),
+            CoachSettings(recordingEnabled: false, recordingConsentAt: ""))
+
+        XCTAssertTrue(recording is PracticeRecordingCoordinator,
+                      "真机上练习时用的不是那台会开麦克风的协调器，而是 \(type(of: recording))。"
+                          + "录音会永远是空的，而所有拿假录音器写的测试都照样全绿。")
+    }
+
+    // MARK: - 上面几条用的装置
+
+    /// 注入假 Bridge、假采样器与假录音器的 `AppState`。
+    /// **不碰真实 ChatGPT、不碰麦克风（铁律 5）。**
     ///
     /// `makeBridge` 交出去的那台假 Bridge 会正常吐出一份合法复盘，
-    /// 好让 `finishPractice()` 一路走到归档——逐字稿正是在归档那一步落进训练记录的。
+    /// 好让 `finishPractice()` 一路走到归档——逐字稿与录音路径正是在归档那一步
+    /// 落进训练记录的。
     private static func appState(directory: DataDirectory,
-                                 sampler: any TranscriptSampling) -> AppState {
+                                 sampler: any TranscriptSampling,
+                                 recording: any PracticeRecording = FakeRecording()) -> AppState {
+        appState(directory: directory, sampler: sampler,
+                 factory: RecordingFactorySpy(recording))
+    }
+
+    private static func appState(directory: DataDirectory,
+                                 sampler: any TranscriptSampling,
+                                 factory: RecordingFactorySpy) -> AppState {
         let bridge = FakeBridge()
         bridge.copyResult = .success(rawReview)
         return AppState(directory: directory,
                         preflight: { .init(ok: true, messages: []) },
                         makeBridge: { bridge },
-                        makeTranscriptSampler: { sampler })
+                        makeTranscriptSampler: { sampler },
+                        makeRecording: factory.make)
     }
 
     private static func setup() -> SessionSetup {
