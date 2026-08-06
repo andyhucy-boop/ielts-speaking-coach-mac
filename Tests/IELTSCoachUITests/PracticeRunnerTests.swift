@@ -263,7 +263,7 @@ final class PracticeRunnerTests: XCTestCase {
         XCTAssertTrue(notice.contains("错题本 1 条"), "没说错题本进了几条：\(notice)")
         XCTAssertTrue(notice.contains("词汇本 1 条"), "没说词汇本进了几条：\(notice)")
         XCTAssertTrue(notice.contains("重训目标 1 个"), "没说重训目标进了几个：\(notice)")
-        XCTAssertTrue(notice.contains(Self.pendingPath(in: directory).path),
+        XCTAssertTrue(notice.contains(try Self.pendingPath(in: directory, of: runner).path),
                       "没说复盘原文存在哪儿，用户想自己核对时无从下手：\(notice)")
         XCTAssertFalse(notice.contains("⚠️"), "这一份复盘整份都归进档案了，不该报警：\(notice)")
     }
@@ -289,7 +289,7 @@ final class PracticeRunnerTests: XCTestCase {
                       "复盘里的 must_correct 一条都没归进档案，这件事必须点名说出来：\(notice)")
         XCTAssertTrue(notice.contains("错题本 0 条"),
                       "归进去 0 条这件事得直接写出来，不能只显示一个「完成」：\(notice)")
-        XCTAssertTrue(notice.contains(Self.pendingPath(in: directory).path),
+        XCTAssertTrue(notice.contains(try Self.pendingPath(in: directory, of: runner).path),
                       "得把复盘原文的路径给出来，用户才能打开对照着看：\(notice)")
         XCTAssertTrue(notice.contains("下一步"),
                       "只说「没归进去」不说该做什么，用户没法处理（铁律 6）：\(notice)")
@@ -325,7 +325,7 @@ final class PracticeRunnerTests: XCTestCase {
         try await runner.start(setup: Self.setup())
         try? await runner.finishPractice()
 
-        let pending = Self.pendingPath(in: directory)
+        let pending = try Self.pendingPath(in: directory, of: runner)
         XCTAssertTrue(FileManager.default.fileExists(atPath: pending.path),
                       "解析失败了，但原文必须已经在盘上——不然用户练的这一场就白练了")
         let saved = try String(contentsOf: pending, encoding: .utf8)
@@ -466,7 +466,7 @@ final class PracticeRunnerTests: XCTestCase {
             return XCTFail("解析失败不该把这条路堵死——复盘还完整地在 ChatGPT 窗口里，能再复制一次")
         }
         let shown = runner.stage.userFacingText
-        XCTAssertTrue(shown.contains(Self.pendingPath(in: directory).path), "得把原文存在哪儿告诉用户")
+        XCTAssertTrue(shown.contains(try Self.pendingPath(in: directory, of: runner).path), "得把原文存在哪儿告诉用户")
         XCTAssertTrue(shown.contains("下一步"))
         Self.assertPointsAtTheButtonThatIsActuallyThere(runner)
     }
@@ -620,8 +620,20 @@ final class PracticeRunnerTests: XCTestCase {
     }
 
     /// 复盘原文的落盘路径。运行器要在交代里把它给出来，用户才能自己打开对照。
-    static func pendingPath(in directory: DataDirectory) -> URL {
-        directory.pendingReviewsDirectory.appending(path: "\(requestID).txt")
+    ///
+    /// **文件名是这一场的会话编号，不是复盘请求 id**（Phase 4 Task 6 改的）：
+    /// `pending-reviews/<id>.txt`、`reports/<id>.json` 与 `state.sessions` 里那条记录
+    /// 必须共用一个编号，否则「重新导入待处理的复盘」认不出这份原文属于哪一场。
+    ///
+    /// 编号从 `runner.finishedSessionID` 上取而不是在这里再算一遍：算一遍的话
+    /// 这份测试装置就得跟着复制一份编号规则（还得跟着机器时区走），
+    /// 而那份复制品迟早和真的那份走散。**它的形状由 `PracticeRunnerArchiveTests`
+    /// 钉死（`2026-08-06-001`），这里只问「运行器说写在哪儿，那儿真的有东西吗」。**
+    static func pendingPath(in directory: DataDirectory, of runner: PracticeRunner) throws -> URL {
+        let id = try XCTUnwrap(runner.finishedSessionID,
+                               "运行器没给出这一场的会话编号，落盘路径也就无从谈起——"
+                                   + "而复盘原文正是按这个编号存的")
+        return directory.pendingReviewsDirectory.appending(path: "\(id).txt")
     }
 
     static func setup() -> SessionSetup {

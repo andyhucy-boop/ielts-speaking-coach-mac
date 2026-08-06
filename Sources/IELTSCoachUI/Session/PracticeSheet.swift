@@ -151,6 +151,7 @@ struct PracticeSheet: View {
                 }
             }
             stageBlock
+            transcriptBlock
             checklist
             if let notice = runner.archiveNotice {
                 CoachCard {
@@ -179,6 +180,43 @@ struct PracticeSheet: View {
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
+        }
+    }
+
+    /// 逐字稿这一路的交代：练习中显示已经记下几条，练完/失败后如实说明缺了什么。
+    ///
+    /// **不画成红色的错误。** 逐字稿是增强，不是必需（ROADMAP 3.2）：采样失败不中断练习，
+    /// 复盘和训练记录都照常。用 `Palette.warning` 而不是 `Palette.danger`，
+    /// 是不想让用户以为这一场白练了。
+    ///
+    /// 但也**绝不省略**：悄悄丢掉几分钟对话、逐字稿看起来一切正常，
+    /// 才是本项目最忌讳的失败形态。
+    @ViewBuilder
+    private var transcriptBlock: some View {
+        if runner.transcriptTurnCount > 0 {
+            HStack(spacing: Spacing.sm) {
+                Image(systemName: "text.bubble")
+                    .foregroundStyle(Palette.textSecondary)
+                // 等宽数字：这个数字每采一次样就可能变，不等宽的话整行会跟着抖
+                // （DESIGN-SYSTEM 第 6 节最后一条）。
+                Text("已记录 \(runner.transcriptTurnCount) 条对话")
+                    .font(Typography.secondary)
+                    .monospacedDigit()
+                    .foregroundStyle(Palette.textSecondary)
+                Spacer(minLength: 0)
+            }
+        }
+        if let notice = runner.transcriptNotice {
+            HStack(alignment: .top, spacing: Spacing.sm) {
+                Image(systemName: "exclamationmark.bubble")
+                    .foregroundStyle(Palette.warning)
+                Text(notice)
+                    .font(Typography.secondary)
+                    .foregroundStyle(Palette.warning)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
         }
     }
 

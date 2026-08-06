@@ -39,20 +39,19 @@ public struct TodayViewModel: Sendable {
 
     /// 练完一场之后，有没有代码把这一场记进 `CoachState.sessions`。
     ///
-    /// **现在是 `false`，这是核过的代码现状、不是估计**：全工程没有任何一行往
-    /// `state.sessions` 里写东西——`PracticeCommand` 走完一整场只调 `ReviewArchiver.archive`，
-    /// 而它只动 `issues` / `vocabulary` / `targets` / `plan` / `questions`；
-    /// `state.currentSession` 同样从未被赋值。接线归 Phase 4
-    /// （`docs/superpowers/plans/2026-08-06-phase4-transcript-and-history.md`，
-    /// 那份计划自己也写着「写这份计划时核对过：全工程没有任何一行代码往 state.sessions 里写过东西」）。
+    /// **2026-08-06 起是 `true`**：Phase 4 Task 6 把 `PracticeRunner.upsertSession` 接上了——
+    /// 在这一页练完一整场，会话编号、题目、起止时间、逐字稿、复盘报告路径都会进
+    /// `state.sessions`，于是「本周训练 N/5」「最近练习」「继续上次练习」这三处开始动。
+    /// （此前是 `false`，因为全工程没有任何一行往 `state.sessions` 里写东西：
+    /// `PracticeCommand` 走完一整场只调 `ReviewArchiver.archive`，
+    /// 而它只动 `issues` / `vocabulary` / `targets` / `plan` / `questions`。）
     ///
-    /// 于是这一页的 `weekProgress` 与 `recentSessions` 在当前工程里**永远是 0 和空**。
-    /// 这个常量存在的唯一理由，就是让界面能把这件事说出来而不是装作没有
-    /// （铁律 6、铁律 7）。Phase 4 接上记录之后改成 `true`，那句交代自己就消失。
+    /// 这个常量存在的唯一理由，是让界面能在没接上时把这件事说出来而不是装作没有
+    /// （铁律 6、铁律 7）；接上之后那句交代自己就消失。
     ///
     /// `TodayViewModelTests.testPracticeRecordingFlagMatchesWhetherAnyCodeWritesSessions`
     /// 扫 `Sources/` 钉着这个值：代码和它脱钩的两个方向都会变红。
-    public static let practiceRecordingIsWired = false
+    public static let practiceRecordingIsWired = true
 
     /// 「本周训练」和「最近练习」旁边要补的那句交代；记录接上之后是 `nil`。
     ///

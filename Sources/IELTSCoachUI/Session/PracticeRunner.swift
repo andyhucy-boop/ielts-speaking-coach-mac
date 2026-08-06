@@ -54,37 +54,70 @@ public final class PracticeRunner {
     /// 不能只画一个「✅ 完成」。
     public private(set) var archiveNotice: String?
 
+    /// 这一场存进 `state.sessions` 之后那条记录的 id。还没练完时是 nil。
+    ///
+    /// 复训要靠它把「这一场」和「哪个目标」挂上钩（Phase 6 前置依赖 P3），
+    /// 首页的「本周练了几次」也数这些记录（Phase 7）。
+    public private(set) var finishedSessionID: String?
+    /// 逐字稿不完整时的中文说明。**非 nil 时界面必须显示它。**
+    ///
+    /// 它不是错误：采样失败绝不中断练习（ROADMAP 3.2）。但也绝不静默——
+    /// 悄悄丢掉几分钟对话、逐字稿看起来一切正常，才是本项目最忌讳的失败形态。
+    public private(set) var transcriptNotice: String?
+    /// 目前已经记下几条对话。**练习进行中就要能看到它在涨**，所以是算出来的，
+    /// 不是练完才填一次的快照——`TranscriptCollector` 每采一次样就更新一次 `turns`。
+    public var transcriptTurnCount: Int { collector.turns.count }
+
     private let bridge: any CoachBridge & Sendable
     private let pasteboard: any PasteboardAccess
     private let directory: DataDirectory
     private let store: StateStore
+    private let collector: TranscriptCollector
     private let composerTimeout: TimeInterval
     private let replyTimeout: TimeInterval
     private let copyTimeout: TimeInterval
+    /// 逐字稿采样的节拍。实测每 2~3 秒一次足够跟上流式输出，
+    /// 又不会把 CPU 耗在反复遍历几百个 AX 节点上。
+    private let samplingInterval: TimeInterval
     private let now: @Sendable () -> Date
 
     /// 正在进行的这一场。取消或存档完成后置空——**没有它就不该再去驱动 ChatGPT**，
     /// 那时用户很可能已经在用 ChatGPT 做别的事了。
     private var current: SessionSetup?
-    /// 本次复盘请求的 id。取复盘、落盘文件名都用它。
+    /// 本次复盘请求的 id。只用来在 ChatGPT 的回复里认出这一次的定界标记。
     private var currentRequestID: String?
+    /// 这一场的会话编号。**落盘文件名（`pending-reviews/<id>.txt`、`reports/<id>.json`）
+    /// 与 `state.sessions` 里的记录用的都是它**，所以收尾失败后重试时要沿用同一个，
+    /// 不能每重试一次就再要一个新编号——那会给同一场练习留下好几条训练记录。
+    private var currentSessionID: String?
+    /// 这一场的开始时刻。训练记录要按它排序、按月分组。
+    private var startedAt: Date?
+    private var samplingTask: Task<Void, Never>?
 
     /// 超时值全部与 `coach practice` 保持一致（那几个数是按实测时序定的，见 spec 2.3.7）。
     /// **要短超时请在测试里显式传参，不要改这里的默认值。**
+    ///
+    /// - Parameter transcript: 逐字稿采样器。传 nil 表示用户在设置里关掉了
+    ///   「记录对话逐字稿」，此时安静地什么都不做。**刻意不挂在 `CoachBridge` 上**，
+    ///   理由见 `TranscriptSampling` 的注释。
     public init(bridge: any CoachBridge & Sendable,
                 pasteboard: any PasteboardAccess,
                 directory: DataDirectory = .resolve(),
+                transcript: (any TranscriptSampling)? = nil,
                 composerTimeout: TimeInterval = 20,
                 replyTimeout: TimeInterval = 60,
                 copyTimeout: TimeInterval = 10,
+                samplingInterval: TimeInterval = 2.5,
                 now: @escaping @Sendable () -> Date = Date.init) {
         self.bridge = bridge
         self.pasteboard = pasteboard
         self.directory = directory
         self.store = StateStore(directory: directory)
+        self.collector = TranscriptCollector(sampler: transcript, now: now)
         self.composerTimeout = composerTimeout
         self.replyTimeout = replyTimeout
         self.copyTimeout = copyTimeout
+        self.samplingInterval = samplingInterval
         self.now = now
     }
 
@@ -98,8 +131,16 @@ public final class PracticeRunner {
     /// 任何一步失败都停在 `.failed` 并把错误抛出去，**绝不继续往下走**：
     /// 继续走的后果是用户对着一个根本没收到考官提示词的 ChatGPT 练完整整一场。
     public func start(setup: SessionSetup) async throws {
+        // 重开一场之前先把上一场的节拍停掉。走到这儿时上一场多半已经停了，
+        // 但「上一场还在采样、这一场又开一个」的后果是两个 Task 同时往同一个
+        // 拼接器里灌，且旧的那个永远没人取消——宁可多停一次。
+        stopSampling()
         current = setup
         currentRequestID = nil
+        currentSessionID = nil
+        finishedSessionID = nil
+        transcriptNotice = nil
+        startedAt = now()
         archiveNotice = nil
         retry = nil
         let prompt = ExaminerPrompt.build(setup: setup)
@@ -109,11 +150,33 @@ public final class PracticeRunner {
             let timeout = composerTimeout
             try await run(.waitingComposer) { _ = try $0.waitForVoiceComposer(timeout: timeout) }
             try await run(.sendingPrompt) { try $0.sendText(prompt) }
+            beginCollectingTranscript()
             stage = .practicing
         } catch {
+            stopSampling()
             fail(error, retry: .restart)
             throw error
         }
+    }
+
+    /// 逐字稿从**考官提示词已经发出去之后**才开始收集。
+    ///
+    /// 早一步的话，那条两千字符的考官提示词就不会被当成背景板，而是被当成对话内容
+    /// 采进逐字稿里——而它恰恰是屏幕上最长的一段文字。
+    private func beginCollectingTranscript() {
+        collector.begin()
+        samplingTask = Task { [weak self, samplingInterval] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(samplingInterval))
+                if Task.isCancelled { return }
+                self?.collector.tick()
+            }
+        }
+    }
+
+    private func stopSampling() {
+        samplingTask?.cancel()
+        samplingTask = nil
     }
 
     // MARK: - 练完
@@ -132,6 +195,22 @@ public final class PracticeRunner {
             retry = nil
             throw CoachError.reviewNotFound(message)
         }
+
+        // **第一件事。** 晚一步的话，复盘那一大坨 JSON 会被采进逐字稿里。
+        stopSampling()
+        collector.finish()
+        transcriptNotice = collector.notice
+
+        // 收尾失败后重试时沿用同一个编号：每次都要一个新的话，一场练习会留下好几条记录。
+        let sessionID = currentSessionID
+            ?? SessionID.next(existing: (try? store.load())?.sessions ?? [],
+                              now: now(), timeZone: .current)
+        currentSessionID = sessionID
+
+        // **取复盘之前就把这一场记下来。** 后面任何一步失败，用户练的这一场
+        // 和已经采到的逐字稿都还在（成品标准第 7 条）。
+        upsertSession(id: sessionID, setup: setup, reportPath: nil)
+        finishedSessionID = sessionID
 
         do {
             // 用户自己在 ChatGPT 里挂断时语音已经结束了。这时再按一次「结束通话」，
@@ -155,7 +234,7 @@ public final class PracticeRunner {
             guard let raw = await captureReview(marker: marker.open) else {
                 return   // 已经转到 .needsManualCopy，等用户手动 ⌘C
             }
-            try archive(raw: raw, setup: setup, requestID: requestID, retryOnFailure: .wrapUp)
+            try archive(raw: raw, setup: setup, sessionID: sessionID, retryOnFailure: .wrapUp)
         } catch {
             fail(error, retry: .wrapUp)
             throw error
@@ -164,7 +243,7 @@ public final class PracticeRunner {
 
     /// 两条自动路都断了之后，用户照提示按了 ⌘C，再点一下按钮走这里。
     public func captureReviewFromClipboard() async throws {
-        guard let setup = current, let requestID = currentRequestID else {
+        guard let setup = current, let sessionID = currentSessionID else {
             let message = "现在没有正在等待取回的复盘。"
                 + "下一步：关掉这个窗口，回到「今日训练」重新开始一场。"
             stage = .failed(message)
@@ -176,7 +255,7 @@ public final class PracticeRunner {
             let raw = try await offMainThrowing { [pasteboard] _ in
                 try ClipboardFallback.readReview(from: pasteboard)
             }
-            try archive(raw: raw, setup: setup, requestID: requestID, retryOnFailure: .clipboard)
+            try archive(raw: raw, setup: setup, sessionID: sessionID, retryOnFailure: .clipboard)
         } catch {
             // 剪贴板里没有东西 / 内容太短，都还能再复制一次——**别把路堵死成失败态**。
             stage = .needsManualCopy(Self.describeFailure(error, at: .capturingReview))
@@ -190,8 +269,13 @@ public final class PracticeRunner {
     /// 界面立刻回到空闲态，以及**之后不会再有任何一次 ChatGPT 操作**——
     /// 用户放弃之后多半已经在用 ChatGPT 做别的事了，这时再冒出来按一下「结束通话」很吓人。
     public func cancel() {
+        // 不停掉的话，那个 Task 会一直转下去——一边空转，一边把用户放弃之后
+        // 在 ChatGPT 里做的别的事采进这一场的逐字稿里。
+        stopSampling()
+        collector.abandon(reason: "你中途取消了这次练习。")
         current = nil
         currentRequestID = nil
+        currentSessionID = nil
         archiveNotice = nil
         retry = nil
         stage = .idle
@@ -246,19 +330,20 @@ public final class PracticeRunner {
     /// `retryOnFailure` 是**调用方失败时会摆出来的那颗按钮**，因为这里写的「下一步」要指名道姓
     /// 提到它。两条调用路径摆出来的按钮不一样（收尾那条是「重新取复盘」，手动复制那条是
     /// 「我已经复制好了」），写死一个的话，其中一条路上的用户会照着提示去找一颗不存在的按钮。
-    private func archive(raw: String, setup: SessionSetup, requestID: String,
+    private func archive(raw: String, setup: SessionSetup, sessionID: String,
                          retryOnFailure: PracticeRetry) throws {
         stage = .archiving
 
-        let pendingPath = directory.pendingReviewsDirectory.appending(path: "\(requestID).txt")
+        let pendingPath: URL
         do {
-            try directory.createIfNeeded()
-            try raw.write(to: pendingPath, atomically: true, encoding: .utf8)
+            pendingPath = try PendingReviewStore.write(rawText: raw, sessionID: sessionID,
+                                                       directory: directory)
         } catch {
             // 写不下去就必须说出来。**不能 try? 吞掉再往下走**——那样解析失败时
             // 上面那句「原文没丢」就成了假话（铁律 7）。
             throw CoachError.stateUnreadable(
-                "复盘取回来了，但没能存到 \(pendingPath.path)（系统说：\(error.localizedDescription)）。"
+                "复盘取回来了，但没能存进 \(directory.pendingReviewsDirectory.path)"
+                    + "（系统说：\(error.localizedDescription)）。"
                     + "下一步：先别关这个窗口，切到 ChatGPT 把复盘全文复制下来自己存一份；"
                     + "然后确认「\(directory.root.path)」这个目录存在且可写。")
         }
@@ -269,23 +354,30 @@ public final class PracticeRunner {
         } catch {
             // 这里**只取诊断、丢掉它自带的「下一步」**，理由见 `diagnosisOnly(_:)`：
             // `ReviewParser` 那句「下一步：点「补生成复盘报告」…」说的是命令行时代的操作。
+            //
+            // 也**不许把用户推回终端**（不提 `coach reimport`）：界面里已经有
+            //「重新导入待处理的复盘」这条路，出错恰恰是「全程不用终端」最该成立的时候。
             throw CoachError.invalidReviewText(
                 "复盘取回来了，但不是本工具认得的格式，解析不出来（\(Self.diagnosisOnly(error))）。"
-                    + "好消息是原文一个字都没丢，就在 \(pendingPath.path)。"
-                    + "下一步：打开这个文件看看 ChatGPT 到底输出了什么——多半是被截断了（末尾少个 }）；"
-                    + "也可以回 ChatGPT 让它按要求重新输出一次，"
-                    + "再点「\(retryOnFailure.buttonTitle)」这条路重来。")
+                    + "好消息是原文一个字都没丢，就在 \(pendingPath.path)，"
+                    + "这一场也已经记进训练记录了。"
+                    + "下一步：先点「\(retryOnFailure.buttonTitle)」再取一次；"
+                    + "还是不行的话，打开上面那个文件看看 ChatGPT 到底输出了什么"
+                    + "（多半是被截断了，末尾少个 }），或者回 ChatGPT 让它按要求重新输出一次，"
+                    + "再到「复盘报告」页用「重新导入待处理的复盘」把这份原文补进来。")
         }
 
         let timestamp = ISO8601DateFormatter().string(from: now())
         let outcome = try store.mutate { state -> ArchiveOutcome in
             let result = ReviewArchiver.archive(report: report, into: state,
-                                                sessionID: requestID,
+                                                sessionID: sessionID,
                                                 questionID: setup.question.id,
                                                 at: timestamp)
             state = result.state
             return result
         }
+        try writeReport(report, sessionID: sessionID)
+        upsertSession(id: sessionID, setup: setup, reportPath: "reports/\(sessionID).json")
         let state = try store.load()
 
         var notice = "错题本 \(state.issues.count) 条，词汇本 \(state.vocabulary.count) 条，"
@@ -301,8 +393,65 @@ public final class PracticeRunner {
 
         current = nil
         currentRequestID = nil
+        currentSessionID = nil
         retry = nil
         stage = .done
+    }
+
+    /// 把解析后的复盘写成 `reports/<id>.json`。
+    ///
+    /// 存的是解析后的复盘本身，不是带定界标记的原文——原文归 `pending-reviews/`。
+    /// 复盘报告页读的就是这个文件。
+    private func writeReport(_ report: JSONValue, sessionID: String) throws {
+        try directory.createIfNeeded()
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes]
+        do {
+            try encoder.encode(report)
+                .write(to: directory.reportsDirectory.appending(path: "\(sessionID).json"),
+                       options: .atomic)
+        } catch {
+            throw CoachError.stateUnreadable(
+                "复盘解析出来了，但没能写成报告文件 reports/\(sessionID).json"
+                    + "（系统说：\(error.localizedDescription)）。"
+                    + "好消息是原文和这一场的训练记录都还在。"
+                    + "下一步：确认「\(directory.root.path)」这个目录存在且可写，"
+                    + "然后到「复盘报告」页用「重新导入待处理的复盘」重试一次。")
+        }
+    }
+
+    /// 把这一场写进 `state.sessions`。**按 id upsert，不是无脑 append**——
+    /// 同一个编号重存不该产生第二条记录（Phase 9 的 `save_session_review` 也按同样规则做）。
+    ///
+    /// 会被调用两次：取复盘**之前**一次（那时还没有报告路径），归档成功之后再一次
+    /// （补上 `reportPath`）。中间任何一步失败，第一次写下的东西都不回滚。
+    private func upsertSession(id: String, setup: SessionSetup, reportPath: String?) {
+        let formatter = ISO8601DateFormatter()
+        do {
+            try store.mutate { state in
+                var session = state.sessions.first { $0.id == id }
+                    ?? PracticeSession(id: id, questionId: setup.question.id,
+                                       focusPart: setup.focusPart,
+                                       startedAt: formatter.string(from: self.startedAt ?? self.now()),
+                                       endedAt: "", goal: setup.goal,
+                                       transcript: [], reportPath: "", recordingPath: "")
+                session.endedAt = formatter.string(from: self.now())
+                session.transcript = self.collector.turns
+                if let reportPath { session.reportPath = reportPath }
+                if let index = state.sessions.firstIndex(where: { $0.id == id }) {
+                    state.sessions[index] = session
+                } else {
+                    state.sessions.append(session)
+                }
+                if state.currentSession?.id == id { state.currentSession = nil }
+            }
+        } catch {
+            // 训练记录写不进去是真事故（这一场就真的没了），必须让用户看见（铁律 7）。
+            transcriptNotice = "这一场没能存进训练记录：\(error.localizedDescription) "
+                + "下一步：确认数据目录可写（默认在「资源库 › Application Support › "
+                + "IELTS Speaking Coach」），然后重新练一场；"
+                + "复盘原文若已取回，仍然保存在 pending-reviews 目录里。"
+        }
     }
 
     // MARK: - 跑一步
