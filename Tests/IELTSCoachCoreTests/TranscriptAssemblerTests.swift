@@ -138,6 +138,36 @@ final class TranscriptAssemblerTests: XCTestCase {
                        "短的那条不能被长的那条覆盖掉——那等于逐字稿里少了一个考官问过的问题")
     }
 
+    /// **实现者按复审意见补的一条（计划里没有）。**
+    ///
+    /// `canMerge` 最后那行文本判据（两段文本必须互为前缀）原本没有任何测试守着：
+    /// 把它整行改成 `return true`（只剩说话人判断），原有 21 条测试全绿（复审已实测）。
+    ///
+    /// 而这一行正是 R2 成立的前提——`merge` 敢拿「更长的那条」整句换掉短的那条，
+    /// 靠的就是「两者必有一个是另一个的前缀，所以更长就等于内容更全」。
+    /// 判据一没，两条毫不相干的消息只要说话人兼容就会并进同一个槽位，
+    /// 长的那条把短的那条整句盖掉：逐字稿里凭空少一条考官问过的问题，
+    /// 而且没有任何信号——正是成品标准第 5 条要挡的事故。
+    ///
+    /// 场景必须是**跨采样、且这一次没读到前面那条**才咬得住：
+    /// 同一次采样里两条都在时，R1 的游标已经走过前一个槽位，
+    /// 文本判据在不在都不影响结果（实现者实测确认）。
+    ///
+    /// 不断言两条的先后顺序：R4 规定「匹配不上就插在游标当前位置」，
+    /// 这里游标停在 0，所以后读到的那条排在前面。这是 R4 的直接后果，
+    /// 而顺序不是本条测试要守的东西。
+    func testTwoUnrelatedMessagesFromTheSameSpeakerNeverMergeIntoOneTurn() {
+        var assembler = TranscriptAssembler()
+        assembler.ingest([examiner("Where do you live?")], at: t1)
+        // 界面正好在重绘，这一次只读到了考官新问的那一句
+        assembler.ingest([examiner("What do you do in your free time?")], at: t2)
+
+        XCTAssertEqual(assembler.turns.count, 2, "毫不相干的两句话不能并进同一个槽位")
+        XCTAssertEqual(Set(assembler.turns.map(\.text)),
+                       ["Where do you live?", "What do you do in your free time?"],
+                       "两句话都必须在——长的那条不能把短的那条整句盖掉")
+    }
+
     // MARK: - 情况五：说话人切换
 
     func testExaminerAndLearnerNeverMergeIntoOneTurn() {
@@ -311,16 +341,27 @@ final class TranscriptAssemblerTests: XCTestCase {
         XCTAssertEqual(assembler.turns.map(\.text), ["Hello?"])
     }
 
+    /// R4：匹配不上就新开槽位，**插在游标当前位置**，而不是一律追加到末尾。
+    ///
+    /// 采样漏掉过中间那条（界面正好在重绘），下一次又读到了——
+    /// 它必须回到它本来的位置。
+    ///
+    /// **测试数据与计划原稿不同，是实现者按复审意见改的。**
+    /// 计划原稿第二次采样读到的新消息（"Question two?"）本来就在最末尾，
+    /// 「插在游标当前位置」和「追加到末尾」得到的结果一模一样——
+    /// 把 `let insertion = min(cursor, slots.count)` 改成 `let insertion = slots.count`
+    /// （即退化成一律追加）原稿照样绿（复审已实测）。名字写着守 R4，其实没咬住。
+    /// 改成「漏掉的是中间那条」，游标停在中间，两种实现才分得开。
     func testANewMessageArrivingBetweenTwoKnownOnesKeepsTheOrder() {
-        // 采样漏掉过中间那条（界面正好在重绘），下一次又读到了。
-        // 它必须回到它本来的位置，不能被追加到最后。
         var assembler = TranscriptAssembler()
         assembler.ingest([examiner("Question one?"), learner("Answer one.")], at: t1)
+        // 这一次读全了：考官问完之后还补了一句，上一次采样正好没读到
         assembler.ingest([examiner("Question one?"),
-                          learner("Answer one."),
-                          examiner("Question two?")], at: t2)
+                          examiner("Take your time."),
+                          learner("Answer one.")], at: t2)
 
         XCTAssertEqual(assembler.turns.map(\.text),
-                       ["Question one?", "Answer one.", "Question two?"])
+                       ["Question one?", "Take your time.", "Answer one."],
+                       "补读到的那条要回到它本来的位置，不能被追加到最后")
     }
 }
