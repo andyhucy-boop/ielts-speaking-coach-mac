@@ -151,6 +151,7 @@ struct PracticeSheet: View {
                 }
             }
             stageBlock
+            recordingBlock
             transcriptBlock
             checklist
             if let notice = runner.archiveNotice {
@@ -180,6 +181,50 @@ struct PracticeSheet: View {
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
+        }
+    }
+
+    /// 录音这一路的交代。两半各守一件不能含糊的事：
+    ///
+    /// - **正在录音的指示**：麦克风开着却一点表示都没有，用户不知道自己什么时候在被录。
+    ///   **静止的，不做呼吸闪烁**：一个一直在动的红点是这个界面上最容易让人分心的东西，
+    ///   而用户这时候正要开口说英语（DESIGN-SYSTEM 第 5 节禁止循环装饰动画）。
+    /// - **那句提示**：用户以为在录、实际没录（没权限、麦克风被别的程序占着），
+    ///   或者中途插拔耳机断过一下。**不显示就是骗人**——练完点开回听才发现什么都没有。
+    ///   用 `CoachCard` 装、文字可选中，方便用户把这句话复制去查。
+    ///
+    /// **开关关着时这里什么都不画**：那是默认状态，不是故障，为它摆一句提示会天天骚扰用户。
+    /// `isRecording` 与 `recordingNotice` 那时都是 false / nil，两半自然都不出现。
+    ///
+    /// 两半都不抢「我练完了」那颗按钮的视觉主位：一行小字加一张说明卡，
+    /// 主行动仍然只有底下那一颗（DESIGN-SYSTEM 第 4 节）。
+    @ViewBuilder
+    private var recordingBlock: some View {
+        if runner.isRecording {
+            HStack(spacing: Spacing.sm) {
+                Image(systemName: "record.circle")
+                    .foregroundStyle(Palette.danger)
+                Text("正在录音")
+                    .font(Typography.secondary)
+                    .foregroundStyle(Palette.danger)
+                Spacer(minLength: 0)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("正在录音，这次练习你说的话会存在本机")
+        }
+        if let notice = runner.recordingNotice {
+            CoachCard {
+                HStack(alignment: .top, spacing: Spacing.sm) {
+                    Image(systemName: "exclamationmark.bubble")
+                        .foregroundStyle(Palette.warning)
+                    Text(notice)
+                        .font(Typography.secondary)
+                        .foregroundStyle(Palette.textPrimary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                }
+            }
         }
     }
 

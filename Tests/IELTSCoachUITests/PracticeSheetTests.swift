@@ -309,4 +309,64 @@ final class PracticeSheetTests: XCTestCase {
                     + "不要画成红色错误——逐字稿是增强，不是必需）。")
         }
     }
+
+    /// **Phase 5 的录音这一路，和上面逐字稿那条是同一种病。**
+    ///
+    /// 运行器那一半（`isRecording` / `recordingNotice` 什么时候是什么值）已经被
+    /// `PracticeRunnerRecordingTests` 逐条钉住了，可**算出来的话能不能上屏，没人管**——
+    /// 而这两样各自守着一件不能含糊的事：
+    ///
+    /// - `isRecording`：正在录音的指示。麦克风开着却一点表示都没有，用户不知道自己
+    ///   什么时候在被录；
+    /// - `recordingNotice`：**用户以为在录、实际没录**（没权限、麦克风被占），
+    ///   或者中途插拔耳机断过一下。不显示就是骗人——练完点开回听才发现什么都没有。
+    ///
+    /// 分两层扫：`practiceBody` 里那句调用（摆上去了没有），加 `recordingBlock`
+    /// 自己那一段里的两处取值（画的是不是那两个值）。只扫全文的话，两处都是
+    /// 「文件里有这个词」，把调用点删掉照样绿。
+    func testTheRecordingIndicatorAndNoticeAreShown() throws {
+        SourceGuard.assertRenders(
+            "recordingBlock", inBodyOf: "private func practiceBody", of: Self.sheet,
+            because: "`recordingBlock` 只是声明着，没有被摆进 `practiceBody`——"
+                + "录音这一路的交代一个像素都不上屏，而这不会有任何编译错误。"
+                + "后果：用户既看不到自己正在被录音，也看不到「这次其实没录上」那句提示，"
+                + "练完点开回听才发现什么都没有。"
+                + "下一步：把 `recordingBlock` 放回 `practiceBody` 的 VStack 里；"
+                + "换了别的名字就同步改这条测试。")
+
+        for (piece, what) in [
+            ("runner.isRecording",
+             "「● 正在录音」那个指示——麦克风开着却一点表示都没有，用户不知道自己在被录"),
+            ("runner.recordingNotice",
+             "录音没录上 / 中途断过时那句中文说明（发生了什么、下一步做什么）")
+        ] {
+            SourceGuard.assertRenders(
+                piece, inBodyOf: "private var recordingBlock", of: Self.sheet,
+                because: "`recordingBlock` 里不再读 `\(piece)` 了，界面上少的是：\(what)。"
+                    + "运行器把它算出来了却不上屏，等于静默失败（铁律 7）。"
+                    + "下一步：把这半块画回 `recordingBlock`。")
+        }
+
+        // 图标只用 SF Symbols，不用 emoji（DESIGN-SYSTEM 第 4 节）。
+        SourceGuard.assertRenders(
+            "record.circle", inBodyOf: "private var recordingBlock", of: Self.sheet,
+            because: "录音指示没有那个 SF Symbol。下一步：用 `Image(systemName: \"record.circle\")`，"
+                + "**不要用 emoji**——emoji 在不同系统版本渲染不一致，也跟不了语义颜色。")
+    }
+
+    /// 录音指示**必须是静止的**。
+    ///
+    /// DESIGN-SYSTEM 第 5 节禁止循环装饰动画，Task 11 Step 3 的人工验收也要看这一条。
+    /// 一个一直在呼吸闪烁的红点是这个界面上最容易让人分心的东西，
+    /// 而用户这时候正要开口说英语。
+    func testTheRecordingIndicatorDoesNotBlink() throws {
+        let block = try SourceGuard.memberBody(of: "private var recordingBlock",
+                                               in: try SourceGuard.code(Self.sheet))
+        for banned in ["repeatForever", "withAnimation", "opacity(isBlinking", "symbolEffect"] {
+            XCTAssertFalse(block.contains(banned),
+                           "录音指示里出现了「\(banned)」，多半是加了呼吸闪烁那类循环动画。"
+                               + "下一步：去掉它，静态就好——用户这时候正要开口说英语，"
+                               + "界面上不该有东西一直在动（DESIGN-SYSTEM 第 5 节）。")
+        }
+    }
 }

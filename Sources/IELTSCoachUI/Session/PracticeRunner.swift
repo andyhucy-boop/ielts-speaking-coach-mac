@@ -1,5 +1,6 @@
 import ChatGPTBridge
 import Foundation
+import IELTSCoachAudio
 import IELTSCoachCore
 import Observation
 
@@ -68,8 +69,31 @@ public final class PracticeRunner {
     /// 不是练完才填一次的快照——`TranscriptCollector` 每采一次样就更新一次 `turns`。
     public var transcriptTurnCount: Int { collector.turns.count }
 
+    /// 这一场到底在不在录。界面据此显示「● 正在录音」。
+    ///
+    /// **录不了的时候必须是 false。** 显示成「正在录音」却什么都没录，
+    /// 是本项目最不能接受的那种失败（计划「这个阶段有一件事任何自动化都绕不过去」第 2 条）。
+    public private(set) var isRecording = false
+    /// 录音相关的中文说明。**非 nil 时界面必须显示。**
+    ///
+    /// 它不是错误：录音是增强，不是必需，起不来也照常练完（与逐字稿同一条原则，ROADMAP 3.2）。
+    /// 但也绝不静默——用户以为在录、实际没录，或者录音中途断过，不说就是骗人。
+    public private(set) var recordingNotice: String?
+    /// 这次录音的相对路径（例如 `recordings/2026-08-06T10-45-30Z.m4a`），
+    /// 归档时写进 `PracticeSession.recordingPath`，训练记录页靠它挂播放器。
+    ///
+    /// **一秒都没录到时是空串**：那时候 `RecordingSession` 已经把空文件删了，
+    /// 再往训练记录里写一个指向已删文件的路径，只会画出一个点了没声音的播放器。
+    public private(set) var recordingRelativePath = ""
+
     private let bridge: any CoachBridge & Sendable
     private let pasteboard: any PasteboardAccess
+    /// 这一场的录音。传 nil 表示这台运行器根本不管录音（Xcode 预览、以及所有
+    /// 不关心录音的既有测试）——此时安静地什么都不做，不报错、不留提示。
+    ///
+    /// **只依赖 `PracticeRecording` 这个 protocol，不依赖任何 AVFoundation 类型**，
+    /// 所以整条接线可以用假实现测完，全程不碰真麦克风（铁律 5）。
+    private let recording: (any PracticeRecording)?
     private let directory: DataDirectory
     private let store: StateStore
     private let collector: TranscriptCollector
@@ -100,6 +124,9 @@ public final class PracticeRunner {
     /// - Parameter transcript: 逐字稿采样器。传 nil 表示用户在设置里关掉了
     ///   「记录对话逐字稿」，此时安静地什么都不做。**刻意不挂在 `CoachBridge` 上**，
     ///   理由见 `TranscriptSampling` 的注释。
+    /// - Parameter recording: 这一场的录音。**默认 nil，所以既有调用点一处都不用改**；
+    ///   收到 nil 就当这台运行器不管录音。开关与麦克风权限的判定归
+    ///   `PracticeRecordingCoordinator`，这里只负责按四条接线规则调用它。
     public init(bridge: any CoachBridge & Sendable,
                 pasteboard: any PasteboardAccess,
                 directory: DataDirectory = .resolve(),
@@ -108,9 +135,11 @@ public final class PracticeRunner {
                 replyTimeout: TimeInterval = 60,
                 copyTimeout: TimeInterval = 10,
                 samplingInterval: TimeInterval = 2.5,
+                recording: (any PracticeRecording)? = nil,
                 now: @escaping @Sendable () -> Date = Date.init) {
         self.bridge = bridge
         self.pasteboard = pasteboard
+        self.recording = recording
         self.directory = directory
         self.store = StateStore(directory: directory)
         self.collector = TranscriptCollector(sampler: transcript, now: now)
@@ -142,6 +171,9 @@ public final class PracticeRunner {
         transcriptNotice = nil
         startedAt = now()
         archiveNotice = nil
+        recordingNotice = nil
+        recordingRelativePath = ""
+        isRecording = false
         retry = nil
         let prompt = ExaminerPrompt.build(setup: setup)
         do {
@@ -151,11 +183,60 @@ public final class PracticeRunner {
             try await run(.waitingComposer) { _ = try $0.waitForVoiceComposer(timeout: timeout) }
             try await run(.sendingPrompt) { try $0.sendText(prompt) }
             beginCollectingTranscript()
+            beginRecording()
             stage = .practicing
         } catch {
             stopSampling()
+            // 已经录下的部分不能跟着这次失败一起丢：走到这儿时录音多半还没开始，
+            // 但「开始录了之后才失败」这条路存在（`beginRecording` 之后再抛错的将来改动），
+            // 而漏掉它的代价是一整场录音停在缓冲区里，用户什么都拿不到。
+            finalizeRecording()
             fail(error, retry: .restart)
             throw error
+        }
+    }
+
+    /// 录音**在考官提示词发出去之后**才开始。
+    ///
+    /// 早一步的话，录进去的是用户等 ChatGPT 启动语音的那 9 秒沉默（spec 2.3.7）——
+    /// 那段时间他还没开口，也不该开口。
+    ///
+    /// **起不来绝不能把练习也拖垮。** 录音是增强，不是必需（与逐字稿同一条原则，
+    /// ROADMAP 3.2）：一个没给麦克风权限的用户本来只是听不了回放，
+    /// 若因此连练都练不了，那就是拿一个可选功能把主功能废掉了。
+    private func beginRecording() {
+        // 用这一场的开始时刻命名，而不是「此刻」：训练记录里那条会话记的也是它，
+        // 两处一致，人肉对照文件与记录时才不会差出九秒。
+        switch recording?.begin(startedAt: startedAt ?? now()) {
+        case .started(let path):
+            isRecording = true
+            recordingRelativePath = path
+        case .failed(let message):
+            // 想录却录不了，必须让用户看见：他以为在录，实际没录，不说就是骗人。
+            isRecording = false
+            recordingNotice = message
+        case .skippedByUser, .none:
+            // 开关关着是默认状态，不是故障，什么都不说——为它报警会天天骚扰用户。
+            isRecording = false
+        }
+    }
+
+    /// 收尾录音。可以被重复调用：没在录时 `PracticeRecording.finish()` 返回 nil。
+    ///
+    /// **每一条会走到头的路径都要调它**（练完、开练失败、中途取消），漏掉任何一条，
+    /// 那条路上的录音就停在缓冲区里，用户练了半小时什么都拿不到。
+    private func finalizeRecording() {
+        guard let outcome = recording?.finish() else {
+            isRecording = false
+            return
+        }
+        isRecording = false
+        // 一秒都没录到时这里是空串，训练记录就不会挂上一个指向已删文件的播放器。
+        recordingRelativePath = outcome.relativePath
+        if let warning = outcome.warning {
+            // 拼接而不是覆盖：开录时那条「这次没录上」与收尾时这条「中途断过」
+            // 是两件事，都发生过的话用户两件都得知道。
+            recordingNotice = [recordingNotice, warning].compactMap { $0 }.joined(separator: "\n")
         }
     }
 
@@ -186,6 +267,11 @@ public final class PracticeRunner {
     ///
     /// 「先落盘再解析」不能省：练了半小时换来的复盘，不能因为解析出错就没了（成品标准第 7 条）。
     public func finishPractice() async throws {
+        // **第一件事，早于结束语音、早于发复盘请求。** 用户点「我练完了」的那一刻
+        // 就已经不说话了，早一点关文件，后面结束语音、请 ChatGPT 写复盘、
+        // 等它写完那几十秒就不会被录进去。
+        finalizeRecording()
+
         guard let setup = current else {
             let message = "现在没有正在进行的练习，也就没有复盘可以取回"
                 + "（这一场可能已经存过档，或者刚才被取消了）。"
@@ -209,7 +295,8 @@ public final class PracticeRunner {
 
         // **取复盘之前就把这一场记下来。** 后面任何一步失败，用户练的这一场
         // 和已经采到的逐字稿都还在（成品标准第 7 条）。
-        upsertSession(id: sessionID, setup: setup, reportPath: nil)
+        upsertSession(id: sessionID, setup: setup, reportPath: nil,
+                      recordingPath: recordingRelativePath)
         finishedSessionID = sessionID
 
         do {
@@ -272,6 +359,9 @@ public final class PracticeRunner {
         // 不停掉的话，那个 Task 会一直转下去——一边空转，一边把用户放弃之后
         // 在 ChatGPT 里做的别的事采进这一场的逐字稿里。
         stopSampling()
+        // 放弃这一场也要把录音关掉：不关的话麦克风会一直开着（系统状态栏上那个
+        // 橙点会一直亮），已经录下的那几分钟也停在缓冲区里没人写盘。
+        finalizeRecording()
         collector.abandon(reason: "你中途取消了这次练习。")
         current = nil
         currentRequestID = nil
@@ -377,7 +467,8 @@ public final class PracticeRunner {
             return result
         }
         try writeReport(report, sessionID: sessionID)
-        upsertSession(id: sessionID, setup: setup, reportPath: "reports/\(sessionID).json")
+        upsertSession(id: sessionID, setup: setup, reportPath: "reports/\(sessionID).json",
+                      recordingPath: recordingRelativePath)
         let state = try store.load()
 
         var notice = "错题本 \(state.issues.count) 条，词汇本 \(state.vocabulary.count) 条，"
@@ -425,7 +516,12 @@ public final class PracticeRunner {
     ///
     /// 会被调用两次：取复盘**之前**一次（那时还没有报告路径），归档成功之后再一次
     /// （补上 `reportPath`）。中间任何一步失败，第一次写下的东西都不回滚。
-    private func upsertSession(id: String, setup: SessionSetup, reportPath: String?) {
+    ///
+    /// `reportPath` 与 `recordingPath` 都是**非 nil 才写**：nil 的含义是「这一次没有新值」，
+    /// 不是「把已有的清空」。空串同样当成「没有」——一秒都没录到时录音文件已经被删了，
+    /// 写一个指向已删文件的路径，训练记录页会据此画出一个点了没声音的播放器。
+    private func upsertSession(id: String, setup: SessionSetup, reportPath: String?,
+                               recordingPath: String?) {
         let formatter = ISO8601DateFormatter()
         do {
             try store.mutate { state in
@@ -438,6 +534,9 @@ public final class PracticeRunner {
                 session.endedAt = formatter.string(from: self.now())
                 session.transcript = self.collector.turns
                 if let reportPath { session.reportPath = reportPath }
+                if let recordingPath, !recordingPath.isEmpty {
+                    session.recordingPath = recordingPath
+                }
                 if let index = state.sessions.firstIndex(where: { $0.id == id }) {
                     state.sessions[index] = session
                 } else {
