@@ -214,8 +214,13 @@ final class PracticeRunnerArchiveTests: XCTestCase {
 
         let saved = try store.load()
         XCTAssertEqual(saved.sessions.count, 1, "复盘挂了，练习本身和逐字稿都还得在")
-        XCTAssertEqual(saved.sessions[0].transcript.count, 2)
-        XCTAssertTrue(saved.sessions[0].reportPath.isEmpty, "没有报告就不要假装有")
+        // 用 XCTUnwrap 而不是 `sessions[0]`：这条一旦真的红了（记录没落库），
+        // 下标会直接 `Index out of range` 把 xctest 进程打死，
+        // 那一轮连 `Executed N tests` 的汇总都打不出来，同轮其余失败全部丢失。
+        // 一条红掩盖全部，是本项目最不能接受的测试写法。
+        let session = try XCTUnwrap(saved.sessions.first)
+        XCTAssertEqual(session.transcript.count, 2)
+        XCTAssertTrue(session.reportPath.isEmpty, "没有报告就不要假装有")
     }
 
     func testTheRawReviewSurvivesAParseFailure() async throws {

@@ -265,4 +265,48 @@ final class PracticeSheetTests: XCTestCase {
             because: "存档结果没有显示出来。`ArchiveOutcome.skipped`（复盘看着正常、档案却纹丝不动）"
                 + "就永远没人看得见了。下一步：把 `runner.archiveNotice` 画在完成态里。")
     }
+
+    /// **Phase 4 唯一那条硬约束的界面这一半。**
+    ///
+    /// 约束原话：「采样失败不中断练习，**但失败必须被记账并在练完后显示出来**」
+    /// （ROADMAP 3.2 / 本阶段计划「本阶段独有的一条硬约束」）。运行器那一半
+    /// （`transcriptNotice` / `transcriptTurnCount` 怎么算出来）已经被
+    /// `PracticeRunnerArchiveTests` 逐条钉住了，可**算出来的话能不能上屏，此前一行测试都没管**。
+    ///
+    /// 复审实测过两次突变，两次都是 612 条全绿：
+    ///
+    /// - 把 `transcriptBlock` 的整段声明连同 `practiceBody` 里那句调用一起删掉；
+    /// - 只删 `transcriptBlock` 里 `if let notice = runner.transcriptNotice { … }` 那半块，
+    ///   保留「已记录 N 条对话」。
+    ///
+    /// 第二种正是计划里点名的「本项目最忌讳的失败形态」：悄悄丢掉几分钟对话，
+    /// 而界面上那行计数看起来一切正常，用户没有任何理由怀疑逐字稿是残的。
+    ///
+    /// 所以这里分两层扫：`practiceBody` 里那句调用（摆上去了没有），
+    /// 加 `transcriptBlock` 自己那一段里的两处取值（画的是不是那两个值）。
+    /// 只扫全文的话，两处都是「文件里有这个词」，删掉调用点照样绿。
+    func testTheTranscriptNoticeAndTurnCountAreShown() throws {
+        SourceGuard.assertRenders(
+            "transcriptBlock", inBodyOf: "private func practiceBody", of: Self.sheet,
+            because: "`transcriptBlock` 只是声明着，没有被摆进 `practiceBody`——"
+                + "逐字稿这一路的交代一个像素都不上屏，而这不会有任何编译错误。"
+                + "后果：采样失败被记了账却没人看得见，用户以为逐字稿是全的，"
+                + "实际悄悄少了几分钟对话——这是本项目最忌讳的失败形态。"
+                + "下一步：把 `transcriptBlock` 放回 `practiceBody` 的 VStack 里；"
+                + "换了别的名字就同步改这条测试。")
+
+        for (piece, what) in [
+            ("runner.transcriptNotice",
+             "逐字稿不完整时那句中文说明（缺了什么、下一步做什么）"),
+            ("runner.transcriptTurnCount",
+             "练习中那行「已记录 N 条对话」——它是用户唯一能看出采样还活着的迹象")
+        ] {
+            SourceGuard.assertRenders(
+                piece, inBodyOf: "private var transcriptBlock", of: Self.sheet,
+                because: "`transcriptBlock` 里不再读 `\(piece)` 了，界面上少的是：\(what)。"
+                    + "运行器把它算出来了却不上屏，等于静默失败。"
+                    + "下一步：把这半块画回 `transcriptBlock`（说明用 `Palette.warning`，"
+                    + "不要画成红色错误——逐字稿是增强，不是必需）。")
+        }
+    }
 }
