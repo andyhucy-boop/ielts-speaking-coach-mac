@@ -14,6 +14,13 @@ final class FakeAXAccess: AXAccess, @unchecked Sendable {
     private(set) var setValues: [(AXElementRef, String)] = []
     private(set) var returnKeyCount = 0
     private(set) var snapshotCount = 0
+    /// `wakeAccessibilityTree(timeout:)` 每次被要求等多久。
+    ///
+    /// 为什么要记下来：这个超时是 `preflight()` 里唯一一个**没有从构造函数注入**的等待值
+    /// （写死的 8.0 秒）。假环境里它立刻返回，所以「谁把它偷偷改小」在耗时上一点痕迹都没有，
+    /// 只有真机上才会表现为「无障碍树还没醒就说读不到对话内容」。记下实参，
+    /// 才能让 `testPreflightWakesTheAccessibilityTreeWithTheMeasuredTimeout` 有东西可断言。
+    private(set) var wakeTimeouts: [TimeInterval] = []
     /// 当前代次。镜像 `LiveAXAccess` 的行为：每次 `snapshotTree()` 递增，并把新值
     /// 盖印到 `nodes` 里所有元素的 `AXElementRef` 上；`press`/`setValue` 拒绝代次
     /// 不匹配的引用。测试里手写的 `AXElementRef` 字面量代次值会在这里被覆盖——
@@ -43,7 +50,10 @@ final class FakeAXAccess: AXAccess, @unchecked Sendable {
     func isTargetRunning() -> Bool { running }
     func isAccessibilityTrusted() -> Bool { trusted }
     func launchTarget() throws { running = true }
-    func wakeAccessibilityTree(timeout: TimeInterval) -> Bool { wakeSucceeds }
+    func wakeAccessibilityTree(timeout: TimeInterval) -> Bool {
+        wakeTimeouts.append(timeout)
+        return wakeSucceeds
+    }
     func snapshotTree() -> [AXNodeSnapshot] {
         snapshotCount += 1
         onSnapshot?(snapshotCount, &nodes)

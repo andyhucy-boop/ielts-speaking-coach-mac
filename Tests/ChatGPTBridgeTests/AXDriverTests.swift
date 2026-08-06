@@ -100,6 +100,22 @@ final class AXDriverTests: XCTestCase {
         XCTAssertTrue(readiness.messages.joined().contains("辅助功能"))
     }
 
+    // 修问题 15 时顺手堵上的同类漏洞：`preflight()` 里 `wakeAccessibilityTree(timeout: 8.0)`
+    // 是本类唯一一个**没有从构造函数注入**的等待值。它躲过了本文件所有的耗时断言——
+    // 假环境里这个方法立刻返回，谁把 8.0 改成 0.5 都不会让任何测试变慢、更不会变红，
+    // 只有真机上才会表现成「无障碍树没能唤醒」，而用户拿到的是一句读不到对话内容的警告。
+    //
+    // 不把它也改成注入参数（那要动产品接口，且没有任何测试需要缩短它——假环境不等待），
+    // 改成把实参记下来直接断言。谁改这个数，这条测试当场变红。
+    func testPreflightWakesTheAccessibilityTreeWithTheMeasuredTimeout() {
+        let access = FakeAXAccess()
+        _ = driver(access).preflight()
+        XCTAssertEqual(access.wakeTimeouts, [8.0],
+                       "preflight 必须给无障碍树 8 秒醒过来的时间，且只唤醒一次；"
+                       + "实际传的是 \(access.wakeTimeouts)。这个数改小了在假环境里毫无迹象，"
+                       + "只有真机上会变成「无障碍树没能唤醒」")
+    }
+
     // 实测模拟回车不会发送——文字会原样留在输入框里，必须按 Send 按钮。这条测试
     // 原名 testSendTextWritesComposerThenPressesReturn，按回车已被证实不管用后改为按按钮，
     // 断言对象也从 returnKeyCount 换成了「按下的是 Send 按钮」。
@@ -150,9 +166,13 @@ final class AXDriverTests: XCTestCase {
     // 也走回车，而回车在普通聊天状态下实测无效（spec 2.3.4），提示词根本发不出去。
     //
     // 这条测试让按钮晚 0.02 秒才出现，并给足 1 秒的等待窗口：实现若不等（例如把
-    // waitForControl 的 timeout 写成 0，或干脆不注入 sendButtonTimeout）会立刻退回回车，
-    // 断言当场变红。它同时证明构造函数传进去的 sendButtonTimeout 真的被用上了，
-    // 不是一个没人读的空参数。
+    // waitForControl 的 timeout 写成 0）会立刻退回回车，断言当场变红。
+    //
+    // **这里原本还写着「它同时证明构造函数传进去的 sendButtonTimeout 真被用上了」——那句话是错的**，
+    // 已删除。它给的窗口是 1 秒、按钮 0.02 秒就出现，所以把 timeout 写死成产品默认的 2.0 秒，
+    // 按钮照样等得到，这条断言照样绿（复审实测：写死后 37 条全绿，只有耗时从 1.1 秒涨到 5.1 秒）。
+    // 「注入的值真被用上了」由下面那条 testSendTextWaitsOnlyTheSendButtonTimeoutItWasGiven
+    // 用耗时上下界来证明，本条只管「等不等」这件事。
     func testSendTextWaitsForTheSendButtonToAppearInsteadOfFallingBackImmediately() throws {
         let access = FakeAXAccess()
         access.nodes = [composer(1)]   // 写入文字的这一刻，Send 按钮还没出现
@@ -175,6 +195,46 @@ final class AXDriverTests: XCTestCase {
         XCTAssertEqual(access.pressedElements.map(\.rawID), [2],
                        "Send 按钮是写完文字之后才出现的，必须等它出现再按，不能立刻退回回车")
         XCTAssertEqual(access.returnKeyCount, 0, "等到了按钮就不该再模拟回车")
+    }
+
+    // 耗时回归的守门测试（Task 10 遗漏的第三个）。上面那条
+    // testSendTextWaitsForTheSendButtonToAppearInsteadOfFallingBackImmediately 的注释里
+    // 写着「它同时证明构造函数传进去的 sendButtonTimeout 真被用上了」——**那句话是错的**：
+    // 它给的等待窗口是 1.0 秒、按钮 0.02 秒就出现，所以实现把 timeout 写死成 2.0 秒时，
+    // 按钮照样等得到，那条断言照样绿。
+    //
+    // 复审实测：把 AXDriver.sendText 里的 `timeout: sendButtonTimeout` 改回字面量 `2.0`
+    //（等价于「注入的参数被彻底无视」），AXDriverTests 37 条仍然全绿，唯一的变化是
+    // 本类耗时从 1.1 秒跳到 5.1 秒——正是 Task 10 要根治的那种「只表现为套件变慢、
+    // 没人发现」的回归，原样复发。三个注入的节奏值里，另外两个都写了耗时断言
+    //（testWaitForAssistantReplySamplesAtTheIntervalItWasGiven /
+    // testCopyLatestAssistantMessageWaitsOnlyTheClipboardDelayItWasGiven），
+    // 只有这一个漏了。
+    //
+    // 这里补上同样做法的断言：语音模式的现场（Send 按钮永远不会出现）必须等满
+    // sendButtonTimeout 才退回回车，给 0.05 秒就只该等 0.05 秒。写死回 2.0 秒当场变红。
+    //
+    // 铁律 7：产品默认值 2.0 一个字都没动（由 testDefaultPacingValuesMatchTheMeasuredOnes
+    // 钉住），要短超时就在这里显式传参。
+    func testSendTextWaitsOnlyTheSendButtonTimeoutItWasGiven() throws {
+        let access = FakeAXAccess()
+        access.nodes = [composer(1)]   // 没有 Send 按钮——语音模式下的真实现场，等多久都不会出现
+        access.onSendReturnKey = { nodes in
+            for i in nodes.indices where nodes[i].role == "AXTextArea" { nodes[i].value = "" }
+        }
+
+        let started = Date()
+        try driver(access, sendButtonTimeout: 0.05).sendText("考官提示词")
+        let elapsed = Date().timeIntervalSince(started)
+
+        XCTAssertEqual(access.returnKeyCount, 1, "等满之后必须真的退回回车，否则这段等待没有意义")
+        XCTAssertGreaterThanOrEqual(elapsed, 0.04,
+                                    "只等了 \(elapsed) 秒就退回回车——比传入的 0.05 秒还短，"
+                                    + "说明根本没等 Send 按钮出现。实测按钮是写完文字之后才出现的，"
+                                    + "不等就会在普通聊天状态下走回车，而回车实测发不出去")
+        XCTAssertLessThan(elapsed, 0.5,
+                          "等 Send 按钮的时长应当用传入的 0.05 秒；实际耗时 \(elapsed) 秒，"
+                          + "说明实现里的超时是写死的，测试没法把它调快")
     }
 
     // 两条路都没能让输入框变空——必须响亮报错，不能静默判定成功（呼应第 2 条修复
@@ -591,6 +651,190 @@ final class AXDriverTests: XCTestCase {
         }
         XCTAssertTrue(pasteboard.wasCleared, "按下复制按钮之前必须调用一次 clear()")
         XCTAssertEqual(access.pressedElements.map(\.rawID), [1], "按钮确实被按下了，只是剪贴板没被写")
+    }
+
+    // MARK: - 每一处等待点都得用注入进来的那个值
+
+    /// 一处等待点的探针：跑它最慢的那条路，量实际等了多久。
+    private struct PacingProbe {
+        /// 出错时报给人看的「是哪一步」。
+        let step: String
+        /// 这一步真的用上了它该用的那个值时，至少要等这么久。
+        /// 低于它 = 压根没等（或者用错了另一个更短的参数）。
+        let atLeast: TimeInterval
+        /// 这条路是不是「等满超时然后报错」。一并断言，免得探针摆错了现场——
+        /// 本该等满超时的那条路要是提前成功返回，下界虽然也会红，但报错指不到病根。
+        let expectsFailure: Bool
+        let run: () throws -> Void
+    }
+
+    /// 上面三条耗时断言各守一个参数的**一个**调用点。但同一类缺陷不止能从
+    /// `sendButtonTimeout` 溜过去——修问题 15 时我把另外两个注入值也各写死了一遍，结果一样：
+    ///
+    /// - `timeout: shortTimeout` 五处全换成字面量 `5.0`：37 条全绿，本类耗时 1.2 秒 → 30.9 秒。
+    /// - `timeout: stateTimeout` 两处全换成字面量 `25.0`：37 条全绿，本类耗时 1.2 秒 → 26.2 秒。
+    ///
+    /// 也就是说 AXDriver 里**每一个**等待点都能被写死回去而不掉一根头发，只表现为套件变慢。
+    /// 而「一个参数补一条耗时断言」仍然守不住：光 `shortTimeout` 就有五个调用点，
+    /// 只守其中一个，另外四个照样溜。
+    ///
+    /// 所以这条测试按**调用点**扫：每一处会真的等待的地方各跑一遍它最慢的那条路，各给上下界。
+    ///
+    /// - 下界 `atLeast`：这一步确实等到了它该等的那个值。
+    /// - 上界 `atMost`（0.5 秒）：产品里那些实测定下来的字面量——2.0（等 Send 按钮）、
+    ///   5.0（shortTimeout）、25.0（stateTimeout）、0.5 × 3（采样间隔连等三次）、
+    ///   0.8（等剪贴板）——全都在这条线之上。任何一处被写死回去，那一步当场超时变红，
+    ///   而且错误信息直接点名是哪一步。
+    ///
+    /// 顺带守住了「以后新加的节奏值又被写成字面量」：新的等待只要落在这些公开方法里，
+    /// 而按实测定下来的等待值不可能小于半秒，照样顶穿上界。
+    ///
+    /// **为什么没用 `Tests/IELTSCoachUITests/Support/SourceGuard.swift`**（派单要求先读它）：
+    /// 读了。它是扫源码的守门员，装在 IELTSCoachUITests 那个 target 里，本 target 看不见它；
+    /// 更要紧的是扫源码只能证明「源码里没写字面量」，证明不了「注入的这个值真的被读到了」。
+    /// 这里能直接量时间，量出来的证据比扫出来的强，所以没有跨 target 去搬它。
+    ///
+    /// **它拦不住什么**：`shortTimeout` 被误写成 `stateTimeout` 这种张冠李戴——两个都是注入值，
+    /// 都会跟着变短。那类问题归各方法自己的行为测试。
+    func testEveryWaitingPathHonorsTheInjectedPacingValues() {
+        // 五个注入值各给一个短值，且**故意不全相同**：下界报错时能一眼看出是哪一个没被用上。
+        let short: TimeInterval = 0.02
+        let state: TimeInterval = 0.06
+        let sendButtonWait: TimeInterval = 0.06
+        let sample: TimeInterval = 0.02
+        let clipboard: TimeInterval = 0.04
+        // 由调用方逐次传入的超时（waitForVoiceComposer / copyLatestAssistantMessage 的形参），
+        // 和上面五个注入值是同一类东西：写死了同样没人管。
+        let callerGiven: TimeInterval = 0.06
+        // 产品里最小的那个实测字面量是 0.5 秒（采样间隔，而且要连等三次 = 1.5 秒）。
+        // 上界压在 0.5，任何一个字面量都顶得穿；而各步真实耗时都在 0.07 秒以内，留了七倍余量。
+        let atMost: TimeInterval = 0.5
+
+        func sut(_ access: FakeAXAccess) -> AXDriver {
+            AXDriver(access: access, locator: AXLocator(access: access, pollInterval: 0.01),
+                     shortTimeout: short, stateTimeout: state,
+                     sendButtonTimeout: sendButtonWait, replySampleInterval: sample,
+                     clipboardSettleDelay: clipboard)
+        }
+        let clearComposerOnReturn: (inout [AXNodeSnapshot]) -> Void = { nodes in
+            for i in nodes.indices where nodes[i].role == "AXTextArea" { nodes[i].value = "" }
+        }
+        let review = "<<<IELTS_REVIEW_JSON:sync-sweep>>>" + String(repeating: "复盘内容", count: 60)
+            + "<<<END_IELTS_REVIEW_JSON:sync-sweep>>>"
+
+        // 每个探针一套独立的假环境：共用一个会让前一步留下的 press/snapshot 记录串味。
+        let composerWithoutSendButton = FakeAXAccess()
+        composerWithoutSendButton.nodes = [composer(1)]
+        composerWithoutSendButton.onSendReturnKey = clearComposerOnReturn
+
+        let emptyTreeForSendText = FakeAXAccess()
+        let composerThatNeverClears = FakeAXAccess()
+        composerThatNeverClears.nodes = [composer(1), sendButton(2)]   // 按了 Send，界面纹丝不动
+
+        let emptyTreeForNewChat = FakeAXAccess()
+        let emptyTreeForStartVoice = FakeAXAccess()
+
+        let voiceNeverStarts = FakeAXAccess()
+        voiceNeverStarts.nodes = [control(1, "Start voice chat")]      // onPress 为 nil：按了但没起来
+
+        let voiceRunningWithoutStopButton = FakeAXAccess()
+        voiceRunningWithoutStopButton.nodes = [voiceActive(9)]
+
+        let voiceNeverEnds = FakeAXAccess()
+        voiceNeverEnds.nodes = [control(1, "Stop voice chat"), voiceActive(9)]
+
+        let onlyNormalComposer = FakeAXAccess()
+        onlyNormalComposer.nodes = [composer(1)]                       // 语音输入框始终不出现
+
+        let stableReply = FakeAXAccess()
+        stableReply.nodes = [
+            AXNodeSnapshot(element: AXElementRef(rawID: 1, epoch: 0), role: "AXStaticText",
+                           value: String(repeating: "考官反馈内容", count: 10))   // 一开始就够长且不再增长
+        ]
+
+        let noCopyButton = FakeAXAccess()
+        let copyButtonThatWrites = FakeAXAccess()
+        copyButtonThatWrites.nodes = [control(1, "Copy")]
+        let sweepPasteboard = FakePasteboard(contents: "")
+        copyButtonThatWrites.onPress = { _, _ in sweepPasteboard.simulateExternalWrite(review) }
+
+        let probes: [PacingProbe] = [
+            PacingProbe(step: "sendText 等 Send 按钮出现（sendButtonTimeout）",
+                        atLeast: sendButtonWait * 0.8, expectsFailure: false) {
+                try sut(composerWithoutSendButton).sendText("考官提示词")
+            },
+            PacingProbe(step: "sendText 找 ChatGPT 输入框（shortTimeout）",
+                        atLeast: short * 0.8, expectsFailure: true) {
+                try sut(emptyTreeForSendText).sendText("考官提示词")
+            },
+            PacingProbe(step: "sendText 验证输入框回到空态（shortTimeout）",
+                        atLeast: short * 0.8, expectsFailure: true) {
+                try sut(composerThatNeverClears).sendText("考官提示词")
+            },
+            PacingProbe(step: "startNewChat 找「新建会话」按钮（shortTimeout）",
+                        atLeast: short * 0.8, expectsFailure: true) {
+                try sut(emptyTreeForNewChat).startNewChat()
+            },
+            PacingProbe(step: "startVoice 找语音按钮（shortTimeout）",
+                        atLeast: short * 0.8, expectsFailure: true) {
+                try sut(emptyTreeForStartVoice).startVoice()
+            },
+            PacingProbe(step: "startVoice 等语音真的起来（stateTimeout）",
+                        atLeast: state * 0.8, expectsFailure: true) {
+                try sut(voiceNeverStarts).startVoice()
+            },
+            PacingProbe(step: "endVoice 找结束语音按钮（shortTimeout）",
+                        atLeast: short * 0.8, expectsFailure: true) {
+                try sut(voiceRunningWithoutStopButton).endVoice()
+            },
+            PacingProbe(step: "endVoice 等语音真的结束（stateTimeout）",
+                        atLeast: state * 0.8, expectsFailure: true) {
+                try sut(voiceNeverEnds).endVoice()
+            },
+            PacingProbe(step: "waitForVoiceComposer 用调用方传进来的超时",
+                        atLeast: callerGiven * 0.8, expectsFailure: true) {
+                try sut(onlyNormalComposer).waitForVoiceComposer(timeout: callerGiven)
+            },
+            // 连等三次不增长才算流式结束，所以至少要睡三个采样间隔。
+            PacingProbe(step: "waitForAssistantReply 两次采样之间的间隔（replySampleInterval）",
+                        atLeast: sample * 2.5, expectsFailure: false) {
+                try sut(stableReply).waitForAssistantReply(timeout: 5)
+            },
+            PacingProbe(step: "copyLatestAssistantMessage 找复制按钮，用调用方传进来的超时",
+                        atLeast: callerGiven * 0.8, expectsFailure: true) {
+                _ = try sut(noCopyButton)
+                    .copyLatestAssistantMessage(pasteboard: FakePasteboard(contents: ""),
+                                                timeout: callerGiven)
+            },
+            PacingProbe(step: "copyLatestAssistantMessage 按下之后等剪贴板（clipboardSettleDelay）",
+                        atLeast: clipboard * 0.8, expectsFailure: false) {
+                let captured = try sut(copyButtonThatWrites)
+                    .copyLatestAssistantMessage(pasteboard: sweepPasteboard, timeout: 0.5)
+                XCTAssertEqual(captured, review, "等够了就该把复盘原样取回来")
+            }
+        ]
+
+        for probe in probes {
+            let started = Date()
+            var thrown: Error?
+            do { try probe.run() } catch { thrown = error }
+            let elapsed = Date().timeIntervalSince(started)
+            XCTAssertEqual(thrown != nil, probe.expectsFailure,
+                           "「\(probe.step)」这一步摆的现场不对："
+                           + (probe.expectsFailure
+                              ? "本该等满超时后报错，却成功返回了"
+                              : "本该走通，却抛了 \(String(describing: thrown))"))
+            XCTAssertGreaterThanOrEqual(elapsed, probe.atLeast,
+                                        "「\(probe.step)」只用了 \(elapsed) 秒，"
+                                        + "比它该等的 \(probe.atLeast) 秒还短——这一步没有真的等，"
+                                        + "或者用错了别的参数。真机上这等于「按完就假设下一个元素已就位」，"
+                                        + "会随机失败（spec 2.3.2）")
+            XCTAssertLessThan(elapsed, atMost,
+                              "「\(probe.step)」等了 \(elapsed) 秒，远超注入的短值——"
+                              + "说明这一处的等待时长是写死的字面量，注入的参数被无视了。"
+                              + "产品默认值必须原样保留（铁律 7），要短超时就在测试里显式传参；"
+                              + "写死回去的后果是这套测试只会变慢，没人发现（Task 10 的耗时回归）")
+        }
     }
 }
 
