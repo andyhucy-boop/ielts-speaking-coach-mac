@@ -99,6 +99,102 @@ final class DesignSystemTests: XCTestCase {
         }
     }
 
+    // MARK: - 颜色表的完整性
+
+    /// 每个颜色令牌 → 它本身。**这份映射存在的唯一理由是 Swift 取不到 enum 静态成员的名字**，
+    /// 而下面那条测试要按名字把「源码里声明了什么」和「测试里检查了什么」对起来。
+    ///
+    /// 它自己会被对着 `Palette.swift` 校验（少一个、多一个、改了名都红），
+    /// 所以它不是又一份会悄悄过期的手写清单。
+    private static let colorTokens: [String: Color] = [
+        "accent": Palette.accent,
+        "sidebarBackground": Palette.sidebarBackground,
+        "sidebarText": Palette.sidebarText,
+        "sidebarTextSelected": Palette.sidebarTextSelected,
+        "canvas": Palette.canvas,
+        "card": Palette.card,
+        "cardBorder": Palette.cardBorder,
+        "textPrimary": Palette.textPrimary,
+        "textSecondary": Palette.textSecondary,
+        "textOnAccent": Palette.textOnAccent,
+        "success": Palette.success,
+        "warning": Palette.warning,
+        "danger": Palette.danger
+    ]
+
+    /// 会被当成文字画出来的令牌 → 它会压在哪些底色上。每一对都得过 4.5:1。
+    ///
+    /// `accent` 也在这里：`PrimaryActionCard` 的按钮就是白底紫字（`Components.swift`），
+    /// 所以它既是底色也是文字色。
+    private static let textTokensOnBackgrounds: [String: [String]] = [
+        "textPrimary": ["canvas", "card"],
+        "textSecondary": ["canvas", "card"],
+        "textOnAccent": ["accent"],
+        "sidebarText": ["sidebarBackground"],
+        "sidebarTextSelected": ["sidebarBackground"],
+        "success": ["canvas", "card"],
+        "warning": ["canvas", "card"],
+        "danger": ["canvas", "card"],
+        "accent": ["card"]
+    ]
+
+    /// 从不当文字用的令牌。列在这里是一次显式的判断，不是「忘了检查」——
+    /// `cardBorder` 是 8% 黑的发丝边框（第 4 节），按文字标准量它必然不达标，
+    /// 但它本来就不是给人读的。
+    private static let nonTextTokens: Set<String> = [
+        "canvas", "card", "sidebarBackground", "cardBorder"
+    ]
+
+    /// **上面那些对比度断言是一份手写清单，这条守的是它的完整性。**
+    ///
+    /// 实测：往 `Palette` 里加一个 `subtle = Color.black.opacity(0.28)`（约 2.3:1）
+    /// 并在 `EmptyStateView` 上用它 —— 全套 429 条一条不红。铁律 6 只要求「视图走令牌」，
+    /// 而这个新令牌确实是令牌，于是扫描放行；对比度那几条又只认名字写死的那几个。
+    /// 「灰上加灰」就这么从正门走进来了。
+    ///
+    /// 所以：`Palette.swift` 里声明的每一个令牌，都必须在这里被显式归类，
+    /// 归成文字色的就当场量对比度。新增一个令牌 → 名单对不上 → 红，逼人做这个判断。
+    func testEveryColorTokenIsClassifiedAndTextTokensMeetAA() throws {
+        let declared = Set(try SourceGuard.declaredTokenNames(
+            inEnum: "Palette", of: try SourceGuard.code("DesignSystem/Palette.swift")))
+        XCTAssertGreaterThanOrEqual(declared.count, 13,
+                                    "只解析到 \(declared.count) 个颜色令牌，疑似空转")
+
+        XCTAssertEqual(
+            declared, Set(Self.colorTokens.keys),
+            "`Palette.swift` 里声明的令牌和这个测试文件里的映射对不上（多出来或少掉的那个"
+                + "现在没有任何对比度断言管得着）。下一步：同步 `colorTokens`。")
+        XCTAssertEqual(
+            declared, Set(Self.textTokensOnBackgrounds.keys).union(Self.nonTextTokens),
+            "有令牌既没被归成文字色、也没被归成非文字色。下一步：想清楚它会不会被人读——"
+                + "会读就写进 `textTokensOnBackgrounds` 并指明压在哪个底色上，"
+                + "不会读就写进 `nonTextTokens`。不许因为「不好过」就归到后者（铁律 8）。")
+        XCTAssertTrue(
+            Set(Self.textTokensOnBackgrounds.keys).isDisjoint(with: Self.nonTextTokens),
+            "同一个令牌既归了文字色又归了非文字色，归类失去意义")
+
+        var pairs = 0
+        for (name, backgrounds) in Self.textTokensOnBackgrounds {
+            guard let foreground = Self.colorTokens[name] else {
+                XCTFail("`\(name)` 不在 colorTokens 里，量不了对比度")
+                continue
+            }
+            for background in backgrounds {
+                guard let base = Self.colorTokens[background] else {
+                    XCTFail("`\(name)` 声称压在 `\(background)` 上，但那不是个颜色令牌")
+                    continue
+                }
+                pairs += 1
+                XCTAssertGreaterThanOrEqual(
+                    contrast(foreground, on: base), 4.5,
+                    "`\(name)` 压在 `\(background)` 上只有 "
+                        + String(format: "%.2f", contrast(foreground, on: base))
+                        + ":1，低于第 2 节那条不可协商的 4.5:1。")
+            }
+        }
+        XCTAssertGreaterThanOrEqual(pairs, 13, "只量了 \(pairs) 对，这条测试很可能在空转")
+    }
+
     // MARK: - 间距刻度（DESIGN-SYSTEM 第 3 节）
 
     func testSpacingScaleIsMultiplesOfFour() {
@@ -132,9 +228,70 @@ final class DesignSystemTests: XCTestCase {
         // 第 4 节：卡片用「发丝边框」分层，不用投影。粗一档就从分层变成描边。
         XCTAssertEqual(BorderWidth.hairline, 1, "BorderWidth.hairline 与第 4 节对不上")
 
+        // 第 4 节：区块标题的编号与英文标签「字距略宽」。规范没给数值，取值定在令牌里，
+        // 所以更要钉住：调到 20 的话那行英文标签会散成一串孤零零的字母，而这里不钉就没人管。
+        XCTAssertEqual(Tracking.label, 1.2, "Tracking.label 与 Metrics.swift 里定的取值对不上")
+
         // 刻度必须是严格递增的，否则「xs 比 md 大」这种手误照样能逐条对齐地写进去。
         let scale = [Spacing.xs, Spacing.sm, Spacing.md, Spacing.lg, Spacing.xl, Spacing.section]
         XCTAssertEqual(scale, scale.sorted(), "间距刻度不是递增的：\(scale)")
+    }
+
+    // MARK: - 表的完整性：手写清单漏掉新加的那一行
+
+    /// **上面那两张手写的表，本身也需要一个守卫。**
+    ///
+    /// 手写清单的通病是「新加的那一行没人写进来」。实测：往 `Metrics.swift` 里加一个
+    /// `Radius.sheet = 3`、并在 `CoachCard` 上用它，全套 429 条一条不红——卡片圆角
+    /// 从 12 变成 3，看上去就是一张便宜的方框，而没有任何一条测试有话说。
+    ///
+    /// 所以反过来对一遍：`Metrics.swift` 里声明的每一个令牌，都必须在上面那条测试的
+    /// 函数体里被 `XCTAssertEqual` 钉住。enum 的名单也是从源码里读的，
+    /// 这样新加一整个 `public enum` 也漏不掉。
+    func testEveryMetricsTokenIsPinnedByThatTable() throws {
+        let metrics = try SourceGuard.code("DesignSystem/Metrics.swift")
+        let pinning = try SourceGuard.functionBody(
+            named: "testSpacingAndRadiusTokensMatchTheSpecTable",
+            in: try SourceGuard.testCode("DesignSystemTests.swift"))
+
+        var checked = 0
+        for enumName in SourceGuard.declaredEnumNames(in: metrics) {
+            let tokens = try SourceGuard.declaredTokenNames(inEnum: enumName, of: metrics)
+            XCTAssertFalse(tokens.isEmpty, "\(enumName) 里一个令牌都没解析到，这一圈在空转")
+            for token in tokens {
+                checked += 1
+                XCTAssertTrue(
+                    pinning.contains("XCTAssertEqual(\(enumName).\(token),"),
+                    "`\(enumName).\(token)` 没有被 testSpacingAndRadiusTokensMatchTheSpecTable 钉住，"
+                        + "它现在可以被改成任何值而不会有任何一条测试变红。"
+                        + "下一步：在那条测试里加一行 `XCTAssertEqual(\(enumName).\(token), <取值>)`，"
+                        + "取值以 DESIGN-SYSTEM 第 3/4 节为准；规范里没有的档位，先写进规范。")
+            }
+        }
+        XCTAssertGreaterThanOrEqual(
+            checked, 11,
+            "只对到 \(checked) 个令牌，这条测试很可能在空转。"
+                + "下一步：确认 Metrics.swift 的解析（public enum / public static let）还认得出来。")
+    }
+
+    /// 同上，管字体表。新加一档 `Typography.caption2` 而没人钉它的话，
+    /// 那一档的字重就退回 SwiftUI 的默认值，而这正是本项目已经掉过一次的坑。
+    func testEveryTypographyTokenIsPinnedByThatTable() throws {
+        let typography = try SourceGuard.code("DesignSystem/Typography.swift")
+        let pinning = try SourceGuard.functionBody(
+            named: "testTypographyTokensMatchTheSpecTable",
+            in: try SourceGuard.testCode("DesignSystemTests.swift"))
+
+        let tokens = try SourceGuard.declaredTokenNames(inEnum: "Typography", of: typography)
+        XCTAssertGreaterThanOrEqual(tokens.count, 8, "只解析到 \(tokens.count) 个字体令牌，疑似空转")
+        for token in tokens {
+            XCTAssertTrue(
+                pinning.contains("XCTAssertEqual(Typography.\(token),"),
+                "`Typography.\(token)` 没有被 testTypographyTokensMatchTheSpecTable 钉住，"
+                    + "它的字号和字重现在可以随便改。"
+                    + "下一步：在那条测试里补一行，右边写第 1 节字体表里对应那一行的"
+                    + "「语义字体 + 字重」。")
+        }
     }
 
     // MARK: - 字体表（DESIGN-SYSTEM 第 1 节）

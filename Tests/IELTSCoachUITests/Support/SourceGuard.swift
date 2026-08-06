@@ -128,6 +128,20 @@ enum SourceGuard {
         try repositoryRoot().appending(path: uiSourceRelativeRoot)
     }
 
+    /// 测试自己的源码目录。
+    ///
+    /// **为什么测试要读测试**：手写的「逐行钉死取值」清单有个通病——新加的那一行没人写进来。
+    /// 要问出「Metrics.swift 里新加的这个令牌到底有没有人钉它」，就只能去看那条测试的函数体。
+    static let testSourceRelativeRoot = "Tests/IELTSCoachUITests"
+
+    /// 读测试源码并去掉行注释。找不到照样抛错——读不到就等于那条元测试在空转。
+    static func testCode(_ relativePath: String) throws -> String {
+        let url = try repositoryRoot()
+            .appending(path: testSourceRelativeRoot).appending(path: relativePath)
+        return stripLineComments(
+            try read(contentsOf: url, describedAs: "\(testSourceRelativeRoot)/\(relativePath)"))
+    }
+
     // MARK: - 读源码
 
     /// 按相对路径读 `Sources/IELTSCoachUI/` 下的源码原文（**含注释**）。
@@ -214,27 +228,36 @@ enum SourceGuard {
     static func stripLineComments(_ source: String) -> String {
         var stripped: [String] = []
         for line in source.split(separator: "\n", omittingEmptySubsequences: false) {
-            var inString = false
-            var escaped = false
-            var cut: String.Index?
-            var index = line.startIndex
-            while index < line.endIndex {
-                let character = line[index]
-                if escaped {
-                    escaped = false
-                } else if inString, character == "\\" {
-                    escaped = true
-                } else if character == "\"" {
-                    inString.toggle()
-                } else if !inString, character == "/" {
-                    let next = line.index(after: index)
-                    if next < line.endIndex, line[next] == "/" { cut = index; break }
-                }
-                index = line.index(after: index)
-            }
+            let cut = commentStart(in: line)
             stripped.append(cut.map { String(line[line.startIndex..<$0]) } ?? String(line))
         }
         return stripped.joined(separator: "\n")
+    }
+
+    /// 一行里行注释从哪儿开始（没有则 nil）。**认得字符串字面量**，
+    /// 所以 `"https://…"` 里的两条斜杠不算。
+    ///
+    /// 抽出来是因为有两个使用者：去注释的那一步，和「从注释里读豁免」的那一步。
+    /// 两边用同一份判断，才不会出现「这条注释被去掉了、豁免却读不到」的错位。
+    static func commentStart(in line: Substring) -> String.Index? {
+        var inString = false
+        var escaped = false
+        var index = line.startIndex
+        while index < line.endIndex {
+            let character = line[index]
+            if escaped {
+                escaped = false
+            } else if inString, character == "\\" {
+                escaped = true
+            } else if character == "\"" {
+                inString.toggle()
+            } else if !inString, character == "/" {
+                let next = line.index(after: index)
+                if next < line.endIndex, line[next] == "/" { return index }
+            }
+            index = line.index(after: index)
+        }
+        return nil
     }
 
     /// 数某段文字出现了几次。
@@ -274,6 +297,29 @@ enum SourceGuard {
                     + "下一步：确认这段声明后面确实有一对完整的 `{ … }`。")
         }
         return body
+    }
+
+    /// 按函数名取函数体，**并且要求这个名字在文件里只认得出一处**。
+    ///
+    /// `memberBody(of:in:)` 取的是第一处文字匹配，这在「测试去读测试」的场合会咬人：
+    /// 一条元测试自己就得把被查的函数名写成字符串（`named: "testFoo"`），
+    /// 那个字符串要是排在真正的声明前面，切出来的就是元测试自己的函数体——
+    /// 于是它检查的是自己，永远绿。这条路本次真踩了一次，所以这里干脆做成：
+    /// **匹配到不是一处，就抛错，不猜。**
+    static func functionBody(named name: String, in code: String) throws -> String {
+        let marker = "func \(name)("
+        let count = occurrences(of: marker, in: code)
+        guard count == 1 else {
+            throw Failure.memberNotFound(
+                name: marker,
+                hint: count == 0
+                    ? "下一步：函数改名了就同步改这里；整条测试被删掉的话，"
+                        + "先想清楚它守的那件事现在归谁。"
+                    : "在同一份源码里出现了 \(count) 处，切哪一处只能靠猜——"
+                        + "猜错就等于这条断言在检查另一段代码。"
+                        + "下一步：把重名的那处改掉，或换一个能唯一定位的写法。")
+        }
+        return try memberBody(of: marker, in: code)
     }
 
     /// 从 `start` 往后找第一个 `{`，返回它与配对 `}` 之间的内容。找不到返回 nil。
@@ -381,6 +427,15 @@ enum SourceGuard {
             rule: "在视图里单独加粗/倾斜",
             nextStep: "同上：改成 `Typography` 里对应档位的令牌。")
 
+        // 字距 / 行距同样是排版取值，同样有令牌（`Tracking.label`），也同样能被随手写成字面数字。
+        // 实测：把 `SectionHeader` 的 `.tracking(Tracking.label)` 换成 `.tracking(2.5)`，
+        // 那行英文标签当场散架成一串孤零零的字母，而 429 条测试一条不红。
+        found += violations(
+            matching: #"\.(tracking|kerning|lineSpacing)\s*\(\s*-?[0-9.]"#, in: text, starts: starts,
+            rule: "字距/行距写了字面数字",
+            nextStep: "改成 `Tracking` 里的令牌（行距用 `Spacing`）。规范第 4 节只说「字距略宽」，"
+                + "具体数值收在令牌里改一处，散到视图里就变成每处各调各的。")
+
         return found.sorted { $0.line < $1.line }
     }
 
@@ -423,6 +478,17 @@ enum SourceGuard {
             rule: "视图里写了字面语义色",
             nextStep: "`Color.gray` 和 `.gray` 是同一件事，只是拼法不同。改成 `Palette` 里"
                 + "有对比度测试守着的那个令牌。")
+
+        // 引用了令牌、却在视图里再乘一次不透明度——**这是「灰上加灰」的最后一条通道**。
+        // `Palette.textSecondary` 的 56% 是按 4.5:1 那条底线定的，
+        // 再 `.opacity(0.35)` 一下就掉到 2:1 上下，而它引用着令牌，前面每条规则都放它过去（实测）。
+        found += violations(
+            matching: #"\bPalette\s*\.\s*[A-Za-z_][A-Za-z0-9_]*\s*\.\s*opacity\s*\("#,
+            in: text, starts: starts,
+            rule: "在视图里给令牌颜色再调一次不透明度",
+            nextStep: "令牌的不透明度是按 4.5:1 的对比度底线定的，视图里再乘一次就绕开了"
+                + "`DesignSystemTests` 那几条对比度断言。真需要淡一档，往 `Palette` 里加一个令牌，"
+                + "让它跟着对比度测试一起走。")
 
         // 点开头的语义色（`.foregroundStyle(.secondary)`）只在「吃颜色的修饰符」参数里算数，
         // 否则 `Typography.secondary`、`.top`、`.leading` 这些会被误伤。
@@ -490,6 +556,16 @@ enum SourceGuard {
             nextStep: "改成 `BorderWidth.hairline`。边框粗细一旦散落到各个视图里，"
                 + "就再没有「统一改一次」的机会了。")
 
+        // 投影没有令牌，因为规范第 4 节写的是**一个都不要有**：
+        // 「设计稿里的卡片靠边框和留白分层，不靠阴影。滥用投影是让界面显脏的常见原因。」
+        // 所以这里不检查参数写没写字面值，出现即违规。
+        found += violations(
+            matching: #"\.shadow\s*\("#, in: text, starts: starts,
+            rule: "视图里加了投影",
+            nextStep: "第 4 节明写卡片「不加投影」，分层靠 `Palette.cardBorder` 那道发丝边框"
+                + "和 `Spacing` 的留白。真要改这条，先改规范第 4 节，再改这里——"
+                + "不要在某一个视图里单独破例。")
+
         return found.sorted { $0.line < $1.line }
     }
 
@@ -520,16 +596,124 @@ enum SourceGuard {
         return found.sorted { $0.line < $1.line }
     }
 
-    /// 四类合起来：视图里不该出现的字面样式值。
+    /// 四类合起来：视图里不该出现的字面样式值。**入参是已经去过注释的代码。**
     static func designTokenViolations(in source: String) -> [Violation] {
         (fontViolations(in: source) + colorViolations(in: source)
             + shapeViolations(in: source) + spacingViolations(in: source))
             .sorted { ($0.line, $0.rule) < ($1.line, $1.rule) }
     }
 
-    /// 直接扫一个文件（自动去注释）。读不到会抛错，不会静默给空串。
+    // MARK: - 豁免：写在代码里、必须说得出理由、只管一行
+
+    /// 豁免注释的写法：`// 设计令牌豁免：<理由>`，写在被豁免那一行的行尾或它的上一行。
+    ///
+    /// ```swift
+    /// // 设计令牌豁免：这是 macOS 窗口最小尺寸，不是间距令牌
+    /// .frame(minWidth: 900)
+    /// ```
+    ///
+    /// 三条硬规矩，都是冲着「随手豁免」来的：
+    ///
+    /// 1. **只覆盖两行**（注释那行和它的下一行）。一条注释豁免一整段的话，
+    ///    一次随手豁免就能把整个文件的守卫关掉。
+    /// 2. **理由太短等于没写**，它自己就是一条违规——`// 设计令牌豁免：临时` 不算理由。
+    /// 3. **豁免了却没有对应的违规，也是一条违规。** 否则规则一变，
+    ///    这些「过期豁免」就静静躺在代码里，下一个人只会以为这儿本来就该破例，
+    ///    而且它会替将来真正的违规挡枪。
+    static let exemptionMarker = "设计令牌豁免"
+
+    /// 理由的最短长度。8 个字够写一句「这是窗口最小尺寸」，写不下「临时」「TODO」。
+    static let minimumExemptionReasonLength = 8
+
+    struct Exemption: Equatable {
+        let line: Int
+        let reason: String
+
+        var reasonIsGoodEnough: Bool { reason.count >= minimumExemptionReasonLength }
+    }
+
+    /// 从**原始源码**（含注释）里读豁免。注意不能传去过注释的文本——那时豁免已经被剪掉了。
+    static func exemptions(in rawSource: String) -> [Exemption] {
+        var found: [Exemption] = []
+        for (offset, line) in rawSource.split(separator: "\n",
+                                              omittingEmptySubsequences: false).enumerated() {
+            guard let commentAt = commentStart(in: line) else { continue }
+            let comment = line[commentAt...]
+            guard let markerAt = comment.range(of: exemptionMarker) else { continue }
+            let tail = comment[markerAt.upperBound...]
+                .drop(while: { $0 == "：" || $0 == ":" || $0 == " " })
+            found.append(Exemption(line: offset + 1,
+                                   reason: tail.trimmingCharacters(in: .whitespaces)))
+        }
+        return found
+    }
+
+    /// 扫一段**原始源码**：先去注释找违规，再按豁免注释过滤，最后把不合格的豁免本身算成违规。
+    static func designTokenViolations(inRawSource rawSource: String) -> [Violation] {
+        let raw = designTokenViolations(in: stripLineComments(rawSource))
+        let declared = exemptions(in: rawSource)
+        let usable = declared.filter(\.reasonIsGoodEnough)
+
+        var covered: Set<Int> = []
+        for exemption in usable {
+            covered.insert(exemption.line)
+            covered.insert(exemption.line + 1)   // 写在上一行的写法
+        }
+
+        var found = raw.filter { !covered.contains($0.line) }
+
+        for exemption in declared where !exemption.reasonIsGoodEnough {
+            found.append(Violation(
+                rule: "豁免没说清理由",
+                line: exemption.line,
+                evidence: "// \(exemptionMarker)：\(exemption.reason)",
+                nextStep: "豁免必须写清为什么这一处非用字面值不可（至少 "
+                    + "\(minimumExemptionReasonLength) 个字）。写不出理由，说明它该改成令牌。"))
+        }
+
+        for exemption in usable
+        where !raw.contains(where: { $0.line == exemption.line || $0.line == exemption.line + 1 }) {
+            found.append(Violation(
+                rule: "豁免是多余的",
+                line: exemption.line,
+                evidence: "// \(exemptionMarker)：\(exemption.reason)",
+                nextStep: "这一行现在并没有违规，豁免却还挂着。留着它，下一个人会以为这儿"
+                    + "本来就该破例，而且它会替将来真正的违规挡枪。下一步：删掉这条豁免。"))
+        }
+
+        return found.sorted { ($0.line, $0.rule) < ($1.line, $1.rule) }
+    }
+
+    /// 直接扫一个文件。读不到会抛错，不会静默给空串。
     static func designTokenViolations(inFileAt relativePath: String) throws -> [Violation] {
-        designTokenViolations(in: try code(relativePath))
+        designTokenViolations(inRawSource: try read(relativePath))
+    }
+
+    // MARK: - 令牌清单：手写的表容易漏掉新加的那一行
+
+    /// 取某个 `public enum` 里声明的全部 `public static let` 名字（按源码顺序）。
+    ///
+    /// **它服务的是「表的完整性」这类断言**：`DesignSystemTests` 把令牌取值逐行钉死，
+    /// 那是一份手写清单，而手写清单的通病是新加的那一行没人写进来——
+    /// 实测往 `Metrics.swift` 里加一个 `Radius.sheet = 3` 并在卡片上用它，全套测试一条不红。
+    static func declaredTokenNames(inEnum name: String, of code: String) throws -> [String] {
+        let body = try memberBody(of: "public enum \(name)", in: code)
+        return captures(of: #"public\s+static\s+let\s+([A-Za-z_][A-Za-z0-9_]*)"#, in: body)
+    }
+
+    /// 一个文件里声明了哪些 `public enum`。
+    ///
+    /// 上面那个函数要按名字问，那「名字的清单」本身也不能是手写的：
+    /// 手写的话，往 `Metrics.swift` 里新加一整个 `public enum Elevation` 照样没人管。
+    static func declaredEnumNames(in code: String) -> [String] {
+        captures(of: #"public\s+enum\s+([A-Za-z_][A-Za-z0-9_]*)"#, in: code)
+    }
+
+    private static func captures(of pattern: String, in source: String) -> [String] {
+        let text = source as NSString
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        return regex.matches(in: source, range: NSRange(location: 0, length: text.length))
+            .compactMap { $0.numberOfRanges > 1 ? text.substring(with: $0.range(at: 1)) : nil }
     }
 
     // MARK: - 断言：这段渲染必须在
@@ -605,12 +789,16 @@ enum SourceGuard {
                                        reporter: Reporter = failTest,
                                        file: StaticString = #filePath,
                                        line: UInt = #line) {
-        withCode(of: relativePath, reporter: reporter, file: file, line: line) { code in
-            let found = designTokenViolations(in: code)
+        // 这里读的是**原始源码**（不去注释）：豁免注释要靠它才读得到。
+        // 去注释这一步在 `designTokenViolations(inRawSource:)` 里面做。
+        do {
+            let found = designTokenViolations(inRawSource: try read(relativePath))
             guard !found.isEmpty else { return }
             reporter("\(relativePath) 有 \(found.count) 处样式没走设计令牌（铁律 6）：\n"
                         + found.map { "  • " + $0.description }.joined(separator: "\n"),
                      file, line)
+        } catch {
+            reporter("\(error)", file, line)
         }
     }
 

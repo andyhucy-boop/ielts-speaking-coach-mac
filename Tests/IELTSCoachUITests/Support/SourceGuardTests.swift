@@ -207,6 +207,18 @@ final class SourceGuardTests: XCTestCase {
         }
     }
 
+    /// 字距是排版取值里唯一有令牌、却一直没人扫的一档。
+    /// 实测把 `SectionHeader` 的 `.tracking(Tracking.label)` 换成 `.tracking(2.5)`，429 条全绿。
+    func testFontScannerCatchesLiteralTrackingAndLineSpacing() {
+        for bypass in [".tracking(2.5)", ".kerning(1)", ".lineSpacing(6)"] {
+            XCTAssertFalse(SourceGuard.fontViolations(in: "Text(\"甲\")\(bypass)").isEmpty,
+                           "「\(bypass)」这种写法溜过去了")
+        }
+        XCTAssertEqual(
+            SourceGuard.fontViolations(in: ".tracking(Tracking.label)\n.lineSpacing(Spacing.xs)"),
+            [], "令牌写法被误判成违规了")
+    }
+
     func testFontScannerAcceptsTokensIncludingTernaries() {
         let clean = """
         Text("甲").font(Typography.label)
@@ -239,6 +251,30 @@ final class SourceGuardTests: XCTestCase {
                 SourceGuard.colorViolations(in: "Text(\"甲\")\(bypass)").isEmpty,
                 "「\(bypass)」这种写法溜过去了——它绕开了 Palette 的对比度测试，"
                     + "也不会跟着深色模式走")
+        }
+    }
+
+    /// **「灰上加灰」的最后一条通道**：引用着令牌，却在视图里再乘一次不透明度。
+    ///
+    /// `Palette.textSecondary` 的 56% 是按 4.5:1 定的，再 `.opacity(0.35)` 一下就掉到 2:1 上下。
+    /// 实测这么改，429 条一条不红——前面每条规则都因为「它用了令牌」而放行。
+    func testColorScannerCatchesDimmingATokenInTheView() {
+        for bypass in [".foregroundStyle(Palette.textSecondary.opacity(0.35))",
+                       ".background(Palette.card.opacity(0.5))",
+                       ".foregroundStyle(Palette.accent .opacity(0.4))"] {
+            XCTAssertFalse(SourceGuard.colorViolations(in: bypass).isEmpty,
+                           "「\(bypass)」这种写法溜过去了——它绕开了对比度那几条断言")
+        }
+        XCTAssertEqual(SourceGuard.colorViolations(in: ".foregroundStyle(Palette.textSecondary)"),
+                       [], "令牌写法被误判成违规了")
+    }
+
+    /// 规范第 4 节：卡片靠边框和留白分层，**不加投影**。所以投影没有令牌，出现即违规。
+    func testShapeScannerCatchesAnyShadow() {
+        for bypass in [".shadow(radius: 8)",
+                       ".shadow(color: Palette.cardBorder, radius: Radius.card, y: 2)"] {
+            XCTAssertFalse(SourceGuard.shapeViolations(in: bypass).isEmpty,
+                           "「\(bypass)」这种写法溜过去了——第 4 节明写不加投影")
         }
     }
 
@@ -284,6 +320,130 @@ final class SourceGuardTests: XCTestCase {
                 in: ".padding(Spacing.xl)\n.frame(width: 620, minHeight: 600)"
                     + "\nSpacer(minLength: 0)"),
             [])
+    }
+
+    // MARK: - 豁免：必须说得出理由、只管一行、过期了要吵
+
+    /// 豁免写对了就该放行——否则「确有正当理由的那一处」只能靠把整条规则删掉来解决。
+    func testAValidExemptionSilencesExactlyTheLineItIsWrittenFor() {
+        let sameLine = """
+        Text("甲").padding(32)   // 设计令牌豁免：这是窗口最小尺寸，不是间距令牌
+        """
+        XCTAssertEqual(SourceGuard.designTokenViolations(inRawSource: sameLine), [],
+                       "写在行尾的豁免没被认出来")
+
+        let lineAbove = """
+        // 设计令牌豁免：这是窗口最小尺寸，不是间距令牌
+        Text("甲").padding(32)
+        """
+        XCTAssertEqual(SourceGuard.designTokenViolations(inRawSource: lineAbove), [],
+                       "写在上一行的豁免没被认出来")
+    }
+
+    /// **豁免只管两行。** 管一整段的话，一次「随手豁免」就能把整个文件的守卫关掉。
+    func testAnExemptionDoesNotCoverTheRestOfTheFile() {
+        let source = """
+        // 设计令牌豁免：这是窗口最小尺寸，不是间距令牌
+        Text("甲").padding(32)
+        Text("乙").padding(16)
+        Text("丙").foregroundStyle(.gray)
+        """
+        let found = SourceGuard.designTokenViolations(inRawSource: source)
+        XCTAssertEqual(found.map(\.line), [3, 4],
+                       "豁免的覆盖范围超出了它该管的那一行：\(found)")
+    }
+
+    /// 理由太短等于没写，而且它自己就是一条违规——不然「随手豁免」就是零成本的。
+    func testAnExemptionWithoutARealReasonIsItselfAViolation() {
+        let source = """
+        Text("甲").padding(32)   // 设计令牌豁免：临时
+        """
+        let found = SourceGuard.designTokenViolations(inRawSource: source)
+        XCTAssertEqual(found.count, 2, "该报两条（原违规没被豁免 + 豁免本身不合格）：\(found)")
+        XCTAssertTrue(found.contains { $0.rule.contains("内边距") },
+                      "理由不合格的豁免不该挡住原来那条违规：\(found)")
+        XCTAssertTrue(found.contains { $0.rule.contains("豁免没说清理由") }, "\(found)")
+    }
+
+    /// **过期豁免要吵。** 规则一变，这些豁免就静静躺在代码里：
+    /// 下一个人只会以为这儿本来就该破例，而且它会替将来真正的违规挡枪。
+    func testAStaleExemptionIsReportedSoItGetsDeleted() {
+        let source = """
+        Text("甲").padding(Spacing.xl)   // 设计令牌豁免：这个理由长得足够进得了门
+        """
+        let found = SourceGuard.designTokenViolations(inRawSource: source)
+        XCTAssertEqual(found.count, 1, "\(found)")
+        XCTAssertTrue(found.first?.rule.contains("多余") == true, "\(found)")
+    }
+
+    /// 注释里举的反例不算豁免，也不该被扫成违规——两头都得对。
+    func testExemptionsAreReadFromCommentsAndNotFromStringLiterals() {
+        let source = #"""
+        let hint = "写法示例：设计令牌豁免：这段是文案不是注释"
+        Text(hint).padding(32)
+        """#
+        let found = SourceGuard.designTokenViolations(inRawSource: source)
+        XCTAssertEqual(found.count, 1, "字符串里的字样被当成了豁免：\(found)")
+        XCTAssertEqual(SourceGuard.exemptions(in: source), [])
+    }
+
+    // MARK: - 令牌清单：手写的表漏掉新加的那一行
+
+    /// 实测过的洞：往 `Metrics.swift` 里加一个 `Radius.sheet = 3` 并在卡片上用它，429 条全绿。
+    /// 根因是「逐行钉死取值」那张表是手写的，没人问过「声明了几个、钉住了几个」。
+    func testDeclaredTokenNamesReadsTheRealTokenList() throws {
+        let metrics = try SourceGuard.code("DesignSystem/Metrics.swift")
+        XCTAssertEqual(try SourceGuard.declaredTokenNames(inEnum: "Radius", of: metrics),
+                       ["card", "control", "pill"])
+        // 只取这一个 enum 里的，不许把隔壁 enum 的令牌算进来——算多了，那张表会「怎么都对得上」。
+        XCTAssertFalse(try SourceGuard.declaredTokenNames(inEnum: "Radius", of: metrics)
+                        .contains("xs"))
+        XCTAssertEqual(SourceGuard.declaredEnumNames(in: metrics),
+                       ["Spacing", "Radius", "BorderWidth", "Tracking"])
+    }
+
+    /// enum 改了名字却没同步改这里，必须抛错。返回空数组的话，
+    /// 「每个令牌都被钉住了」那条断言会因为「一个令牌都没解析到」而永远绿。
+    func testDeclaredTokenNamesThrowsWhenTheEnumIsGone() {
+        XCTAssertThrowsError(
+            try SourceGuard.declaredTokenNames(inEnum: "Elevation", of: "public enum Radius {}")) {
+            XCTAssertTrue("\($0)".contains("空转"), "\($0)")
+        }
+    }
+
+    /// **「测试去读测试」这条路上的一个坑，本次真踩了一次。**
+    ///
+    /// 元测试自己必须把被查函数的名字写成字符串（`named: "testFoo"`）。那个字符串一旦排在
+    /// 真正的声明前面，按「第一处文字匹配」切出来的就是元测试自己的函数体——
+    /// 它于是在检查自己，永远绿。所以重名时必须抛错，不许猜。
+    func testFunctionBodyRefusesToGuessWhenTheNameIsNotUnique() throws {
+        let code = """
+        func meta() {
+            let marker = "func target"
+            check(marker)
+        }
+        func target() {
+            let pinned = 1
+        }
+        """
+        // 名字唯一（字符串里那处没带括号，不算），切出来的必须是真正的声明。
+        let body = try SourceGuard.functionBody(named: "target", in: code)
+        XCTAssertTrue(body.contains("let pinned = 1"), "切错了段：\(body)")
+        XCTAssertFalse(body.contains("check(marker)"), "切到元测试自己的函数体上了：\(body)")
+
+        XCTAssertThrowsError(
+            try SourceGuard.functionBody(named: "target",
+                                         in: code + "\nfunc target() { let 冒牌 = 2 }")) {
+            XCTAssertTrue("\($0)".contains("2 处"), "\($0)")
+        }
+        XCTAssertThrowsError(try SourceGuard.functionBody(named: "noSuchFunc", in: code))
+    }
+
+    /// 元测试要去读测试自己的源码。读不到同样必须抛错。
+    func testTestCodeReadsTheTestSourcesAndThrowsWhenThePathIsWrong() throws {
+        let source = try SourceGuard.testCode("DesignSystemTests.swift")
+        XCTAssertTrue(source.contains("final class DesignSystemTests"), "读到的不是那个测试文件")
+        XCTAssertThrowsError(try SourceGuard.testCode("NoSuchTests.swift"))
     }
 
     // MARK: - 违规报告本身要能读

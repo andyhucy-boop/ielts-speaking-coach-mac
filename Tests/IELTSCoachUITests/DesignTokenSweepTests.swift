@@ -116,6 +116,35 @@ final class DesignTokenSweepTests: XCTestCase {
         }
     }
 
+    /// **这份「还没做」的名单只能变短，不能变长。**
+    ///
+    /// 上一条只问「这两页里还挑不挑得出违规」，那它们再烂十倍也是绿的。
+    /// 而整个文件被豁免还有个副作用：这两页往后新写的每一行也一并不受管——
+    /// 于是「还没收编」会悄悄变成「越欠越多」。
+    ///
+    /// 所以给每一页记一个上限：**只许降，不许升**。真要收编就把数字改小，
+    /// 收编完就把它从 `notYetMigrated` 里划掉（那时上面那条会红，逼你动手）。
+    ///
+    /// 数字是**今天的实测值**，不留余量。留余量等于把那几个名额提前送人。
+    static let literalCeiling = [
+        "RootView.swift": 17,
+        "Onboarding/PermissionGateView.swift": 16
+    ]
+
+    func testTheUnmigratedPagesCannotGetAnyWorse() throws {
+        XCTAssertEqual(Set(Self.literalCeiling.keys), Set(Self.notYetMigrated),
+                       "上限表和豁免名单对不上，有页面落在两边之外")
+        for (path, ceiling) in Self.literalCeiling {
+            let found = try SourceGuard.designTokenViolations(inFileAt: path)
+            XCTAssertLessThanOrEqual(
+                found.count, ceiling,
+                "\(path) 的字面样式从 \(ceiling) 处涨到了 \(found.count) 处。"
+                    + "这一页整体豁免着，新写的样式也跟着不受管，欠账只会越滚越大。"
+                    + "下一步：新加的这几处改成走令牌；确实收编不动的话，"
+                    + "在复审里说清理由再调这个数字。")
+        }
+    }
+
     /// 令牌定义文件必须真的在，而且真的在定义令牌。
     ///
     /// 它们是唯一被允许写字面取值的地方，名单一旦指错文件，整条豁免就变成一个洞。
@@ -129,5 +158,40 @@ final class DesignTokenSweepTests: XCTestCase {
                 "\(path) 里没有「\(marker)」。豁免名单指着一个不再定义令牌的文件，"
                     + "等于在扫描上开了个洞。下一步：确认令牌是不是搬了家，名单要跟着改。")
         }
+    }
+
+    // MARK: - 逐行豁免
+
+    /// 单行豁免（`// 设计令牌豁免：<理由>`）是留给「确有正当理由用字面值」那一处的口子。
+    /// 口子一开就得有人数着，否则它会从「一处特例」长成「哪儿红就往哪儿贴」。
+    ///
+    /// **现在全模块是 0 处。** 要新增就得同时改这个数字——那是一次显式的、
+    /// 会被复审看见的动作，而不是随手加一行注释就把守卫关掉。
+    static let exemptionCeiling = 0
+
+    func testLineLevelExemptionsAreCountedAndAlwaysGiveAReason() throws {
+        var all: [(path: String, exemption: SourceGuard.Exemption)] = []
+        var scanned = 0
+        for file in try SourceGuard.swiftFiles() {
+            let path = try SourceGuard.relativePath(of: file)
+            scanned += 1
+            for exemption in SourceGuard.exemptions(in: try SourceGuard.read(path)) {
+                all.append((path, exemption))
+            }
+        }
+        XCTAssertGreaterThanOrEqual(scanned, 8, "只扫到 \(scanned) 个文件，这条测试很可能在空转")
+
+        for (path, exemption) in all {
+            XCTAssertGreaterThanOrEqual(
+                exemption.reason.count, SourceGuard.minimumExemptionReasonLength,
+                "\(path) 第 \(exemption.line) 行的豁免理由太短：「\(exemption.reason)」。"
+                    + "下一步：写清为什么这一处非用字面值不可；写不出来就说明它该改成令牌。")
+        }
+        XCTAssertLessThanOrEqual(
+            all.count, Self.exemptionCeiling,
+            "全模块现在有 \(all.count) 处单行豁免，超过了记在案的 \(Self.exemptionCeiling) 处："
+                + all.map { "\($0.path):\($0.exemption.line)" }.joined(separator: "、")
+                + "。下一步：能改成令牌的改掉；确实改不动的，把 `exemptionCeiling` 加上去，"
+                + "在复审里说清每一处的理由。")
     }
 }
