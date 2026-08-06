@@ -77,8 +77,13 @@ final class QuestionBankImportResultSheetTests: XCTestCase {
 
         // 至少两次：一次是闭包参数 `{ _, warning in`，一次是真的把它画出来。
         // 只出现一次 = 参数收下了却没用，画出来的是一句和这条警告无关的话。
+        //
+        // 必须用 `standaloneOccurrences` 而不是 `occurrences`：后者是纯子串计数，
+        // 同一行里的颜色令牌 `Palette.warning` 会被算作一次，把这条断言凑满——
+        // 2026-08-06 复核实测，那时把 `Label(warning, …)` 换成一句泛泛之词是**全绿**的，
+        // 这条守卫等于不存在。
         XCTAssertGreaterThanOrEqual(
-            SourceGuard.occurrences(of: "warning", in: row), 2,
+            SourceGuard.standaloneOccurrences(of: "warning", in: row), 2,
             "警告那一行没有把这条警告本身画出来（`warning` 在闭包里只出现了一次，"
                 + "也就是收下了参数却没用）。用户看到的会是 N 行一模一样的泛泛之词，"
                 + "而「跳过第 7 行：缺少 id。下一步：给这道题一个唯一编号。」这句唯一能让他"

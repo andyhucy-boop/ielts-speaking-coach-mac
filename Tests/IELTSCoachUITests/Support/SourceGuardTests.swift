@@ -163,6 +163,23 @@ final class SourceGuardTests: XCTestCase {
         XCTAssertEqual(SourceGuard.occurrences(of: "checklist", in: "无"), 0)
     }
 
+    /// `occurrences` 是纯子串计数，凑数的东西太多。「参数收下了有没有真的用上」
+    /// 这类断言得用 `standaloneOccurrences`，否则一个同名的颜色令牌就能把它顶满。
+    func testStandaloneOccurrencesIgnoresMemberNamesAndLongerNames() {
+        // 真实形态：闭包参数 + 颜色令牌 + 真正画出来的那一处 = 只应数到 2。
+        let real = "_, warning in Label(warning).foregroundStyle(Palette.warning)"
+        XCTAssertEqual(SourceGuard.standaloneOccurrences(of: "warning", in: real), 2)
+        // 把真正画出来的那一处换成一句泛泛之词 → 只剩闭包参数那一次。
+        let generic = "_, warning in Label(\"出问题了\").foregroundStyle(Palette.warning)"
+        XCTAssertEqual(SourceGuard.standaloneOccurrences(of: "warning", in: generic), 1)
+        // 更长的名字不算：warnings / rewarning 都不是 warning 本身。
+        XCTAssertEqual(
+            SourceGuard.standaloneOccurrences(of: "warning", in: "feedback.warnings rewarning"), 0)
+        // 别把正常的一次也吞了。
+        XCTAssertEqual(SourceGuard.standaloneOccurrences(of: "warning", in: "warning"), 1)
+        XCTAssertEqual(SourceGuard.standaloneOccurrences(of: "warning", in: "无"), 0)
+    }
+
     // MARK: - 切出一段
 
     func testMemberBodyTakesOnlyThatDeclarationsBraces() throws {

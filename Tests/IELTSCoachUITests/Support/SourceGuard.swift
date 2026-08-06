@@ -324,6 +324,41 @@ enum SourceGuard {
         return count
     }
 
+    /// 数某个**标识符本身**出现了几次：前面挂了点号的成员名（`Palette.warning`）
+    /// 和只是撞了前缀的更长的名字（`warnings`）都不算。
+    ///
+    /// **为什么不能用 `occurrences`**：`occurrences(of: "warning")` 是纯子串计数，
+    /// `Palette.warning`、`feedback.warnings` 全都算它一次。
+    /// `QuestionBankImportResultSheet` 那一行警告正好三样俱全——闭包参数 `warning`、
+    /// 颜色令牌 `Palette.warning`、真正画出来的 `Label(warning, …)`——
+    /// 于是「至少出现两次」这条断言被前两样凑满，把 `Label(warning, …)` 换成一句
+    /// 泛泛之词照样是绿的（2026-08-06 复核实测：换掉文案全绿，
+    /// 再把 `Palette.warning` 一并换成别的令牌才变红，证明数到的是那个令牌）。
+    /// 凡是「参数收下了有没有真的用上」这类断言，都要用这个，不要用 `occurrences`。
+    static func standaloneOccurrences(of identifier: String, in source: String) -> Int {
+        guard !identifier.isEmpty else { return 0 }
+        func isWordCharacter(_ character: Character) -> Bool {
+            character.isLetter || character.isNumber || character == "_"
+        }
+        var count = 0
+        var cursor = source.startIndex
+        while let found = source.range(of: identifier, range: cursor..<source.endIndex) {
+            cursor = found.upperBound
+            // 后面还接着字母/数字/下划线 = 撞上了更长的名字（warning 之于 warnings）。
+            if found.upperBound < source.endIndex, isWordCharacter(source[found.upperBound]) {
+                continue
+            }
+            if found.lowerBound > source.startIndex {
+                let before = source[source.index(before: found.lowerBound)]
+                // 前面是点号 = 成员访问（Palette.warning），不是这个标识符本身。
+                // 前面是字母/数字/下划线 = 同样撞上了更长的名字。
+                if before == "." || isWordCharacter(before) { continue }
+            }
+            count += 1
+        }
+        return count
+    }
+
     /// 取出某个声明后面那对大括号中间的内容（大括号配对，吃得下嵌套，跳过字符串字面量）。
     ///
     /// **为什么需要它**：同一个文件里往往有好几处「残影」——纯装饰用的 `switch`、
