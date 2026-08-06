@@ -5,7 +5,20 @@ import Observation
 public struct PendingReviewRow: Equatable, Identifiable, Sendable {
     public let id: String
     public let entry: PendingReviewEntry
+    /// 文件名里的那个编号，原样显示给用户看——包括 `2026-08-06-001-2` 这种
+    /// 「同一场的第二份原文」。**它不一定是一个真实存在的会话编号**，见下。
     public let sessionID: String
+    /// 这份原文真正属于训练记录里的哪一场；回查不到时是 nil。
+    ///
+    /// **归档、写报告、回填 `reportPath` 都必须用它，不能用 `sessionID`。**
+    /// `PracticeRunner` 重试取复盘、拿到的原文和上一次不一样时，
+    /// `PendingReviewStore.write` 会把第二份落成 `<id>-2.txt`，于是文件名里的编号
+    /// 比真正的会话编号多一截。拿它去归档的话：`sourceSessionIds` 里会多出一个
+    /// 根本不存在的编号、`reportPath` 回填不上（复盘报告页永远看不到这一场）、
+    /// `reports/<id>-2.json` 成了没人引用的文件。
+    /// 列表这一侧本来就是去掉 `-N` 后缀回查会话的（所以行上显示的题目是对的），
+    /// 两侧必须用同一个答案，否则同一行上的两句话自相矛盾。
+    public let linkedSessionID: String?
     public let timeText: String
     /// 这份复盘属于哪道题。查不到时是一句中文说明，**不会是空字符串**。
     public let questionText: String
@@ -43,6 +56,9 @@ public enum PendingReviewRowBuilder {
 
             return PendingReviewRow(
                 id: entry.id, entry: entry, sessionID: entry.sessionID,
+                // 回查到哪一场，就把那一场的编号交出去——**归档那一侧用的正是它**，
+                // 这样「行上显示的是哪一场」和「归到哪一场名下」不可能说两套话。
+                linkedSessionID: session?.id,
                 timeText: formatter.string(from: entry.modifiedAt),
                 questionText: questionText,
                 sizeText: sizeText(entry.byteCount))
@@ -143,49 +159,111 @@ public final class PendingReviewViewModel {
             return
         }
 
+        // 归到哪一场名下：能回查到就用那一场真正的编号，**不是文件名里那个**。
+        // `<id>-2.txt`（同一场的第二份原文）拿文件名当编号的话，
+        // 会在 `sourceSessionIds` 里留下一个不存在的编号、`reportPath` 回填不上、
+        // 还多写一个没人引用的 `reports/<id>-2.json`（见 `PendingReviewRow.linkedSessionID`）。
+        let archiveID = row.linkedSessionID ?? row.sessionID
         let timestamp = ISO8601DateFormatter().string(from: now())
-        let reportRelativePath = "reports/\(row.sessionID).json"
+        let reportRelativePath = "reports/\(archiveID).json"
+
+        let outcome: ArchiveOutcome
+        let linkedToASession: Bool
         do {
             try directory.createIfNeeded()
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes]
             try encoder.encode(report)
-                .write(to: directory.reportsDirectory.appending(path: "\(row.sessionID).json"),
+                .write(to: directory.reportsDirectory.appending(path: "\(archiveID).json"),
                        options: .atomic)
 
-            let outcome = try store.mutate { state -> ArchiveOutcome in
-                let questionID = state.sessions.first { $0.id == row.sessionID }?.questionId ?? ""
+            (outcome, linkedToASession) = try store.mutate { state -> (ArchiveOutcome, Bool) in
+                let questionID = state.sessions.first { $0.id == archiveID }?.questionId ?? ""
                 let result = ReviewArchiver.archive(report: report, into: state,
-                                                    sessionID: row.sessionID,
+                                                    sessionID: archiveID,
                                                     questionID: questionID, at: timestamp)
                 state = result.state
-                if let index = state.sessions.firstIndex(where: { $0.id == row.sessionID }) {
-                    state.sessions[index].reportPath = reportRelativePath
+                guard let index = state.sessions.firstIndex(where: { $0.id == archiveID }) else {
+                    return (result, false)
                 }
-                return result
-            }
-
-            // 打标记必须在归档成功之后。归档失败还打了标记，用户就再也点不到它了。
-            try PendingReviewStore.markImported(row.entry)
-
-            if outcome.skipped.isEmpty {
-                notice = "「\(row.sessionID)」已经重新入库。"
-                    + "下一步：到上面的复盘列表里就能看到它了。"
-            } else {
-                // 归档 0 条不等于没错题——更可能是字段名对不上（spec 2.3.8）。
-                // 静默的 0 是本项目已知最危险的失败形态。
-                notice = "「\(row.sessionID)」入库了，但复盘里的 "
-                    + outcome.skipped.joined(separator: "、")
-                    + " 一条都没能归进档案。这通常意味着 ChatGPT 用的字段名和本工具读的对不上。"
-                    + "下一步：原文已经改名成 \(row.entry.fileName)\(PendingReviewStore.importedSuffix) "
-                    + "留在 pending-reviews 目录里，可以打开对照着看；"
-                    + "若想重来，把 .imported 后缀去掉它就会重新出现在这个列表里。"
+                state.sessions[index].reportPath = reportRelativePath
+                return (result, true)
             }
         } catch {
+            // 这一支里档案纹丝不动（`StateStore.mutate` 写不成功就不落盘），所以「再点一次」是对的。
             notice = "「\(row.sessionID)」解析成功了，但入库时出错：\(error.localizedDescription) "
                 + "下一步：确认数据目录可写后再点一次「重新导入」；原文没有被改动，不会丢。"
+            refresh()
+            return
         }
+
+        // 打标记必须在归档成功之后。归档失败还打了标记，用户就再也点不到它了。
+        //
+        // **从这里往后，任何失败都不许再说「再点一次「重新导入」」。** 归档已经做完了，
+        // 再导一次，同一句错题的 `IssueRecord.occurrences` 会再加一遍
+        // （`ReviewArchiver.mergeIssues` 每次命中都 +1），而这正是决策 2 要防的静默失真。
+        do {
+            try PendingReviewStore.markImported(row.entry)
+        } catch {
+            // `markImported` 抛出来的那句话自己就说清了「归档已经做完」和
+            // 「先别再点一次导入」，原样交给用户；**后面一个字都不许追加相反的指示**。
+            var message = error.localizedDescription
+            if !outcome.skipped.isEmpty {
+                // 少说一句「字段名可能对不上」就是静默（铁律 7），但也不能借着这句
+                // 把「重来一次」偷渡回来——重来一次正是上一句明令禁止的事。
+                message += " 另外，这份复盘里的 \(outcome.skipped.joined(separator: "、")) "
+                    + "一条都没能归进档案，多半是 ChatGPT 用的字段名和本工具读的对不上；"
+                    + "这一条不是再导一次能解决的，先按上面那句把文件名的事处理掉。"
+            }
+            notice = message
+            refresh()
+            return
+        }
+
+        notice = successNotice(row: row, archiveID: archiveID, reportPath: reportRelativePath,
+                               linkedToASession: linkedToASession, skipped: outcome.skipped)
         refresh()
+    }
+
+    /// 入库成功之后那句交代。
+    ///
+    /// **「下一步」不许承诺一件兑现不了的事**（铁律 6）：复盘报告页左边那一列只收
+    /// `reportPath` 非空的会话（`ReviewReportViewModel.archivedSessions`），
+    /// 而 `reportPath` 只有在训练记录里真的有这一场时才回填得上。查不到那一场
+    /// （`sync-*` 那类老编号、或者那次练习压根没能存进记录）却仍旧说「到复盘列表里就能看到它了」，
+    /// 用户去那一页永远看不到，只会以为是自己点错了；`reports/<id>.json` 也就成了
+    /// 一个没人知道的文件。同一行在列表里刚说完「查不到这份复盘属于哪一场练习」，
+    /// 成功文案不能转头当它查得到。
+    private func successNotice(row: PendingReviewRow, archiveID: String, reportPath: String,
+                               linkedToASession: Bool, skipped: [String]) -> String {
+        var message = archiveID == row.sessionID
+            ? "「\(row.sessionID)」已经重新入库。"
+            : "「\(row.sessionID)」已经重新入库，算在同一场练习「\(archiveID)」名下。"
+
+        if !skipped.isEmpty {
+            // 归档 0 条不等于没错题——更可能是字段名对不上（spec 2.3.8）。
+            // 静默的 0 是本项目已知最危险的失败形态。
+            message += "不过复盘里的 \(skipped.joined(separator: "、")) 一条都没能归进档案，"
+                + "这通常意味着 ChatGPT 用的字段名和本工具读的对不上。"
+        }
+
+        if linkedToASession {
+            message += "下一步：关掉这张表，「复盘报告」页左边那一列里就能看到这一场了。"
+        } else {
+            message += "但训练记录里查不到编号「\(row.sessionID)」这一场"
+                + "（多半是那次练习当时没能存进记录），所以「复盘报告」页左边那一列不会出现它——"
+                + "那一列只收记得下复盘位置的练习。"
+                + "下一步：这份复盘的完整内容已经存成 \(reportPath)，"
+                + "到数据目录里打开它就能看；错题和词汇不受影响，已经照常进了档案。"
+        }
+
+        if !skipped.isEmpty {
+            message += "另外，原文已经改名成 \(row.entry.fileName)\(PendingReviewStore.importedSuffix) "
+                + "留在 pending-reviews 目录里，可以打开对照着看；"
+                + "等本工具认得这种字段名之后想重来的话，把 .imported 后缀去掉，"
+                + "它就会重新出现在这个列表里。"
+        }
+        return message
     }
 
     public func delete(_ row: PendingReviewRow) {

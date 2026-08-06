@@ -136,6 +136,90 @@ final class PendingReviewViewModelTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(
             atPath: directory.reportsDirectory.appending(path: "2026-08-06-001.json").path))
         XCTAssertTrue(model.isEmpty, "导入成功之后这一条就该从待处理列表里消失")
+
+        // 这一句「下一步」是**能兑现的**：`reportPath` 回填上了，所以这一场真的会出现在
+        // 复盘报告页左边那一列（`archivedSessions` 只收 `reportPath` 非空的会话）。
+        // 与 `testReimportingASessionMissingFromTheRecordsSaysWhereTheReviewWent` 里那条
+        // 「不许说这句话」配成一对：两个分支说同一句话的话，那边会红。
+        XCTAssertFalse(ReviewReportViewModel.archivedSessions(in: saved).isEmpty)
+        let notice = try XCTUnwrap(model.notice, "导入成功也要说话，不能让用户猜（铁律 7）")
+        XCTAssertTrue(notice.contains("就能看到这一场了"),
+                      "成功之后没告诉用户去哪儿看这份复盘：\(notice)")
+    }
+
+    /// **训练记录里查不到这一场时，不许承诺一件兑现不了的事**（铁律 6）。
+    ///
+    /// `sync-*` 这种编号是当年命令行时代的产物，它压根不在 `state.sessions` 里，
+    /// `reportPath` 也就无处回填；而复盘报告页左边那一列只收 `reportPath` 非空的会话
+    /// （`ReviewReportViewModel.archivedSessions`）。此时仍然说「到复盘列表里就能看到它了」，
+    /// 用户去那一页永远看不到，只会以为是自己点错了——而且 `reports/<id>.json` 成了
+    /// 没人引用的文件，他连这份复盘存在哪儿都不知道。
+    ///
+    /// 同一份数据在列表那一侧已经老老实实说了「查不到这份复盘属于哪一场练习」
+    /// （`testAnUnknownQuestionIsSpelledOut`），成功文案不能转头当它查得到。
+    func testReimportingASessionMissingFromTheRecordsSaysWhereTheReviewWent() throws {
+        _ = try PendingReviewStore.write(rawText: Self.goodReview, sessionID: "sync-1785940167",
+                                         directory: directory)
+        let model = self.model()
+        model.refresh()
+        model.reimport(try XCTUnwrap(model.rows.first))
+
+        let saved = try store.load()
+        XCTAssertEqual(saved.issues.count, 1, "查不到那一场，错题该归进去的还是要归进去")
+        XCTAssertTrue(ReviewReportViewModel.archivedSessions(in: saved).isEmpty,
+                      "这一场不在训练记录里，复盘报告页那一列不可能显示它——"
+                          + "这正是文案不许承诺它的原因")
+
+        let notice = try XCTUnwrap(model.notice)
+        XCTAssertFalse(notice.contains("就能看到这一场"),
+                       "文案把用户支到一个永远看不到这份复盘的页面去了：\(notice)")
+        XCTAssertTrue(notice.contains("查不到"),
+                      "没说清「为什么复盘列表里不会有它」：\(notice)")
+        XCTAssertTrue(notice.contains("reports/sync-1785940167.json"),
+                      "没告诉用户这份复盘到底存在哪儿，那个文件就成了没人知道的孤儿：\(notice)")
+        XCTAssertTrue(notice.contains("下一步"), "没说下一步做什么：\(notice)")
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: directory.reportsDirectory.appending(path: "sync-1785940167.json").path),
+                      "文案里报了这个路径，那儿就必须真的有东西（铁律 7）")
+    }
+
+    /// **同一场的第二份原文（`<id>-2.txt`）要并回那一场，不许造出一个不存在的会话编号。**
+    ///
+    /// 这条路走得到：`PracticeRunner` 重试取复盘、拿到的原文和上一次不一样时，
+    /// `PendingReviewStore.write` 就会落成 `<id>-2.txt`（内容相同才复用同一个文件名）。
+    ///
+    /// 列表那一侧本来就是去掉 `-N` 后缀回查会话的（所以行上显示的题目是对的）。
+    /// 归档这一侧要是直接拿文件名当编号，同一个 `PendingReviewRow` 上两句话就自相矛盾了：
+    /// `sourceSessionIds` 里多出一个根本不存在的编号、`reportPath` 回填不上、
+    /// `reports/<id>-2.json` 成了没人引用的孤儿文件，而成功文案还在说「就能看到这一场了」。
+    func testASecondCopyOfTheSameSessionIsArchivedUnderThatSession() throws {
+        try seedSession("2026-08-06-001")
+        // 第一份和第二份内容不同，`write` 才会换名字（内容相同时它复用同一个文件名）。
+        _ = try PendingReviewStore.write(rawText: "第一份原文（内容不一样，所以下一份会换名字）",
+                                         sessionID: "2026-08-06-001", directory: directory)
+        let second = try PendingReviewStore.write(rawText: Self.goodReview,
+                                                  sessionID: "2026-08-06-001", directory: directory)
+        XCTAssertEqual(second.lastPathComponent, "2026-08-06-001-2.txt",
+                       "这条测试的前提没成立：第二份原文没有落成 `<id>-2.txt`")
+
+        let model = self.model()
+        model.refresh()
+        let row = try XCTUnwrap(model.rows.first { $0.sessionID == "2026-08-06-001-2" })
+        XCTAssertEqual(row.questionText, "Do you live in a house or a flat?",
+                       "列表那一侧已经把它认成这一场了，归档那一侧必须跟着一致")
+        model.reimport(row)
+
+        let saved = try store.load()
+        XCTAssertEqual(saved.issues.first?.sourceSessionIds, ["2026-08-06-001"],
+                       "错题记在了一个不存在的会话编号名下")
+        XCTAssertEqual(saved.sessions.first?.reportPath, "reports/2026-08-06-001.json",
+                       "复盘没能挂回那一场，复盘报告页永远看不到它")
+        XCTAssertFalse(ReviewReportViewModel.archivedSessions(in: saved).isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: directory.reportsDirectory.appending(path: "2026-08-06-001.json").path))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: directory.reportsDirectory.appending(path: "2026-08-06-001-2.json").path),
+                       "多写了一个没人引用的 reports/<id>-2.json")
     }
 
     /// **本任务最重要的一条。** 不打 .imported 标记的话，用户手一抖点两次，
@@ -201,6 +285,50 @@ final class PendingReviewViewModelTests: XCTestCase {
         XCTAssertEqual(try pendingFileNames(), ["2026-08-06-001.txt"],
                        "归档失败了却把原文标记成已入库，用户就再也点不到这一条了")
         XCTAssertEqual(try store.load().issues.count, 0, "入库失败了，档案里不该有东西")
+    }
+
+    /// **归档成功、只有「打标记」这一步失败**时，那句话绝对不许教用户再点一次导入。
+    ///
+    /// 这两种失败的「下一步」正好相反，混成一句话就会出人命：
+    ///
+    /// - 入库失败 → 档案纹丝不动，要再点一次「重新导入」；
+    /// - `markImported` 失败 → **归档已经做完了**，再导一次会让同一句错题的
+    ///   `IssueRecord.occurrences` 再加一遍（`ReviewArchiver.mergeIssues` 每次都 +1），
+    ///   而这正是本任务「必须做对的事」第 1 条要防的静默失真。
+    ///
+    /// `PendingReviewStore.markImported` 为此专门写了「先别再点一次导入」。
+    /// 把它当成 `error.localizedDescription` 拼进一句「下一步：…再点一次「重新导入」」里，
+    /// 用户读到的最后一句话，教他做的恰恰是前一句明令禁止的事。
+    func testAMarkFailureNeverTellsThemToImportAgain() throws {
+        try seedSession("2026-08-06-001")
+        _ = try PendingReviewStore.write(rawText: Self.goodReview, sessionID: "2026-08-06-001",
+                                         directory: directory)
+        // 手工把 `.imported` 那个名字占掉：`markImported` 只改名不删除，目标已存在就抛错。
+        // 必须**在 write 之后**造，否则 `write` 会绕开撞名、直接落成 `<id>-2.txt`。
+        // 用户手工往 pending-reviews 里放文件是允许的（`coach reimport` 就是这么用的），
+        // 所以这种撞名没法从源头杜绝——`PendingReviewStoreTests` 里也是这么造的。
+        try "占住这个名字".write(to: directory.pendingReviewsDirectory
+            .appending(path: "2026-08-06-001.txt.imported"), atomically: true, encoding: .utf8)
+
+        let model = self.model()
+        model.refresh()
+        model.reimport(try XCTUnwrap(model.rows.first))
+
+        XCTAssertEqual(try store.load().issues.first?.occurrences, 1,
+                       "归档这一步是成功的——这条测试的前提")
+
+        let notice = try XCTUnwrap(model.notice, "打标记失败必须说话，不许静默（铁律 7）")
+        XCTAssertTrue(notice.contains("先别再点一次导入"),
+                      "这句话没把「别再导一次」说出来。用户再点一次，"
+                          + "同一句错题的「出现次数」就永久多了一次：\(notice)")
+        XCTAssertFalse(notice.contains("再点一次「重新导入」"),
+                       "这句话末尾教用户去做前半句明令禁止的事——「出现次数」会当场失真：\(notice)")
+        XCTAssertFalse(notice.contains("解析成功了，但入库时出错"),
+                       "入库是成功的，失败的是打标记。说反了，用户会以为档案里什么都没有，"
+                           + "于是照着去重导一次：\(notice)")
+        XCTAssertEqual(try pendingFileNames(),
+                       ["2026-08-06-001.txt", "2026-08-06-001.txt.imported"],
+                       "改名失败了，两个文件应该原样都在")
     }
 
     /// 归档 0 条不等于没错题——更可能是字段名对不上（spec 2.3.8）。

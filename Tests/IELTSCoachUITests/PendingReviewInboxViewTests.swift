@@ -67,6 +67,19 @@ final class PendingReviewInboxViewTests: XCTestCase {
             because: "入口不再显示待处理条数。用户没有任何办法知道这里躺着几份没入库的复盘，"
                 + "也就不会想到要点进来。下一步：把条数接回去；"
                 + "**必须是真实的条数**——写死一个数字或者永远显示 0 都算这一类。")
+
+        // 上面那条问的是「这个字符串是怎么拼的」，**不是「它有没有被画到屏幕上」**——
+        // 实测把 `pendingReviewEntry` 里的 `Text(pendingCountText)` 整段删掉，684 条全绿：
+        // `pendingCountText` 返回的是 `String` 不是 `some View`，
+        // `testEverySectionThisSheetDeclaresIsReachableFromItsBody` 那趟可达性扫描
+        // （只收 `some View` 成员）也够不着它。这正是本文件开头列举的、
+        // 本项目已经栽过四次的那一类——「逻辑测得很扎实，而那段渲染删掉全绿」。
+        SourceGuard.assertRenders(
+            "pendingCountText", inBodyOf: "private var pendingReviewEntry", of: Self.page,
+            because: "条数算出来了却没画到入口上。用户看到的只是一颗光秃秃的按钮，"
+                + "不知道里面躺着几份没入库的复盘，也就不会想到要点进来"
+                + "（验收要求第 1 条：入口要显示待处理条数）。"
+                + "下一步：把 `Text(pendingCountText)` 摆回 `pendingReviewEntry` 里。")
     }
 
     /// **条数为 0 时入口仍然要在。** 藏起来的话，用户出事时根本找不到它。
