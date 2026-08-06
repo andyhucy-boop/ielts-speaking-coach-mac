@@ -1,7 +1,11 @@
 import ChatGPTBridge
 import Foundation
 
-public enum PermissionState: Equatable, Sendable {
+/// **`CaseIterable` 不是顺手加的**：权限页上的每一句话（标题、引导语、重查反馈）
+/// 都是按状态分叉的 `switch`，而分叉出来的文案没有任何编译期约束——
+/// 少写一档、两档写反，编译器都不会吭声。测试要问出「每一档都说对了吗」，
+/// 就得能把所有档位数一遍；手写数组的话，新加一个状态它自己不会长出来。
+public enum PermissionState: Equatable, Sendable, CaseIterable {
     case ready
     case needsAccessibility
     case needsChatGPT
@@ -39,6 +43,12 @@ public enum PermissionStatus {
     }
 
     /// 页面标题。放在这里而不是 View 里，是为了让诊断信息复用同一套说法。
+    ///
+    /// **每一档说的必须是那一档真正缺的东西。** 这四句是权限页最上面那行字，
+    /// 也是用户唯一一眼就会读完的那句：把 `.needsAccessibility` 和 `.needsChatGPT`
+    /// 的标题对调（复制粘贴时最常见的错），装了 ChatGPT 只是没给权限的用户
+    /// 会看到「还没装 ChatGPT」，跑去重装一遍应用——而真正卡住他的开关一直没动。
+    /// `PermissionStatusTests` 里那组标题断言就是冲着这次对调来的。
     public static func title(for state: PermissionState) -> String {
         switch state {
         case .ready: return "环境就绪"
@@ -70,6 +80,62 @@ public enum PermissionStatus {
             return "环境检查没通过，但失败原因不在已知的几种里，所以这里给不出针对性的修法。"
                 + "下一步：先读下面的「检查结果原文」；若仍看不出问题，点「复制诊断信息」，"
                 + "把复制到的内容发给开发者。"
+        }
+    }
+
+    /// 用户点完「重新检查」之后要显示的那句话。**`nil` 表示这一刻不该说话。**
+    ///
+    /// 为什么必须有：重查的结论和上一次一样时（授权没生效、TCC 还没刷新、勾错了对象），
+    /// `state` 和 `permissionMessages` 都不变，**页面不会有任何一个像素变化**——
+    /// 用户分不清是「查过了还是不行」还是「按钮坏了」。而这一页上按得最多的正是这颗按钮：
+    /// 去系统设置勾完开关回来，第一件事就是按它。
+    /// 同一屏上「打开系统设置」连「点了没反应」都当成必须修的缺陷（见 `openSettings`），
+    /// 最关键的这颗反而没有反馈，说不过去。
+    ///
+    /// - Parameters:
+    ///   - completedAttempts: 已经**跑完**的重查次数（`AppState.recheckAttempts`）。
+    ///     0 表示用户还没点过——这时先摆一句「仍未通过」，是还没查就下的结论。
+    ///     次数要露出来：连按两次而文案一字不差的话，第二次又变回「点了没反应」。
+    ///   - state: 这一次查出来的结论。`.ready` 返回 nil——那一刻整页会被主界面换掉，
+    ///     换屏本身就是最强的反馈，再挂一句话只会在切换的瞬间闪一下。
+    public static func recheckNotice(completedAttempts: Int,
+                                     state: PermissionState,
+                                     host: HostEnvironment) -> ActionNotice? {
+        guard completedAttempts > 0 else { return nil }
+        guard let outcome = stillFailing(state, host: host) else { return nil }
+        let attempt = completedAttempts > 1 ? "（第 \(completedAttempts) 次）" : ""
+        return ActionNotice(
+            text: "已重新检查\(attempt)，仍未通过：\(outcome.cause)。下一步：\(outcome.next)",
+            isFailure: true)
+    }
+
+    /// 重查之后仍然没过时的「卡在哪儿 + 换个做法做什么」。
+    ///
+    /// **下一步不能把上面那段 `guidance` 原样再说一遍**：用户就是照着它做完才回来点的按钮，
+    /// 重复一遍等于没说。所以这里给的是「照做了却仍然不行」时才用得上的那一条
+    /// （勾错了对象、开关刚打开系统还没放行、装成了 ChatGPT Classic）。
+    ///
+    /// 每一句「下一步」照样按宿主分叉：`.app` 用户手上没有 `axprobe`，
+    /// 也不该被支去勾终端——这个坑本项目已经踩过一次。
+    private static func stillFailing(_ state: PermissionState,
+                                     host: HostEnvironment) -> (cause: String, next: String)? {
+        switch state {
+        case .ready:
+            return nil
+        case .needsAccessibility:
+            return ("还是没有拿到辅助功能权限",
+                    "确认「隐私与安全性 › 辅助功能」列表里勾的是\(host.accessibilityGrantee)、"
+                        + "而且它的开关是打开的；开关刚打开时，系统对已经在运行的程序不一定马上放行，"
+                        + "把它完全退出再重新打开一次通常就好了。还是不行就\(host.diagnosticsInstruction)。")
+        case .needsChatGPT:
+            return ("还是没找到 ChatGPT 桌面应用",
+                    "确认装的是 openai.com/chatgpt/download 上的那个桌面应用、并且已经拖进"
+                        + "「应用程序」文件夹（ChatGPT Classic 没有 live 语音，用不了）；"
+                        + "装好后先手动打开它一次，再\(host.retryInstruction)。")
+        case .unknown:
+            return ("环境检查还是没通过，失败原因也不在已知的几种里",
+                    "\(host.diagnosticsInstruction)，并说明你刚才做过哪些操作；"
+                        + "下面的「检查结果原文」是同一份内容，也可以自己先读一遍。")
         }
     }
 

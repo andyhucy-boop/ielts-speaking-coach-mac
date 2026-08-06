@@ -32,6 +32,7 @@ public struct RootView: View {
             case .permissionGate:
                 PermissionGateView(state: app.permission,
                                    messages: app.permissionMessages,
+                                   recheckAttempts: app.recheckAttempts,
                                    onRecheck: { Task { await app.recheckPermission() } },
                                    onSkip: { app.permissionSkipped = true })
             case .workspace:

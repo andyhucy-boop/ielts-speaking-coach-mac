@@ -13,6 +13,16 @@ public final class AppState {
     /// 环境检查还没出结论。**初值是 true**：一次都还没查过时，`permission` 里的 `.unknown`
     /// 不是结论而是「不知道」，照它渲染会让用户开机第一眼看到「环境检查没通过」。
     public private(set) var isCheckingPermission = true
+    /// 用户点「重新检查」并且**已经查完**的次数。0 表示还没点过。
+    ///
+    /// 界面靠它给「重新检查」这颗按钮一个反馈：重查结论和上一次一样时，
+    /// `permission` 和 `permissionMessages` 都不变，页面不会有任何一个像素变化，
+    /// 用户分不清是「查过了还是不行」还是「按钮坏了」（见 `PermissionStatus.recheckNotice`）。
+    ///
+    /// **这个计数必须放在 AppState，不能放在权限页自己的 `@State` 里**：重查期间
+    /// `isCheckingPermission` 会把整页换成「正在检查运行环境…」，权限页连同它的
+    /// `@State` 一起被销毁，查完回来的是全新的一份——那句反馈会永远显示不出来。
+    public private(set) var recheckAttempts = 0
     /// 读取训练数据失败时的中文说明。非 nil 时界面必须显示它——
     /// 静默失败会让用户以为自己的练习记录没了。
     public private(set) var loadError: String?
@@ -68,16 +78,32 @@ public final class AppState {
     public func startInitialPermissionCheckIfNeeded() async {
         guard !didStartInitialCheck else { return }
         didStartInitialCheck = true
-        await recheckPermission()
+        await runPermissionCheck()
     }
 
     /// 重新检查运行环境。用户点「重新检查」时**必须**真的再查一次，所以这里没有闸。
     ///
+    /// 与首次检查只差一件事：**这一次是用户按出来的，所以要计数。**
+    /// 首次检查不能算进去——开机第一眼就看到「已重新检查，仍未通过」，
+    /// 是在回答一个用户还没问的问题。
+    public func recheckPermission() async {
+        await runPermissionCheck()
+        // 加在查完之后：这个数字的含义是「已经查完几次」。查到一半就先说「已重新检查」是句假话，
+        // 而这期间界面显示的本来就是「正在检查运行环境…」那一屏。
+        recheckAttempts += 1
+    }
+
+    /// 真正跑一次环境检查。首次检查与重查共用这一份，避免两条路各写各的之后走岔。
+    ///
     /// 检查放在主线程之外跑：`preflight()` 会启动 ChatGPT，并最多轮询 8 秒等它的无障碍树
     /// 醒过来（`LiveAXAccess.wakeAccessibilityTree`）。放在主线程上等于让窗口冻住十秒，
     /// 而 DESIGN-SYSTEM 第 5 节写明「超过 300ms 的操作都要有反馈」。
-    /// 期间 `isCheckingPermission` 为 true，界面据此显示「正在检查运行环境…」。
-    public func recheckPermission() async {
+    ///
+    /// **`isCheckingPermission = true` 这一行是那十秒里界面唯一的反馈来源**：
+    /// `RootRouter` 靠它切到「正在检查运行环境…」。删掉它，重查期间路由一路返回
+    /// `.permissionGate`，用户点完按钮对着一动不动的授权页干等最多十秒
+    /// （`AppStateTests.testRecheckSaysItIsCheckingWhileThePreflightIsStillRunning` 钉着这件事）。
+    private func runPermissionCheck() async {
         isCheckingPermission = true
         let run = preflight
         let readiness = await Task.detached(priority: .userInitiated) { run() }.value

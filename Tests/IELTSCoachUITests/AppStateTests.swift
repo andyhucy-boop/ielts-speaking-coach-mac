@@ -23,6 +23,49 @@ private final class PreflightSpy: @unchecked Sendable {
     }
 }
 
+/// 可以卡在半路的假 preflight。
+///
+/// 真实的 `preflight()` 要跑最多十秒（`NSWorkspace.open` 拉起 ChatGPT +
+/// `wakeAccessibilityTree(timeout: 8.0)`），而「这十秒里界面在说什么」正是要测的东西。
+/// 所以这里让它停在「正在跑」的那一刻，测试趁机去看状态。
+/// **全程不接触真实 ChatGPT（铁律 5），也不无限等待（铁律 5）**——等不到就报错收工。
+private final class GatedPreflight: @unchecked Sendable {
+    private let lock = NSLock()
+    private var running = false
+    private let proceed = DispatchSemaphore(value: 0)
+    private let result: BridgeReadiness
+
+    init(_ result: BridgeReadiness) { self.result = result }
+
+    /// 注入给 AppState 的那一份。跑在后台线程上（`recheckPermission` 特意把它挪出主线程）。
+    func run() -> BridgeReadiness {
+        lock.withLock { running = true }
+        proceed.wait()
+        lock.withLock { running = false }
+        return result
+    }
+
+    var isRunning: Bool { lock.withLock { running } }
+
+    /// 放它走。先放行也没关系——信号量会记着，`run()` 到了不会停。
+    func letItFinish() { proceed.signal() }
+
+    /// 等到 preflight 真的开跑。**有上限**，等不到就让测试红着收工，绝不无限等。
+    func waitUntilRunning(timeout: TimeInterval = 5,
+                          file: StaticString = #filePath, line: UInt = #line) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !isRunning {
+            guard Date() < deadline else {
+                XCTFail("等了 \(timeout) 秒，注入的 preflight 一次都没被调用。"
+                        + "下一步：确认 recheckPermission 真的会去跑 preflight。",
+                        file: file, line: line)
+                return
+            }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+    }
+}
+
 @MainActor
 final class AppStateTests: XCTestCase {
     private var directory: DataDirectory!
@@ -75,6 +118,78 @@ final class AppStateTests: XCTestCase {
         await app.recheckPermission()
 
         XCTAssertEqual(spy.calls, 2, "用户点了「重新检查」就必须真的再查一次")
+    }
+
+    // MARK: - 重查的那十秒里，界面必须一直在说话
+
+    /// **这条是问题 3 的判据。**
+    ///
+    /// `recheckPermission()` 里的 `isCheckingPermission = true` 是「用户点了『重新检查』
+    /// 期间界面有反馈」的唯一实现：`RootRouter` 靠它切到「正在检查运行环境…」那一屏。
+    /// 复审实测把这一行删掉，245 条全绿——首次检查那条路径有测试（初值就是 true），
+    /// 重查这条没有。删掉之后，用户点完按钮要对着一动不动的授权页等最多十秒，且零反馈。
+    ///
+    /// 所以这里把 preflight 卡在半路，趁它还在跑的时候去看界面该显示哪一屏。
+    func testRecheckSaysItIsCheckingWhileThePreflightIsStillRunning() async {
+        let gate = GatedPreflight(BridgeReadiness(ok: false, messages: [
+            "❌ 没有辅助功能权限，无法驱动 ChatGPT。下一步：系统设置 › 隐私与安全性 › 辅助功能…"
+        ]))
+        let app = AppState(directory: directory, preflight: { gate.run() })
+
+        gate.letItFinish()                       // 首次检查不卡
+        await app.startInitialPermissionCheckIfNeeded()
+        XCTAssertFalse(app.isCheckingPermission, "首次检查跑完了却还说在检查")
+
+        let recheck = Task { await app.recheckPermission() }
+        await gate.waitUntilRunning()             // 这一次卡住，模拟真实的那十秒
+
+        XCTAssertTrue(app.isCheckingPermission,
+                      "重查已经在跑了，AppState 却说没在检查。"
+                          + "下一步：确认 `recheckPermission` 那条路径上还有没有 "
+                          + "`isCheckingPermission = true`。")
+        XCTAssertEqual(
+            RootRouter.screen(isCheckingPermission: app.isCheckingPermission,
+                              permission: app.permission, permissionSkipped: false),
+            .checkingEnvironment,
+            "重查的这十秒里路由一路返回权限页：用户点完「重新检查」，"
+                + "屏幕上一个像素都不会变，只能对着授权页干等。")
+
+        gate.letItFinish()
+        await recheck.value
+        XCTAssertFalse(app.isCheckingPermission, "查完了还挂着「正在检查」，界面会一直转圈")
+    }
+
+    // MARK: - 「重新检查」按下去必须有反馈
+
+    /// 重查结论和上一次一样时，`permission` 和 `permissionMessages` 都不变，页面别处
+    /// 一个像素都不会变。这个计数是那句「已重新检查，仍未通过」唯一的触发条件。
+    func testEachRecheckIsCountedSoThePageCanSayItAlreadyChecked() async throws {
+        let app = appOverFakeChatGPT(installed: true, trusted: false)
+
+        await app.startInitialPermissionCheckIfNeeded()
+        XCTAssertEqual(app.recheckAttempts, 0,
+                       "开机第一次自动检查被算成了「用户点的重新检查」——"
+                           + "用户会在开机第一眼看到「已重新检查，仍未通过」，"
+                           + "那是在回答一个他还没问的问题")
+        XCTAssertNil(PermissionStatus.recheckNotice(completedAttempts: app.recheckAttempts,
+                                                    state: app.permission,
+                                                    host: .app(name: "IELTS Speaking Coach")))
+
+        await app.recheckPermission()
+        XCTAssertEqual(app.recheckAttempts, 1, "用户点了「重新检查」，这一次没被记下来")
+
+        // 结论一模一样：state / messages 都没变，页面上唯一会变的就是这句话。
+        XCTAssertEqual(app.permission, .needsAccessibility)
+        let notice = try XCTUnwrap(
+            PermissionStatus.recheckNotice(completedAttempts: app.recheckAttempts,
+                                           state: app.permission,
+                                           host: .app(name: "IELTS Speaking Coach")),
+            "重查完了，页面还是一个字都不说，用户分不清是「查过了还是不行」还是「按钮坏了」")
+        XCTAssertTrue(notice.text.contains("已重新检查"), notice.text)
+
+        await app.recheckPermission()
+        XCTAssertEqual(app.recheckAttempts, 2, "连按两次，第二次没被记下来——文案一字不变，"
+                       + "第二次又回到「按钮是不是坏了」")
     }
 
     // MARK: - preflight 说了什么，界面就得看到什么
