@@ -13,10 +13,39 @@ public struct LearnerProfile: Codable, Equatable, Sendable {
 public struct CoachSettings: Codable, Equatable, Sendable {
     public var recordingEnabled: Bool
     public var recordingConsentAt: String
+    /// 「记录对话逐字稿」。ROADMAP 第 5 节：开 / 关，**默认开**。
+    ///
+    /// 与录音开关的区别，别把两者混为一谈：
+    /// 逐字稿只多采集 AX 树，没有隐私成本、不需要任何系统权限，且是复盘质量与
+    /// 训练记录的共同基础；录音要麦克风权限、要磁盘，所以默认关、且需要明确同意。
+    public var transcriptEnabled: Bool
+
+    public static let defaultTranscriptEnabled = true
 
     // 合成的 memberwise init 是 internal 的，App target 与 MCP target 构造不了。
-    public init(recordingEnabled: Bool, recordingConsentAt: String) {
-        self.recordingEnabled = recordingEnabled; self.recordingConsentAt = recordingConsentAt
+    // transcriptEnabled 给默认值，既有调用点（CoachState.empty、各处测试）不用改。
+    public init(recordingEnabled: Bool, recordingConsentAt: String,
+                transcriptEnabled: Bool = CoachSettings.defaultTranscriptEnabled) {
+        self.recordingEnabled = recordingEnabled
+        self.recordingConsentAt = recordingConsentAt
+        self.transcriptEnabled = transcriptEnabled
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case recordingEnabled, recordingConsentAt, transcriptEnabled
+    }
+
+    /// 手写解码：transcriptEnabled 是 Phase 4 才加的字段，老的 state.json 里没有它。
+    /// 合成的解码器遇到缺键会直接抛错，等于「升级一次版本，全部训练数据读不出来」。
+    /// 与 `CoachState.init(from:)` 的容错策略一致。
+    ///
+    /// 编码仍由 Swift 合成——只手写 Decodable 那一半时，Encodable 的合成不受影响。
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        recordingEnabled = try container.decodeIfPresent(Bool.self, forKey: .recordingEnabled) ?? false
+        recordingConsentAt = try container.decodeIfPresent(String.self, forKey: .recordingConsentAt) ?? ""
+        transcriptEnabled = try container.decodeIfPresent(Bool.self, forKey: .transcriptEnabled)
+            ?? CoachSettings.defaultTranscriptEnabled
     }
 }
 
