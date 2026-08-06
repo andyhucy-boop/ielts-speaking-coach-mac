@@ -85,9 +85,10 @@ public enum PendingReviewRowBuilder {
 ///
 /// 两件必须做对的事：
 ///
-/// 1. **导入成功后必须打 `.imported` 标记。** `ReviewArchiver` 对「同一 session 重复归档」
-///    只在 `sourceSessionIds` 上去重，`IssueRecord.occurrences` 会跟着重复调用继续累加。
-///    不打标记的话，用户手一抖点两次，「这句话说错了几次」就悄悄失真了。
+/// 1. **导入成功后必须打 `.imported` 标记。** 不打的话，一份已经入库的复盘会一直赖在
+///    收件箱里，用户分不清哪些还没处理、哪些早就处理完了。
+///    （数字本身不会因此失真：`ReviewArchiver.mergeIssues` 按 sessionID 去重，
+///    同一场归档多少次，`occurrences` 都一样——那道保险在归档那一层，不在这里。）
 /// 2. **失败时一个字都不许动那个文件。** 解析不了、归档失败，都要让它原样留在待处理列表里——
 ///    它是用户练了半小时换来的东西，删了就再也没有第二份。
 @MainActor
@@ -200,8 +201,8 @@ public final class PendingReviewViewModel {
         // 打标记必须在归档成功之后。归档失败还打了标记，用户就再也点不到它了。
         //
         // **从这里往后，任何失败都不许再说「再点一次「重新导入」」。** 归档已经做完了，
-        // 再导一次，同一句错题的 `IssueRecord.occurrences` 会再加一遍
-        // （`ReviewArchiver.mergeIssues` 每次命中都 +1），而这正是决策 2 要防的静默失真。
+        // 再导一次什么也补不上，只会在打标记那一步再失败一次——真正要做的是把撞上的
+        // 那个文件名腾出来（`PendingReviewStore.markImported` 抛出的那句话说的就是这件事）。
         do {
             try PendingReviewStore.markImported(row.entry)
         } catch {

@@ -34,6 +34,11 @@ public struct IssueRecord: Codable, Equatable, Sendable, Identifiable {
     public var learnerSaid: String
     public var correction: String
     public var whyItMatters: String
+    /// **「在几场练习里犯过这个毛病」**，恒等于 `sourceSessionIds.count`。
+    ///
+    /// 不是「一共说错了几次」：那个数没有可去重的键，同一场复盘补录一次就永久虚高，
+    /// 而这个数字正是「老毛病在变多还是变少」的全部依据——虚高比不显示更糟。
+    /// 维护它的是 `ReviewArchiver.mergeIssues`（按 sessionID 去重）。
     public var occurrences: Int
     public var sourceSessionIds: [String]
     public var lastSeenAt: String
@@ -43,6 +48,38 @@ public struct IssueRecord: Codable, Equatable, Sendable, Identifiable {
         self.id = id; self.learnerSaid = learnerSaid; self.correction = correction
         self.whyItMatters = whyItMatters; self.occurrences = occurrences
         self.sourceSessionIds = sourceSessionIds; self.lastSeenAt = lastSeenAt
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, learnerSaid, correction, whyItMatters, occurrences, sourceSessionIds, lastSeenAt
+    }
+
+    /// 手写解码：**老档案里虚高的 `occurrences` 在读盘这一刻就修回来**，
+    /// 用户不需要做任何事，也不需要一次性的迁移脚本。
+    ///
+    /// 修好之前的 `ReviewArchiver` 每次命中都 `+= 1`、只在 `sourceSessionIds` 上去重，
+    /// 所以同一场复盘被归档两次（`markImported` 改名失败后重来、手工去掉 `.imported`
+    /// 后缀、界面与 `coach reimport` 各导一次）会让这个数字比真实场次多，
+    /// 而 `sourceSessionIds` 是干净的——恒等式 `occurrences == sourceSessionIds.count`
+    /// 因此能唯一地把它算回来。
+    ///
+    /// `sourceSessionIds` 为空时**不动**：那种档案（手工编辑过、或上游写出来的）
+    /// 算回来会变成 0，等于把一条真实存在的错题说成「一次都没犯过」，
+    /// 比留着一个偏大的数更糟。
+    ///
+    /// 编码仍由 Swift 合成——只手写 Decodable 那一半时不影响 Encodable 的合成
+    /// （与 `CoachSettings` 一致）。
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        learnerSaid = try c.decode(String.self, forKey: .learnerSaid)
+        correction = try c.decode(String.self, forKey: .correction)
+        whyItMatters = try c.decode(String.self, forKey: .whyItMatters)
+        sourceSessionIds = try c.decode([String].self, forKey: .sourceSessionIds)
+        lastSeenAt = try c.decode(String.self, forKey: .lastSeenAt)
+
+        let stored = try c.decode(Int.self, forKey: .occurrences)
+        occurrences = sourceSessionIds.isEmpty ? stored : sourceSessionIds.count
     }
 }
 

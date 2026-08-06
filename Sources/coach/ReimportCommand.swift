@@ -13,16 +13,16 @@ enum ReimportCommand {
     ///
     /// - 不删：用户可能想再打开看当时 ChatGPT 到底写了什么，pending-reviews 目录
     ///   本来就是给人回溯用的。
-    /// - 不能原样保留（不打标记）：`ReviewArchiver` 对「同一 session 重复归档」只在
-    ///   `sourceSessionIds` 上去重，`IssueRecord.occurrences` 依然会跟着重复调用继续
-    ///   累加（`ReviewArchiverTests.testDoesNotDuplicateSessionIDWhenArchivedTwice` 只
-    ///   断言了 count 和 sourceSessionIds，没有断言 occurrences 不变——这不是本命令的bug，
-    ///   是 ReviewArchiver 既有行为，本命令必须绕开它而不是指望它防重）。这里的
-    ///   sessionID 取自文件名，同一个文件反复跑 `coach reimport` 会得到完全相同的
-    ///   sessionID，如果不做标记，反复执行会让「这句话学员说错了几次」这类统计数字
-    ///   悄悄失真，且没有任何提示——这正是本次要修的那类「静默错误」，不能在新命令里
-    ///   重新引入一个。加后缀能保证同一份复盘只真正入库一次：扫描只认 `.txt`，
+    /// - 不能原样保留（不打标记）：这里的 sessionID 取自文件名，同一个文件反复跑
+    ///   `coach reimport` 会得到完全相同的 sessionID，不做标记的话每次运行都会把
+    ///   全部历史复盘重新过一遍，输出里的「新增 N 条」也就再也读不懂了。
+    ///   加后缀能保证同一份复盘只真正处理一次：扫描只认 `.txt`，
     ///   打上后缀的文件不会被扫到，但原文一字不改地留在磁盘上。
+    ///
+    ///   数字本身不靠这道标记兜底：`ReviewArchiver.mergeIssues` 按 sessionID 去重，
+    ///   同一场归档多少次，`IssueRecord.occurrences` 都一样
+    ///   （`ReviewArchiverTests.testArchivingTheSameSessionTwiceDoesNotInflateOccurrences`）。
+    ///   两道防线各管各的，不能互相顶替——标记这一步自己就会失败（改名撞名）。
     private static let importedSuffix = ".imported"
 
     static func run() -> Int32 {

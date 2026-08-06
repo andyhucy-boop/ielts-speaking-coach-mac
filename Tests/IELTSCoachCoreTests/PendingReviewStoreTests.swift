@@ -65,8 +65,8 @@ final class PendingReviewStoreTests: XCTestCase {
                        "已经入库的那份原文一个字都不能被动")
 
         // write 交出来的路径，必须保证它的 .imported 孪生名也是空的。否则归档做完了、
-        // markImported 却因为目标已存在而失败，文件留在待处理列表里，用户再点一次
-        // 导入就再归档一次，IssueRecord.occurrences 会一次次累加。
+        // markImported 却因为目标已存在而失败，文件永远从待处理列表里下不去，
+        // 用户每点一次「重新导入」都在同一个地方失败一次。
         let secondEntry = try XCTUnwrap(
             try PendingReviewStore.list(directory: directory)
                 .first { $0.fileName == second.lastPathComponent })
@@ -192,7 +192,7 @@ final class PendingReviewStoreTests: XCTestCase {
         // 手工往 pending-reviews 里放文件是允许的（`coach reimport` 就是这么用的），
         // 所以「`<id>.txt` 和 `<id>.txt.imported` 同时存在」没法从源头彻底杜绝。
         // 撞上了要说人话：归档发生在标记之前，此刻档案已经写完了，
-        // 用户再点一次导入就再归档一次，IssueRecord.occurrences 会重复累加。
+        // 用户再点一次导入什么也补不上，只会在同一个地方再失败一次。
         _ = try PendingReviewStore.write(rawText: "原文", sessionID: "s1", directory: directory)
         let entry = try XCTUnwrap(try PendingReviewStore.list(directory: directory).first)
         try FileManager.default.copyItem(
@@ -206,7 +206,8 @@ final class PendingReviewStoreTests: XCTestCase {
             let message = error.localizedDescription
             XCTAssertTrue(message.contains("下一步"), "要说清下一步做什么：\(message)")
             XCTAssertTrue(message.contains("s1.txt"), "要说清是哪个文件：\(message)")
-            XCTAssertTrue(message.contains("导入"), "要提醒别再导一次，否则出现次数会重复累加：\(message)")
+            XCTAssertTrue(message.contains("导入"),
+                          "要提醒别再导一次——归档已经做完，重导只会在同一处再失败：\(message)")
         }
         XCTAssertTrue(FileManager.default.fileExists(atPath: entry.url.path),
                       "标记失败也不能把原文弄丢")

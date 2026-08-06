@@ -56,6 +56,19 @@ public enum ReviewArchiver {
     // MARK: - 错题：按 learner_said 归并并累加出现次数
 
     /// 返回本次实际归并（新增或命中已有记录）的条数。
+    ///
+    /// **幂等：去重键是 `sessionID`。** 同一场练习的复盘归档多少次，
+    /// `occurrences` / `sourceSessionIds` / `lastSeenAt` 都保持第一次的结果。
+    /// 这条路走得到：`markImported` 改名失败时归档已经做完、文件却还留在待处理列表里；
+    /// 用户手工去掉 `.imported` 后缀重来；界面那条路和 `coach reimport` 各导一次。
+    /// 靠「打标记」防重是不够的——标记那一步本身就会失败。
+    ///
+    /// 于是 `occurrences` 的含义被钉死为**「在几场练习里犯过这个毛病」**，
+    /// 恒等于 `sourceSessionIds.count`（同一份复盘里两条一模一样的 `learner_said`
+    /// 只算一场）。要问的问题本来就是「这个毛病在变多还是变少」，
+    /// 而能可靠回答它的只有场次；「一共说错了几次」没有可去重的键，
+    /// 重导一次就永久虚高，比不显示更糟。
+    /// 老档案里已经虚高的数字由 `IssueRecord.init(from:)` 在读盘时按这个恒等式修回来。
     @discardableResult
     private static func mergeIssues(from report: JSONValue, into state: inout CoachState,
                                     sessionID: String, at timestamp: String) -> Int {
@@ -69,11 +82,14 @@ public enum ReviewArchiver {
             if let index = state.issues.firstIndex(where: {
                 $0.learnerSaid.trimmingCharacters(in: .whitespacesAndNewlines) == said
             }) {
-                state.issues[index].occurrences += 1
+                // 这一场已经记过这条错题了 → 一个字段都不许再动。
+                // `lastSeenAt` 也在里面：s1 那一场发生在什么时候是固定的，
+                // 补录一次不该把它说成刚刚才犯过（更糟的是把一个更晚的 s2 覆盖回去）。
                 if !state.issues[index].sourceSessionIds.contains(sessionID) {
+                    state.issues[index].occurrences += 1
                     state.issues[index].sourceSessionIds.append(sessionID)
+                    state.issues[index].lastSeenAt = timestamp
                 }
-                state.issues[index].lastSeenAt = timestamp
             } else {
                 state.issues.append(IssueRecord(
                     id: "issue-\(state.issues.count + 1)-\(sessionID)",

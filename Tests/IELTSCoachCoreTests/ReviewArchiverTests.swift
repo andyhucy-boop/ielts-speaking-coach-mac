@@ -42,6 +42,49 @@ final class ReviewArchiverTests: XCTestCase {
         XCTAssertEqual(state.issues[0].lastSeenAt, "t2")
     }
 
+    /// **同一场练习的复盘归档两次，「出现次数」不许变成 2。**
+    ///
+    /// 这条路走得到：`markImported` 改名失败（`.imported` 那个名字被占）时归档已经做完、
+    /// 文件却还在待处理列表里；用户手工去掉 `.imported` 后缀重来；界面那条路和
+    /// `coach reimport` 各导一次。`occurrences` 是「这个毛病在变多还是变少」的全部依据，
+    /// 虚高的后果不是显示错一个数——是用户以为老毛病越来越严重，而他其实正在变好。
+    func testArchivingTheSameSessionTwiceDoesNotInflateOccurrences() {
+        var state = ReviewArchiver.archive(report: report, into: baseState(),
+                                           sessionID: "s1", questionID: "q1", at: "t1").state
+        state = ReviewArchiver.archive(report: report, into: state,
+                                       sessionID: "s1", questionID: "q1", at: "t2").state
+        XCTAssertEqual(state.issues[0].occurrences, 1, "同一场归档两次，出现次数被加了两遍")
+        // 「最后一次见到」同样要幂等：s1 这一场发生在什么时候是固定的，
+        // 第二次归档只是补录，不该把它说成刚刚才犯过。
+        XCTAssertEqual(state.issues[0].lastSeenAt, "t1",
+                       "重复归档同一场，把「最后一次见到」改成了补录的时刻")
+    }
+
+    /// 归档过一次之后，**新的一场**里再犯同一个错，该加的还是要加——
+    /// 幂等不等于从此不再计数。没有这条的话，把 `occurrences += 1` 整段删掉
+    /// （永远停在 1）也能让上面那条绿。
+    func testANewSessionStillIncrementsOccurrences() {
+        var state = ReviewArchiver.archive(report: report, into: baseState(),
+                                           sessionID: "s1", questionID: "q1", at: "t1").state
+        state = ReviewArchiver.archive(report: report, into: state,
+                                       sessionID: "s1", questionID: "q1", at: "t2").state
+        state = ReviewArchiver.archive(report: report, into: state,
+                                       sessionID: "s2", questionID: "q1", at: "t3").state
+        XCTAssertEqual(state.issues[0].occurrences, 2)
+        XCTAssertEqual(state.issues[0].sourceSessionIds, ["s1", "s2"])
+        XCTAssertEqual(state.issues[0].lastSeenAt, "t3")
+    }
+
+    /// 幂等的完整含义：同一份复盘归档第二次，整个 state 一个字节都不该变。
+    /// 只盯着 `occurrences` 的话，别的字段偷偷变了照样看不出来。
+    func testArchivingTheSameReviewTwiceIsAWholeStateNoOp() {
+        let once = ReviewArchiver.archive(report: report, into: baseState(),
+                                          sessionID: "s1", questionID: "q1", at: "t1").state
+        let twice = ReviewArchiver.archive(report: report, into: once,
+                                           sessionID: "s1", questionID: "q1", at: "t2").state
+        XCTAssertEqual(once, twice, "同一份复盘归档第二次改动了训练档案")
+    }
+
     func testDoesNotDuplicateSessionIDWhenArchivedTwice() {
         var state = ReviewArchiver.archive(report: report, into: baseState(),
                                            sessionID: "s1", questionID: "q1", at: "t1").state

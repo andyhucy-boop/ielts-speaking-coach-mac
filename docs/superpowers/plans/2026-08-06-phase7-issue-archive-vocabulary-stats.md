@@ -862,7 +862,9 @@ git commit -m "feat(core): 会话时间轴与趋势窗口划分"
 
 窗口：`recent` = 最近 `windowSize` 场，`earlier` = 再往前 `windowSize` 场（可能不足）。
 
-`hits` 的含义是**「在窗口里的多少场练习中出现过」**，用 `sourceSessionIds` 与窗口取交集算，**不是** `occurrences`。理由：`ReviewArchiver.mergeIssues` 在同一份复盘里出现两次同样的错时会 `occurrences += 2`，但 `sourceSessionIds` 只记一次。要问的问题是「几场练习里犯了这个毛病」，不是「一共犯了几次」。
+`hits` 的含义是**「在窗口里的多少场练习中出现过」**，用 `sourceSessionIds` 与窗口取交集算，**不是** `occurrences`：要问的问题是「几场练习里犯了这个毛病」，不是「一共犯了几次」，而窗口交集是唯一能回答前者的算法。
+
+> **注（Phase 4 之后的修正）**：`ReviewArchiver.mergeIssues` 已改成按 sessionID 去重（幂等），`IssueRecord.occurrences` 现在恒等于 `sourceSessionIds.count`。本文早先那句「同一份复盘里出现两次同样的错时会 `occurrences += 2`」已经不成立。`hits` 用窗口交集算这条结论不变（`occurrences` 是不分窗口的总数），但不要再拿「两者可能对不上」当理由。
 
 | 判定顺序 | 条件 | 结果 |
 |---|---|---|

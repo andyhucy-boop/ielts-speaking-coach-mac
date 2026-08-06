@@ -19,9 +19,10 @@ private let fixedNow = ISO8601DateFormatter().date(from: "2026-08-06T12:00:00Z")
 ///
 /// 这一层必须做对的两件事，也是下面两节分别守的：
 ///
-/// 1. **导入成功后必须打 `.imported` 标记。** `ReviewArchiver` 对「同一 session 重复归档」
-///    只在 `sourceSessionIds` 上去重，`IssueRecord.occurrences` 会跟着重复调用继续累加。
-///    不打标记的话，用户手一抖点两次，「这句话说错了几次」就悄悄失真了。
+/// 1. **导入成功后必须打 `.imported` 标记。** 不打的话，一份已经入库的复盘会一直赖在
+///    收件箱里，用户分不清哪些还没处理、哪些早就处理完了。
+///    （数字本身不靠这道标记兜底：`ReviewArchiver.mergeIssues` 按 sessionID 去重，
+///    见本文件的 `testFollowingTheRetryInstructionDoesNotInflateOccurrences`。）
 /// 2. **失败时一个字都不许动那个文件。** 它是用户练了半小时换来的东西。
 @MainActor
 final class PendingReviewViewModelTests: XCTestCase {
@@ -222,8 +223,8 @@ final class PendingReviewViewModelTests: XCTestCase {
                        "多写了一个没人引用的 reports/<id>-2.json")
     }
 
-    /// **本任务最重要的一条。** 不打 .imported 标记的话，用户手一抖点两次，
-    /// `IssueRecord.occurrences` 就悄悄多加了一次，「这句话说错了几次」永久失真。
+    /// 导进去的那一份必须从收件箱里消失，否则用户永远分不清哪些还没处理。
+    /// 原文本身要留着（改名不删除）——他可能想回头看当时 ChatGPT 到底写了什么。
     func testAnImportedFileIsMarkedSoItCannotBeImportedTwice() throws {
         try seedSession("2026-08-06-001")
         _ = try PendingReviewStore.write(rawText: Self.goodReview, sessionID: "2026-08-06-001",
@@ -292,13 +293,13 @@ final class PendingReviewViewModelTests: XCTestCase {
     /// 这两种失败的「下一步」正好相反，混成一句话就会出人命：
     ///
     /// - 入库失败 → 档案纹丝不动，要再点一次「重新导入」；
-    /// - `markImported` 失败 → **归档已经做完了**，再导一次会让同一句错题的
-    ///   `IssueRecord.occurrences` 再加一遍（`ReviewArchiver.mergeIssues` 每次都 +1），
-    ///   而这正是本任务「必须做对的事」第 1 条要防的静默失真。
+    /// - `markImported` 失败 → **归档已经做完了**，再导一次什么也补不上，
+    ///   只会在打标记那一步再失败一次；真正要做的是把撞上的那个文件名腾出来。
     ///
     /// `PendingReviewStore.markImported` 为此专门写了「先别再点一次导入」。
     /// 把它当成 `error.localizedDescription` 拼进一句「下一步：…再点一次「重新导入」」里，
-    /// 用户读到的最后一句话，教他做的恰恰是前一句明令禁止的事。
+    /// 用户读到的最后一句话，教他做的恰恰是前一句明令禁止的事——而且照做也修不好，
+    /// 他会在原地打转，那份复盘永远从收件箱里下不去。
     func testAMarkFailureNeverTellsThemToImportAgain() throws {
         try seedSession("2026-08-06-001")
         _ = try PendingReviewStore.write(rawText: Self.goodReview, sessionID: "2026-08-06-001",
@@ -319,8 +320,8 @@ final class PendingReviewViewModelTests: XCTestCase {
 
         let notice = try XCTUnwrap(model.notice, "打标记失败必须说话，不许静默（铁律 7）")
         XCTAssertTrue(notice.contains("先别再点一次导入"),
-                      "这句话没把「别再导一次」说出来。用户再点一次，"
-                          + "同一句错题的「出现次数」就永久多了一次：\(notice)")
+                      "这句话没把「别再导一次」说出来。用户会在同一个地方反复失败，"
+                          + "而真正要做的（把撞上的文件名腾出来）没人告诉他：\(notice)")
         XCTAssertFalse(notice.contains("再点一次「重新导入」"),
                        "这句话末尾教用户去做前半句明令禁止的事——「出现次数」会当场失真：\(notice)")
         XCTAssertFalse(notice.contains("解析成功了，但入库时出错"),
@@ -329,6 +330,70 @@ final class PendingReviewViewModelTests: XCTestCase {
         XCTAssertEqual(try pendingFileNames(),
                        ["2026-08-06-001.txt", "2026-08-06-001.txt.imported"],
                        "改名失败了，两个文件应该原样都在")
+    }
+
+    /// **成功文案里那句「把 .imported 后缀去掉，它就会重新出现在这个列表里」，
+    /// 照着做一遍必须是安全的。**
+    ///
+    /// 这条走的是「混合 skip」：must_correct 归进去了、vocabulary 因为形状不对一条没进，
+    /// 于是文案会附上那句「等本工具认得这种字段名之后想重来的话……」。
+    /// 用户照做时，已经归进档案的那条错题会被再归一次——`ReviewArchiver.mergeIssues`
+    /// 从前每次命中都 `+= 1`，「这句话说错了几次」就当场虚高，而虚高比不显示更糟：
+    /// 用户会以为老毛病越来越严重，其实他可能正在变好。
+    ///
+    /// 现在 `mergeIssues` 按 sessionID 去重（幂等），这句指示才兑现得了。
+    /// 哪天幂等被改回去，这条会红——那句话届时就是在教用户毁掉自己的数据。
+    func testFollowingTheRetryInstructionDoesNotInflateOccurrences() throws {
+        // vocabulary 是个对象而不是数组（真机实测过的形状），所以它会进 skipped；
+        // must_correct 是好的，照常归档——「混合 skip」的前提就在这里。
+        let mixed = #"""
+        <<<IELTS_REVIEW_JSON:x>>>
+        {"must_correct":[{"learner_said":"I very like it.","correction":"I really like it.",
+        "why_it_matters":"very 不能修饰动词"}],
+        "vocabulary":{"useful_replacements":["decent"],"pronunciation":"n/a"}}
+        <<<END_IELTS_REVIEW_JSON:x>>>
+        """#
+        try seedSession("2026-08-06-001")
+        _ = try PendingReviewStore.write(rawText: mixed, sessionID: "2026-08-06-001",
+                                         directory: directory)
+        let model = self.model()
+        model.refresh()
+        model.reimport(try XCTUnwrap(model.rows.first))
+
+        XCTAssertEqual(try store.load().issues.first?.occurrences, 1, "这条测试的前提：第一次归档成功")
+        let firstNotice = try XCTUnwrap(model.notice)
+        XCTAssertTrue(firstNotice.contains("把 .imported 后缀去掉"),
+                      "这条测试要验的正是这句指示，它没出现就说明前提没成立：\(firstNotice)")
+
+        // 照着那句话做：把 .imported 后缀去掉。
+        let pendingDirectory = directory.pendingReviewsDirectory
+        try FileManager.default.moveItem(
+            at: pendingDirectory.appending(path: "2026-08-06-001.txt.imported"),
+            to: pendingDirectory.appending(path: "2026-08-06-001.txt"))
+        model.refresh()
+        let reappeared = try XCTUnwrap(model.rows.first,
+                                       "文案说它会重新出现在这个列表里，结果没有——这句话就是假的")
+        model.reimport(reappeared)
+
+        let saved = try store.load()
+        XCTAssertEqual(saved.issues.count, 1, "重来一次多造了一条一模一样的错题记录")
+        XCTAssertEqual(saved.issues.first?.occurrences, 1,
+                       "照着成功文案里那句话做了一遍，「出现次数」就多了一次——"
+                           + "用户会以为老毛病在变严重，而他其实可能正在变好")
+        // **必须直接读盘上的原始数字。** `store.load()` 会经过
+        // `IssueRecord.init(from:)` 的读时修复，虚高的数字在那一步就被算回来了——
+        // 只查 `load()` 的话，归档那一层的幂等被改回去也照样绿（实测过）。
+        // 两道防线要各自被独立地钉住。
+        XCTAssertEqual(try occurrencesWrittenToDisk(), 1,
+                       "落到 state.json 里的就是个虚高的数字，只是被读时修复盖住了")
+    }
+
+    /// 绕过 `StateStore.load()`（连同它的读时修复），直接看 state.json 里写的是几。
+    private func occurrencesWrittenToDisk() throws -> Int {
+        let data = try Data(contentsOf: directory.stateFile)
+        let root = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let issues = try XCTUnwrap(root["issues"] as? [[String: Any]])
+        return try XCTUnwrap(issues.first?["occurrences"] as? Int)
     }
 
     /// 归档 0 条不等于没错题——更可能是字段名对不上（spec 2.3.8）。

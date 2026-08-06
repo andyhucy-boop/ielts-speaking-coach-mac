@@ -26,7 +26,11 @@ public struct PendingReviewEntry: Equatable, Sendable, Identifiable {
 public enum PendingReviewStore {
     /// 成功入库后给文件追加的后缀。**与 `coach reimport` 的约定必须一致**
     /// （见 `Sources/coach/ReimportCommand.swift`），否则界面里导入过的文件，
-    /// 命令行会再导一遍，而 `IssueRecord.occurrences` 会跟着重复累加、悄悄失真。
+    /// 命令行会再导一遍，用户会在收件箱里反复看到同一份已经处理完的复盘。
+    ///
+    /// 它**不是**「出现次数不会虚高」的那道保险——那道保险在 `ReviewArchiver.mergeIssues`
+    /// 里，按 sessionID 去重，同一场归档多少次结果都一样。这里只是让收件箱干净。
+    /// 两道防线不能互相顶替：标记这一步自己就会失败（改名撞名，见 `markImported`）。
     public static let importedSuffix = ".imported"
 
     /// 同名文件已存在时的行为：
@@ -39,9 +43,8 @@ public enum PendingReviewStore {
     /// 下一次 `SessionID.next` 取「当天已有编号的最大值 +1」会算出同一个编号。
     /// 此时 `<id>.txt` 确实不在了，光看它在不在就会把这个用过的名字再发一次；
     /// 等归档做完、`markImported` 撞上已存在的 `<id>.txt.imported` 抛错，文件就
-    /// 留在了待处理列表里——用户再点一次导入就再归档一次，
-    /// 而 `ReviewArchiver` 只在 `sourceSessionIds` 上去重，`IssueRecord.occurrences`
-    /// 会跟着一次次累加，且没有任何提示。这正是决策 2 要防的那种静默失真。
+    /// 留在了待处理列表里——用户对着一份其实已经入库的复盘反复点「重新导入」，
+    /// 每次都失败在同一个地方，而两份不同的原文挤在同一个编号下也再分不开。
     @discardableResult
     public static func write(rawText: String, sessionID: String,
                              directory: DataDirectory) throws -> URL {
@@ -129,8 +132,11 @@ public enum PendingReviewStore {
     /// 但用户手工往 `pending-reviews/` 里放文件是允许的（`coach reimport` 就是这么用的），
     /// 所以撞名这件事没法从源头彻底杜绝。而这一步失败的后果比一般的改名失败重：
     /// 归档发生在标记之前，此刻档案已经写完，文件却还留在待处理列表里，
-    /// 用户再点一次导入就再归档一次，`IssueRecord.occurrences` 会重复累加。
-    /// 提示里必须把「别再导一次」说出来（`coach reimport` 同一情形下的警告也是这么写的）。
+    /// 用户会以为整件事没成、照着「再点一次」去做，然后在同一个地方再失败一次。
+    /// （档案本身不会因此失真——`ReviewArchiver.mergeIssues` 按 sessionID 去重，
+    /// 同一场归多少次都一样——但重导解决不了这个问题，得先把名字腾出来。）
+    /// 提示里必须把「别再导一次」和「去挪名字」都说出来
+    /// （`coach reimport` 同一情形下的警告也是这么写的）。
     @discardableResult
     public static func markImported(_ entry: PendingReviewEntry) throws -> URL {
         let target = importedTwin(of: entry.url)
@@ -141,7 +147,7 @@ public enum PendingReviewStore {
                 "「\(entry.fileName)」的内容已经归进档案，但要把它标记为已入库（改名成"
                 + "「\(target.lastPathComponent)」）时失败了：\(error.localizedDescription) "
                 + "最常见的原因是这个名字已经被占。"
-                + "下一步：先别再点一次导入——归档已经做完，再导一次会让错题的「出现次数」重复累加；"
+                + "下一步：先别再点一次导入——归档已经做完了，再导一次只会卡在同一个名字上；"
                 + "到 \(entry.url.deletingLastPathComponent().path) 把这个编号下不需要的那份"
                 + "删掉或改个别的名字，再回来刷新列表。")
         }
