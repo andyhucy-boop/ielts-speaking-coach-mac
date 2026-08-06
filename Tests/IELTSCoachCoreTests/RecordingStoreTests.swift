@@ -58,6 +58,19 @@ final class RecordingStoreTests: XCTestCase {
 
     // MARK: - 路径安全
 
+    /// `relativePath(fileName:)` 是 `recordings/` 前缀契约的「写」侧，
+    /// `url(forRelativePath:)` 是「读」侧的校验。两侧一旦对不上，
+    /// Task 7 写进 state.json 的每一个 recordingPath 都会被自己的校验函数当成非法路径拒掉，
+    /// 结果是所有录音既播不了也删不掉。所以这里不只断言字面量，
+    /// 还要走一遍往返：写出来的路径必须是读那边认的路径。
+    func testRelativePathIsExactlyWhatTheReadSideAccepts() throws {
+        XCTAssertEqual(store.relativePath(fileName: "a.m4a"), "recordings/a.m4a")
+
+        let written = store.relativePath(fileName: "2026-08-06T10-45-30Z.m4a")
+        let url = try store.url(forRelativePath: written)
+        XCTAssertEqual(url.lastPathComponent, "2026-08-06T10-45-30Z.m4a")
+    }
+
     /// state.json 里的 recordingPath 是可以被手工改坏的。
     /// 一个 "recordings/../state.json" 就能让「删掉这条录音」删掉全部训练数据。
     func testRefusesPathsThatEscapeTheRecordingsDirectory() {
@@ -70,7 +83,9 @@ final class RecordingStoreTests: XCTestCase {
 
     func testRefusesPathsOutsideTheRecordingsPrefix() {
         for evil in ["state.json", "/etc/passwd", "reports/x.json", ""] {
-            XCTAssertThrowsError(try store.url(forRelativePath: evil), "\(evil) 应当被拒绝")
+            XCTAssertThrowsError(try store.url(forRelativePath: evil), "\(evil) 应当被拒绝") { error in
+                XCTAssertTrue("\(error)".contains("下一步"), "拒绝也要告诉用户下一步做什么")
+            }
         }
     }
 
