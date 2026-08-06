@@ -112,10 +112,18 @@ enum PracticeCommand {
             // ⚠️ 必须先落盘再解析。spec 第 5 节的原话是「复盘先落盘再入库，
             // 中途崩溃或误关窗口都不丢数据」。反过来写的话，解析一抛错，
             // 用户练了一整场换来的复盘原文就没了，只能从头再练一次。
-            let sessionID = ISO8601DateFormatter().string(from: Date())
+            // 决策 1：会话编号统一成 YYYY-MM-DD-NNN。旧的 ISO8601 编号仍然读得进来
+            //（SessionID.validated 白名单里留了冒号），但新产生的一律用新形状——
+            // 否则界面练的和命令行练的会是两种编号，统计与 MCP 都要各走一条路。
+            let existingSessions = (try? store.load())?.sessions ?? []
+            let sessionID = SessionID.next(existing: existingSessions, now: Date(),
+                                           timeZone: .current)
             try directory.createIfNeeded()
-            let pendingPath = directory.pendingReviewsDirectory.appending(path: "\(requestID).txt")
-            try raw.write(to: pendingPath, atomically: true, encoding: .utf8)
+            // 文件名用会话编号而不是 requestID：coach reimport 与界面里的
+            // 「重新导入待处理的复盘」都从文件名取 sessionID，用同一个值才能保证
+            // 「当场归档」和「事后补导」落进档案的编号一致。
+            let pendingPath = try PendingReviewStore.write(rawText: raw, sessionID: sessionID,
+                                                           directory: directory)
             print("▶︎ 复盘原文已存到 \(pendingPath.path)")
 
             let report: JSONValue
@@ -129,11 +137,49 @@ enum PracticeCommand {
                 return 1
             }
 
+            // 解析后的复盘写成 reports/<会话编号>.json，训练记录里的 reportPath 指向它。
+            // 存的是解析后的复盘本身，不是带定界标记的原文——原文归 pending-reviews/。
+            let reportFile = directory.reportsDirectory.appending(path: "\(sessionID).json")
+            do {
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes]
+                try encoder.encode(report).write(to: reportFile, options: .atomic)
+            } catch {
+                // 不许 try? 吞掉再往下走：吞掉之后训练记录里的 reportPath 会指向一个
+                // 根本不存在的文件，界面上的「复盘报告」页点开是一场空，而这里却打了个 ✅。
+                print("\n❌ 复盘解析出来了，但没能写成报告文件 \(reportFile.path)"
+                    + "（系统说：\(error.localizedDescription)）。")
+                print("   好消息是复盘原文一个字都没丢，就在 \(pendingPath.path)；"
+                    + "但这一场还没有归进档案，也还没有记进训练记录。")
+                print("   下一步：确认「\(directory.root.path)」这个目录存在且可写，"
+                    + "然后运行 coach reimport 把这份原文重新入库。")
+                return 1
+            }
+
             let outcome = try store.mutate { state -> ArchiveOutcome in
                 let result = ReviewArchiver.archive(report: report, into: state, sessionID: sessionID,
                                                     questionID: question.id,
                                                     at: ISO8601DateFormatter().string(from: Date()))
                 state = result.state
+
+                // Phase 4：命令行也要留下训练记录，否则界面上的「训练记录」页
+                // 看不到用命令行练的那些场次。字段与 PracticeRunner 落的那条保持一致，
+                // 也同样是按 id upsert 而不是无脑 append——同一个编号重存不该多出一条。
+                //
+                // ⚠️ startedAt 用的是归档这一刻，不是真正的开始时刻。命令行没有记录开始
+                // 时间的地方，而为此改造 PracticeCommand 的结构不值得（界面才是主路径）。
+                // 这个近似只影响「本周开口时长」这类统计对命令行场次的精度，别当成准的。
+                let timestamp = ISO8601DateFormatter().string(from: Date())
+                let session = PracticeSession(
+                    id: sessionID, questionId: question.id, focusPart: focusPart,
+                    startedAt: timestamp, endedAt: timestamp, goal: goal,
+                    transcript: [],                       // 命令行不采逐字稿
+                    reportPath: "reports/\(sessionID).json", recordingPath: "")
+                if let index = state.sessions.firstIndex(where: { $0.id == sessionID }) {
+                    state.sessions[index] = session
+                } else {
+                    state.sessions.append(session)
+                }
                 return result
             }
             let state = try store.load()
