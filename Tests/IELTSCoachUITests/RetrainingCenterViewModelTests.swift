@@ -53,6 +53,10 @@ final class RetrainingCenterViewModelTests: XCTestCase {
                        "退休的目标不能凭空消失——用户会以为记录丢了")
     }
 
+    /// 台账上的「已重答原题 N 次 / 已换题验证 N 次」是本阶段唯一露给用户的进度数字。
+    /// **两个次数必须故意拉开**（原题 1 次、换题 2 次）：两边都等于 1 的话，
+    /// 断言分辨不出标签接的是哪个数据源，接错了也不会红。
+    /// 断言用整串相等而不是 `contains`：`contains("1")` 连写死的常量都拦不住。
     func testStatusLabelReflectsProgress() {
         var state = CoachState.empty()
         state.targets = [target("k", session: "s0", evidence: [])]
@@ -62,14 +66,22 @@ final class RetrainingCenterViewModelTests: XCTestCase {
         state.questions = [question("q1")]
 
         let onlyOriginal = RetrainingCenterViewModel(state: state)
-        XCTAssertTrue(onlyOriginal.pending[0].statusLabel.contains("换题验证"),
-                      "只重练了原题时，必须提醒还差换题验证——这是本产品的价值所在")
+        XCTAssertEqual(onlyOriginal.pending[0].progress.stage, .retriedOriginal)
+        XCTAssertEqual(onlyOriginal.pending[0].progress.originalRetrySessionIDs.count, 1)
+        XCTAssertEqual(onlyOriginal.pending[0].statusLabel, "已重答原题 1 次，还差换题验证",
+                       "只重练了原题时，必须报出重答了几次并提醒还差换题验证——这是本产品的价值所在")
 
+        // s2、s3 都换了题：换题验证 2 次，而原题重答仍是 1 次。
         state.sessions.append(session("s2", question: "q9", link: l))
+        state.sessions.append(session("s3", question: "q8", link: l))
         let withTransfer = RetrainingCenterViewModel(state: state)
         XCTAssertEqual(withTransfer.pending[0].progress.stage, .triedTransfer)
-        XCTAssertTrue(withTransfer.pending[0].statusLabel.contains("1"),
-                      "换题验证做过几次要显示出来")
+        XCTAssertEqual(withTransfer.pending[0].progress.originalRetrySessionIDs.count, 1,
+                       "fixture 前提：原题重答 1 次")
+        XCTAssertEqual(withTransfer.pending[0].progress.transferSessionIDs.count, 2,
+                       "fixture 前提：换题验证 2 次——与原题次数不同，才分辨得出接错数据源")
+        XCTAssertEqual(withTransfer.pending[0].statusLabel, "已换题验证 2 次",
+                       "换题验证做过几次要显示出来；接成 originalRetrySessionIDs 会显示 1 次")
     }
 
     /// 计划里的八条测试没有一条走到 `.notStarted` 那个分支——把它改成空串仍然全绿。
