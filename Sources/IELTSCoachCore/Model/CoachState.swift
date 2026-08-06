@@ -19,23 +19,42 @@ public struct CoachSettings: Codable, Equatable, Sendable {
     /// 逐字稿只多采集 AX 树，没有隐私成本、不需要任何系统权限，且是复盘质量与
     /// 训练记录的共同基础；录音要麦克风权限、要磁盘，所以默认关、且需要明确同意。
     public var transcriptEnabled: Bool
+    /// 每周训练目标次数。ROADMAP 第 5 节：用户可配置，默认 5 次。**Phase 7 Task 1 加的。**
+    public var weeklyGoal: Int
 
     public static let defaultTranscriptEnabled = true
 
+    public static let defaultWeeklyGoal = 5
+    /// 上限 21 = 一天三场。给上限是为了让界面上的 Stepper 有边界，
+    /// 也挡住手滑输入的 999——「本周 3/999 次」这种显示毫无意义。
+    public static let weeklyGoalRange = 1...21
+
+    /// 越界或缺失一律回落到默认值，而不是抛错——
+    /// 一个坏掉的目标数字不该让用户整份训练数据读不出来。
+    public static func normalized(_ raw: Int?) -> Int {
+        guard let raw, weeklyGoalRange.contains(raw) else { return defaultWeeklyGoal }
+        return raw
+    }
+
     // 合成的 memberwise init 是 internal 的，App target 与 MCP target 构造不了。
-    // transcriptEnabled 给默认值，既有调用点（CoachState.empty、各处测试）不用改。
+    // transcriptEnabled / weeklyGoal 都给默认值，既有调用点（CoachState.empty、各处测试）不用改。
+    // **transcriptEnabled 保持在 weeklyGoal 前面，与 Phase 4 定下的位置一致**——
+    // 换位置会打断 Phase 4 已有的调用点；两个都有默认值，只传 weeklyGoal: 照样能编译。
     public init(recordingEnabled: Bool, recordingConsentAt: String,
-                transcriptEnabled: Bool = CoachSettings.defaultTranscriptEnabled) {
+                transcriptEnabled: Bool = CoachSettings.defaultTranscriptEnabled,
+                weeklyGoal: Int = CoachSettings.defaultWeeklyGoal) {
         self.recordingEnabled = recordingEnabled
         self.recordingConsentAt = recordingConsentAt
         self.transcriptEnabled = transcriptEnabled
+        self.weeklyGoal = CoachSettings.normalized(weeklyGoal)
     }
 
     enum CodingKeys: String, CodingKey {
-        case recordingEnabled, recordingConsentAt, transcriptEnabled
+        case recordingEnabled, recordingConsentAt, transcriptEnabled, weeklyGoal
     }
 
-    /// 手写解码：transcriptEnabled 是 Phase 4 才加的字段，老的 state.json 里没有它。
+    /// 手写解码：transcriptEnabled 是 Phase 4、weeklyGoal 是 Phase 7 才加的字段，
+    /// 老的 state.json 里没有它们。
     /// 合成的解码器遇到缺键会直接抛错，等于「升级一次版本，全部训练数据读不出来」。
     /// 与 `CoachState.init(from:)` 的容错策略一致。
     ///
@@ -44,8 +63,12 @@ public struct CoachSettings: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         recordingEnabled = try container.decodeIfPresent(Bool.self, forKey: .recordingEnabled) ?? false
         recordingConsentAt = try container.decodeIfPresent(String.self, forKey: .recordingConsentAt) ?? ""
+        // ↓ Phase 4 Task 2 的那一行，原样保留。删了它，用户关掉的逐字稿开关
+        //   会在下一次写盘时被默认值悄悄盖回「开」，而且没有任何报错。
         transcriptEnabled = try container.decodeIfPresent(Bool.self, forKey: .transcriptEnabled)
             ?? CoachSettings.defaultTranscriptEnabled
+        weeklyGoal = CoachSettings.normalized(
+            try container.decodeIfPresent(Int.self, forKey: .weeklyGoal))
     }
 }
 
