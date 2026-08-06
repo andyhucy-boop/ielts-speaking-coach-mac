@@ -56,6 +56,10 @@ public struct SessionTimeline: Equatable, Sendable {
 
         // 同一时刻的两场按 id 倒序，保证排序是确定的——不确定的排序会让
         // 同一份数据每次打开显示不同的趋势。
+        // 这个 tie-break 不是摆设：同一天多场、startedAt 全空时，上面的 parseDayPrefix
+        // 兜底会让它们拿到完全相同的 Date；去掉 tie-break，顺序就等于字典的遍历顺序，
+        // 而 Swift 的 String 哈希每个进程重新播种。实测去掉后
+        // testSessionsAtTheSameInstantGetAStableOrder 连跑 60 个进程 60 次全红。
         let ordered = timestamps
             .sorted { $0.value == $1.value ? $0.key > $1.key : $0.value > $1.value }
             .map(\.key)
@@ -67,21 +71,34 @@ public struct SessionTimeline: Equatable, Sendable {
 
     /// 界面必须显示这些警告。静默地把有问题的数据算进趋势，
     /// 等于给用户一个他无法核对的结论。
+    ///
+    /// **文案里不许把来源说窄。** `unmatchedSessionIDs` 来自 `issues`、`vocabulary`、
+    /// `targets` 三处，`undatedSessionIDs` 则同时装着「真有训练记录、但时间读不出来」
+    /// 和「只是档案里的一个引用、根本没有对应记录」两种 id。说窄了，用户会照着提示
+    /// 去翻一个根本不存在的东西，最后只会得出「数据坏了」——那不叫说清发生了什么。
     public var warnings: [String] {
         var result: [String] = []
         if !unmatchedSessionIDs.isEmpty {
+            let sample = unmatchedSessionIDs.prefix(3).joined(separator: "、")
             result.append(
-                "有 \(unmatchedSessionIDs.count) 次练习只在问题档案里留了记录，训练记录页看不到它们"
-                + "（多半是早期用命令行练的）。它们仍按时间算进趋势，所以趋势本身是对的。"
-                + "下一步：如果你在训练记录页找不到这几次，不用管这条提示；"
-                + "如果你觉得根本没练过，去数据目录里的 state.json 核对一下。")
+                "有 \(unmatchedSessionIDs.count) 次练习只在档案里留了记录，训练记录页看不到它们"
+                + "（多半是早期用命令行练的）——「问题档案」「我的词汇」「复训中心」"
+                + "这三处都可能引用到它们。它们仍按时间算进趋势，所以趋势本身是对的。"
+                + "下一步：如果你想核对，打开数据目录里的 state.json 搜这几个 id："
+                + "\(sample)，看它们挂在 issues、vocabulary 还是 targets 下面；对得上就不用管这条提示。")
         }
         if !undatedSessionIDs.isEmpty {
             let sample = undatedSessionIDs.prefix(3).joined(separator: "、")
             result.append(
-                "有 \(undatedSessionIDs.count) 条练习记录读不出时间，没有参与趋势计算，"
+                "有 \(undatedSessionIDs.count) 个场次 id 读不出练习时间"
+                + "（既不是完整时间戳，也不以 YYYY-MM-DD 开头），没有参与趋势计算，"
                 + "因此「最近有没有变少」可能偏乐观。"
-                + "下一步：打开数据目录里的 state.json，检查这几条记录的 startedAt 是不是空的：\(sample)")
+                + "下一步：打开数据目录里的 state.json 搜这几个 id：\(sample)。"
+                + "如果它在 sessions 里，说明这条训练记录的 startedAt 是空的、id 也没带日期，"
+                + "把 startedAt 补上就能算进趋势；"
+                + "如果它只出现在 issues、vocabulary、targets 的 sourceSessionIds 里，"
+                + "那它根本不是一次练习（多半是复盘同步的请求编号写串了位置），"
+                + "把这个引用删掉就不会再提示。")
         }
         return result
     }
