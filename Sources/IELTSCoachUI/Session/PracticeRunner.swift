@@ -8,7 +8,11 @@ import Observation
 /// **这个区分不是锦上添花。** 开练阶段失败时重做的是整条链路，第一步是按「新建会话」；
 /// 而收尾阶段失败时若也去按「新建会话」，那条刚练完、复盘还在里面的会话就当场没了——
 /// 用户练的半小时连同复盘一起蒸发，且界面上看着像是「重试了一下」。
-public enum PracticeRetry: Equatable, Sendable {
+///
+/// `CaseIterable` 不是给产品代码用的，是给守卫用的：
+/// 「文案里指名的那颗按钮，界面上真的有吗」这条断言需要一份**完整**的按钮清单，
+/// 而手写的清单会漏掉将来新加的那一种重试——漏掉的那一种就又没人看着了。
+public enum PracticeRetry: Equatable, Sendable, CaseIterable {
     /// 从头再来一遍（新建会话 → 启动语音 → …）。
     case restart
     /// 只重做收尾（结束语音 → 请复盘 → 取回 → 存档），不碰当前会话。
@@ -263,8 +267,10 @@ public final class PracticeRunner {
         do {
             report = try ReviewParser.parse(raw, requireAnswerUpgrades: false)
         } catch {
+            // 这里**只取诊断、丢掉它自带的「下一步」**，理由见 `diagnosisOnly(_:)`：
+            // `ReviewParser` 那句「下一步：点「补生成复盘报告」…」说的是命令行时代的操作。
             throw CoachError.invalidReviewText(
-                "复盘取回来了，但不是本工具认得的格式，解析不出来（\(error.localizedDescription)）。"
+                "复盘取回来了，但不是本工具认得的格式，解析不出来（\(Self.diagnosisOnly(error))）。"
                     + "好消息是原文一个字都没丢，就在 \(pendingPath.path)。"
                     + "下一步：打开这个文件看看 ChatGPT 到底输出了什么——多半是被截断了（末尾少个 }）；"
                     + "也可以回 ChatGPT 让它按要求重新输出一次，"
@@ -327,6 +333,30 @@ public final class PracticeRunner {
         let failedAt = stage
         stage = .failed(Self.describeFailure(error, at: failedAt))
         self.retry = retry
+    }
+
+    /// 取一个错误里「发生了什么」那半句，**把它自带的「下一步」丢掉**。
+    ///
+    /// 用在「我要把别人的错误嵌进我自己的一句话里，而我随后会写我自己的下一步」这种场合。
+    ///
+    /// 为什么非丢不可：`ReviewParser` 在 `IELTSCoachCore` 里，`coach` 命令行也在用它，
+    /// 它那句「下一步：点「补生成复盘报告」让 ChatGPT 重新输出一次」在命令行那边是对的，
+    /// 但**这颗按钮在图形界面里根本不存在**（`grep 'Button(' Sources/IELTSCoachUI/` 一个都没有）。
+    /// 原样转述过来，用户会照着去找一颗找不到的按钮（铁律 4：下一步必须是真做得到的一步）。
+    ///
+    /// **不改 Core 的文案**：命令行那边照它做是对的，改了反而把两边一起弄坏。
+    /// 该退让的是界面这一侧——同样的做法 `ReviewReportLoader` 已经用过一次。
+    ///
+    /// 只砍「下一步」及其之后，前半句诊断（「没有返回可识别的标准复盘JSON」之类）留着：
+    /// 那是用户判断该怎么处理的依据，砍掉就只剩一句「解析不出来」。
+    static func diagnosisOnly(_ error: any Error) -> String {
+        let detail = error.localizedDescription
+        guard let cut = detail.range(of: "下一步") else { return detail }
+        let head = detail[..<cut.lowerBound]
+            .trimmingCharacters(in: CharacterSet(charactersIn: " 　\n。；;，,"))
+        // 整句话就是一句「下一步：…」时，砍完会什么都不剩。那时宁可原样保留，
+        // 也不能返回空串——空串会让上层那句话变成「解析不出来（）」，用户一头雾水。
+        return head.isEmpty ? detail : head
     }
 
     /// 把一个错误翻译成用户照着做得下去的一句话。

@@ -62,6 +62,81 @@ final class PracticeSheetTests: XCTestCase {
         }
     }
 
+    /// **上一条那种逐个手写的断言补不完，这一条问的是结构。**
+    ///
+    /// 上一条钉的是「`stageBlock` / `checklist` 得在 `practiceBody` 里」，于是漏掉了上面一层：
+    /// 本次实测把 `body` 里 `practiceBody(for: running)` 和 `actions` 那两句一起去掉，
+    /// **465 条一条不红**——那时整张 sheet 只剩一行题目，进度、失败信息、按钮全没了，
+    /// 用户开一场练习就再也退不出来。
+    ///
+    /// 所以这里改成问：这张 sheet 声明的每一段渲染，从 `body` 顺着调用关系走得到吗？
+    /// 全模块同样的一趟在 `RenderReachabilitySweepTests` 里；这一条单独钉住这张 sheet，
+    /// 是因为它是整条链路上唯一一处「失败信息上屏」的地方，报错要就地说清后果。
+    func testEverySectionThisSheetDeclaresIsReachableFromItsBody() throws {
+        let code = try SourceGuard.code(Self.sheet)
+        guard let sheet = SourceGuard.viewTypes(in: code).first(where: { $0.name == "PracticeSheet" })
+        else {
+            return XCTFail("在 \(Self.sheet) 里找不到带 `body` 的 `PracticeSheet`，这条测试等于空转。"
+                           + "下一步：确认这个类型还在、还是个 SwiftUI 视图。")
+        }
+
+        // 先钉住这一趟真的看见了那几段关键渲染，否则「没有走不到的」是恒真的。
+        let names = Set(sheet.viewMembers.map(\.name))
+        for required in ["body", "practiceBody", "picker", "actions", "stageBlock", "checklist"] {
+            XCTAssertTrue(names.contains(required),
+                          "扫不到 `\(required)` 这段渲染。下一步：改了名字就同步改这条测试；"
+                              + "整段没了的话，先想清楚它画的东西现在归谁。")
+        }
+
+        XCTAssertEqual(sheet.unreachable, [],
+                       "这几段渲染声明着，却从 `body` 走不到——写好的东西一个像素都不上屏，"
+                           + "而且不会有任何编译错误。启动语音那九秒会是纯白板，"
+                           + "失败信息一个字都不上屏，按钮那一排整个消失。"
+                           + "下一步：把它们摆回 `body` 的 VStack 里。")
+    }
+
+    /// **自由选题那条路唯一的入口。**
+    ///
+    /// `TodayView` 传进来的 `preselected` 是 `model.plannedQuestion(for:)` 算出来的，
+    /// freePick 那条路线、以及「路线原来指着的题在题库里已经没有了」这两种情况都是 nil。
+    /// 那时 sheet 停在挑题列表，`.idle` 里这颗「开始练习」就是唯一能往下走的东西。
+    ///
+    /// 复审实测：把这整块删掉，**465 条全绿**（`startPicked()` 变成没人调的 private func，
+    /// Swift 连警告都不给）。后果是用户挑完题之后，界面上没有任何可点的东西。
+    ///
+    /// 扫的是 `actions` 那一段：同文件的 `stageIcon` / `stageTint` / `checklist` 里
+    /// 各有一份纯装饰用的 switch，扫全文的话 `case .idle` 在别处也扫得到。
+    func testTheIdleStateHasTheStartButtonThatFreePickDependsOn() throws {
+        for (needle, what) in [
+            ("case .idle", "空闲态在按钮那一段里根本没被单独处理"),
+            (#"Button("开始练习")"#, "空闲态下没有「开始练习」这颗按钮"),
+            ("startPicked()", "「开始练习」没有接到 `startPicked()` 上，按下去什么都不会发生")
+        ] {
+            SourceGuard.assertRenders(
+                needle, inBodyOf: "private var actions", of: Self.sheet,
+                because: "\(what)。自由选题（以及「路线原来指着的题在题库里已经没有了」）"
+                    + "那条路上 `preselected` 是 nil，sheet 停在挑题列表，"
+                    + "没有这颗按钮就再也走不下去了。"
+                    + "下一步：把它加回去；换了别的标题或方法名就同步改这条测试。")
+        }
+
+        // 按钮按下去之后真的把选中的题变成一场练习。`startPicked` 被掏空成 `{}` 时这条会红。
+        for (needle, what) in [("makeSetup(question)", "把选中的题变成这一场的设置"),
+                               ("begin(", "开练")] {
+            SourceGuard.assertRenders(
+                needle, inBodyOf: "private func startPicked", of: Self.sheet,
+                because: "`startPicked()` 里没有\(what)，这颗按钮按下去什么都不会发生"
+                    + "（而界面上看不出任何异样——铁律 5 说的静默失败）。"
+                    + "下一步：把这一步接回去。")
+        }
+
+        // 挑题那一步也得能真的选中，否则按钮永远是 disabled 的。
+        SourceGuard.assertRenders(
+            "picked = question.id", inBodyOf: "private func questionRow", of: Self.sheet,
+            because: "题目那一行点下去不会把它标成选中，「开始练习」就永远是灰的（`disabled(picked == nil)`），"
+                + "自由选题这条路照样走不通。下一步：把选中这一步接回去。")
+    }
+
     /// 四个动作各自接到运行器的哪个方法上。接错一个，那条路就是死的：
     /// 「我练完了」不调 `finishPractice` 的话，用户练完之后没有任何办法取回复盘。
     ///

@@ -64,6 +64,8 @@ enum SourceGuard {
         case directoryNotFound(label: String, resolved: String)
         case noSwiftFiles(label: String, resolved: String)
         case memberNotFound(name: String, hint: String)
+        case noButtonTitles
+        case noViewBody(type: String)
 
         var description: String {
             switch self {
@@ -94,6 +96,15 @@ enum SourceGuard {
                     + "下一步：确认源码是不是被挪走了。"
             case .memberNotFound(let name, let hint):
                 return "源码里找不到「\(name)」这段声明，扫描范围失效，靠它的断言全部空转。\(hint)"
+            case .noButtonTitles:
+                return "扫遍 \(uiSourceRelativeRoot) 一颗 `Button(\"…\")` 都没找到。"
+                    + "整个界面一颗按钮都没有是不可能的，所以这多半是扫描写法失效了——"
+                    + "而失效之后「文案里指的按钮真的存在吗」那条断言会永远绿。"
+                    + "下一步：确认按钮的写法是不是变了（例如改成了自定义组件），同步改这里的扫描。"
+            case .noViewBody(let type):
+                return "\(type) 里找不到 `var body: some View`，"
+                    + "「每一段渲染都得从 body 走得到」这条断言对它就无从谈起。"
+                    + "下一步：确认这个类型还是不是一个 SwiftUI 视图。"
             }
         }
 
@@ -140,6 +151,32 @@ enum SourceGuard {
             .appending(path: testSourceRelativeRoot).appending(path: relativePath)
         return stripLineComments(
             try read(contentsOf: url, describedAs: "\(testSourceRelativeRoot)/\(relativePath)"))
+    }
+
+    // MARK: - 界面模块之外的源码
+
+    /// 按**仓库根**的相对路径读源码原文（含注释）。找不到照样抛错。
+    ///
+    /// 下面那组 `read(_:)` / `code(_:)` 都以 `Sources/IELTSCoachUI` 为基准，
+    /// 而有些必须守住的东西不在界面模块里——最典型的是
+    /// `Sources/IELTSCoachApp/main.swift` 里的窗口场景：`WindowGroup` 还是 `Window`
+    /// 这一个词决定了整个进程里有几份 `AppState`、开机会不会跑两遍 preflight。
+    static func repositoryRead(_ relativePath: String) throws -> String {
+        let url = try repositoryRoot().appending(path: relativePath)
+        return try read(contentsOf: url, describedAs: relativePath)
+    }
+
+    /// 同上，并去掉行注释。**扫「不许出现某个词」时必须用这一个**：
+    /// 本项目的注释风格就是要在注释里写清「为什么不用那种写法」，
+    /// 连注释一起扫的话，那条断言会被自己的说明绊倒。
+    static func repositoryCode(_ relativePath: String) throws -> String {
+        stripLineComments(try repositoryRead(relativePath))
+    }
+
+    /// 遍历仓库里任意目录下的全部 `.swift`。目录不存在、或一个都没有，都抛错。
+    static func swiftFiles(atRepositoryPath relativeDirectory: String) throws -> [URL] {
+        let url = try repositoryRoot().appending(path: relativeDirectory)
+        return try swiftFiles(in: url, describedAs: relativeDirectory)
     }
 
     // MARK: - 读源码
@@ -714,6 +751,160 @@ enum SourceGuard {
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
         return regex.matches(in: source, range: NSRange(location: 0, length: text.length))
             .compactMap { $0.numberOfRanges > 1 ? text.substring(with: $0.range(at: 1)) : nil }
+    }
+
+    // MARK: - 视图成员：写好了，和摆上屏幕了，是两件事
+
+    /// 一个 SwiftUI 类型里声明的视图成员，以及**从 `body` 出发走不到**的那些。
+    ///
+    /// ## 为什么要有它
+    ///
+    /// 上一轮已经给 `PracticeSheet` 补过逐个成员的断言（「`stageBlock` 得摆在 `practiceBody` 里」）。
+    /// 那是手写的清单，于是漏掉了更上面一层：本次实测把 `body` 里
+    /// `practiceBody(for: running)` 和 `actions` 那两句一起换掉，**465 条一条不红**——
+    /// 而那时整张 sheet 只剩一行题目：没有进度、没有失败信息、一颗按钮都没有，
+    /// 用户开一场练习就再也退不出来。
+    ///
+    /// 逐个手写补不完，因为下一次漏的会是下一个成员。所以这里换成结构性的问法：
+    /// **从 `body` 出发顺着调用关系，能不能走到每一个 `some View` 成员？**
+    /// 走不到就是没上屏。新写一段渲染却忘了摆进去，同样会在这里报出来。
+    ///
+    /// ## 它拦不住什么
+    ///
+    /// 只看「名字在那段大括号里出现过没有」。「调用还在但条件永远为假」拦不住，
+    /// 摆得好不好看也拦不住——那部分归人工验收。
+    struct ViewType {
+        let name: String
+        /// 名字 → 大括号里的内容。只收 `some View` 的成员。
+        let viewMembers: [(name: String, body: String)]
+        /// 声明了、但从 `body` 顺着调用关系走不到的成员名。
+        let unreachable: [String]
+    }
+
+    /// 声明一个视图成员的两种写法：计算属性和返回 `some View` 的方法。
+    ///
+    /// 两种都得认：`PracticeSheet` 里 `stageBlock` 是属性、`practiceBody(for:)` 是方法，
+    /// 只认一种的话，另一种被摘掉照样绿。
+    private static let viewMemberPatterns = [
+        #"(?:var|let)\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*some\s+View\s*\{"#,
+        #"func\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*(?:async\s+)?(?:throws\s+)?->\s*some\s+View\s*\{"#
+    ]
+
+    /// 把一份源码里的 SwiftUI 视图类型逐个切出来分析。**入参是已经去过注释的代码。**
+    ///
+    /// 没有 `body` 的类型（协议实现、测试替身、纯数据结构）直接跳过——它们不是视图。
+    static func viewTypes(in code: String) -> [ViewType] {
+        var result: [ViewType] = []
+        for (typeName, typeBody) in typeBodies(in: code) {
+            var members: [(name: String, body: String)] = []
+            var seen = Set<String>()
+            for pattern in viewMemberPatterns {
+                for (name, body) in declarations(matching: pattern, in: typeBody)
+                where seen.insert(name).inserted {
+                    members.append((name, body))
+                }
+            }
+            guard members.contains(where: { $0.name == "body" }) else { continue }
+            result.append(ViewType(name: typeName,
+                                   viewMembers: members,
+                                   unreachable: unreachable(from: "body", among: members)))
+        }
+        return result
+    }
+
+    /// 从 `root` 出发做一次广度优先，收集走不到的成员。
+    private static func unreachable(from root: String,
+                                    among members: [(name: String, body: String)]) -> [String] {
+        let bodies = Dictionary(uniqueKeysWithValues: members.map { ($0.name, $0.body) })
+        var reached: Set<String> = [root]
+        var queue = [root]
+        while let current = queue.popLast() {
+            guard let body = bodies[current] else { continue }
+            for candidate in members.map(\.name) where !reached.contains(candidate) {
+                guard mentions(candidate, in: body) else { continue }
+                reached.insert(candidate)
+                queue.append(candidate)
+            }
+        }
+        return members.map(\.name).filter { !reached.contains($0) }
+    }
+
+    /// 一段代码里有没有**以本类型成员的身份**提到某个名字。
+    ///
+    /// 两条讲究，缺一条这个扫描就没用了：
+    ///
+    /// - 前面不许紧挨着点号：`runner.stage` 里的 `stage` 是别人的属性，
+    ///   认成「调用了本类型的 stage」的话会凭空多出一堆「走得到」，守卫等于关掉。
+    /// - `self.actions` 与 `actions` 得算同一处引用，所以先把 `self.` 去掉再判——
+    ///   否则谁写一句 `self.` 就把那段渲染从可达图里摘出去了。
+    static func mentions(_ name: String, in text: String) -> Bool {
+        let stripped = text.replacingOccurrences(of: "self.", with: "")
+        let pattern = #"(?<![A-Za-z0-9_.])\#(NSRegularExpression.escapedPattern(for: name))\b"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return false }
+        let nsText = stripped as NSString
+        return regex.firstMatch(in: stripped,
+                                range: NSRange(location: 0, length: nsText.length)) != nil
+    }
+
+    /// 把源码里每个 `struct` / `class` / `enum` 的名字与大括号内容切出来。
+    private static func typeBodies(in code: String) -> [(name: String, body: String)] {
+        declarations(
+            matching: #"\b(?:struct|class|enum|extension)\s+([A-Za-z_][A-Za-z0-9_]*)"#, in: code)
+    }
+
+    /// 按一个「第一个捕获组是名字」的正则找声明，并取它后面那对大括号里的内容。
+    private static func declarations(matching pattern: String,
+                                     in code: String) -> [(name: String, body: String)] {
+        let text = code as NSString
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        var found: [(String, String)] = []
+        for match in regex.matches(in: code, range: NSRange(location: 0, length: text.length))
+        where match.numberOfRanges > 1 {
+            let name = text.substring(with: match.range(at: 1))
+            // **从匹配的开头往后找那对大括号，不是从结尾。** 从结尾找的话，
+            // 正则里那个收尾的 `{` 已经被跳过，`balancedBody` 会去认函数体内部的下一个 `{`，
+            // 切出来的是半截东西——而半截东西照样能让 `contains` 恒真，那就是空转。
+            guard let start = Range(NSRange(location: match.range.location, length: 0),
+                                    in: code)?.lowerBound,
+                  let body = balancedBody(after: start, in: code) else { continue }
+            found.append((name, body))
+        }
+        return found
+    }
+
+    // MARK: - 文案里指的按钮，界面上真有吗
+
+    /// 界面模块里**字面写死的**按钮标题清单。
+    ///
+    /// 一颗都扫不到就抛错：那说明扫描写法失效了，而失效之后
+    /// 「文案里指的按钮真的存在吗」那条断言会恒真——最坏的一种空转。
+    static func literalButtonTitles() throws -> Set<String> {
+        var titles: Set<String> = []
+        for url in try swiftFiles() {
+            let source = stripLineComments(
+                try read(contentsOf: url, describedAs: try relativePath(of: url)))
+            titles.formUnion(captures(of: #"Button\s*\(\s*"([^"\\]+)""#, in: source))
+        }
+        guard !titles.isEmpty else { throw Failure.noButtonTitles }
+        return titles
+    }
+
+    /// 一句面向用户的话里，指名让用户去点的那些东西：`点「X」`、`点一下「X」`。
+    ///
+    /// 铁律 4 要求每句话都说清「下一步做什么」，而「下一步」最常见的形态就是「点某颗按钮」。
+    /// 指的按钮界面上不存在的话，这句话比不写还糟——用户会一直找。
+    /// 本项目实测踩过：`ReviewParser`（Core，命令行也在用）那句
+    /// 「下一步：点「补生成复盘报告」…」被界面原样转述，而全 App 没有这颗按钮。
+    static func clickTargets(in message: String) -> [String] {
+        captures(of: #"点(?:一下)?「([^」]+)」"#, in: message)
+    }
+
+    /// 同上，但用于扫源码：跳过带字符串插值的那些（`点「\(retry.buttonTitle)」`）。
+    ///
+    /// 插值的取值要跑起来才知道，扫源码判不了；那部分交给运行期的断言
+    /// （`PracticeRunnerTests` 会真的把运行器跑进失败态，再拿 `clickTargets` 查一遍）。
+    static func literalClickTargets(in code: String) -> [String] {
+        clickTargets(in: code).filter { !$0.contains("\\(") }
     }
 
     // MARK: - 断言：这段渲染必须在

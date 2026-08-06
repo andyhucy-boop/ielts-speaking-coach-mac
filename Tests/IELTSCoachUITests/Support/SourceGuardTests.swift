@@ -78,6 +78,42 @@ final class SourceGuardTests: XCTestCase {
         XCTAssertTrue(source.contains("public struct CoachCard"), "读到的不是 Components.swift")
     }
 
+    // MARK: - 界面模块之外的源码
+
+    /// 有些必须守住的东西不在 `Sources/IELTSCoachUI` 里——`Sources/IELTSCoachApp/main.swift`
+    /// 里 `WindowGroup` 还是 `Window` 这一个词，决定了整个进程有几份 `AppState`。
+    ///
+    /// 这条同时钉住两件事：读得到真文件，以及**去注释这一步真的在做**。
+    /// 后者不是顺带的：那个文件的注释里必然要写清「为什么不用 `WindowGroup`」，
+    /// 注释没被去掉的话，`AppSceneTests` 里那条「不许出现 WindowGroup」会被自己的说明绊倒。
+    func testRepositoryCodeReachesOutsideTheUIModuleAndStripsComments() throws {
+        let raw = try SourceGuard.repositoryRead("Sources/IELTSCoachApp/main.swift")
+        XCTAssertTrue(raw.contains("struct CoachApp"), "读到的不是 App 的入口文件")
+        XCTAssertTrue(raw.contains("WindowGroup"),
+                      "这条自测靠「注释里提到了 WindowGroup」来证明去注释真的在做。"
+                          + "下一步：那段说明被删了的话，换一个同样在注释里、代码里没有的词。")
+
+        let code = try SourceGuard.repositoryCode("Sources/IELTSCoachApp/main.swift")
+        XCTAssertTrue(code.contains("struct CoachApp"), "去注释把代码也切掉了")
+        XCTAssertFalse(code.contains("WindowGroup"),
+                       "行注释没被去掉，扫「不许出现某个词」的断言会被注释里的反例绊倒")
+    }
+
+    func testRepositoryPathsThrowInsteadOfComingBackEmpty() {
+        XCTAssertThrowsError(try SourceGuard.repositoryCode("Sources/NoSuchTarget/main.swift")) {
+            XCTAssertTrue("\($0)".contains("找不到源码文件"), "\($0)")
+        }
+        XCTAssertThrowsError(try SourceGuard.swiftFiles(atRepositoryPath: "Sources/NoSuchTarget")) {
+            XCTAssertTrue("\($0)".contains("找不到目录"), "\($0)")
+        }
+    }
+
+    func testSwiftFilesAtARepositoryPathListsTheWholeTarget() throws {
+        let files = try SourceGuard.swiftFiles(atRepositoryPath: "Sources/IELTSCoachApp")
+        XCTAssertEqual(files.map(\.lastPathComponent), ["main.swift"],
+                       "App 目标里的文件清单变了。下一步：确认新加的文件有没有开出第二个窗口场景。")
+    }
+
     // MARK: - 遍历目录
 
     func testSwiftFilesThrowsWhenTheDirectoryIsGone() {
@@ -437,6 +473,92 @@ final class SourceGuardTests: XCTestCase {
             XCTAssertTrue("\($0)".contains("2 处"), "\($0)")
         }
         XCTAssertThrowsError(try SourceGuard.functionBody(named: "noSuchFunc", in: code))
+    }
+
+    // MARK: - 视图成员：切段与「从 body 走得到吗」
+
+    /// **切段必须切到那个成员自己的大括号上。**
+    ///
+    /// 写这个扫描时踩过一次：正则末尾带着 `{`，再从「匹配的结尾」往后找大括号，
+    /// 找到的是函数体内部的下一个 `{`——切出来是半截东西。
+    /// 半截东西照样能让上层的 `contains` 恒真，那就是一条看不出来的空转。
+    func testViewMemberBodiesAreCutAtTheMembersOwnBraces() {
+        let source = """
+            struct Sheet: View {
+                var body: some View {
+                    VStack {
+                        header
+                    }
+                }
+                private var header: some View {
+                    Text("这是标题")
+                }
+            }
+            """
+        guard let sheet = SourceGuard.viewTypes(in: source).first else { return XCTFail("没切出类型") }
+        let bodies = Dictionary(uniqueKeysWithValues: sheet.viewMembers.map { ($0.name, $0.body) })
+        XCTAssertTrue(bodies["body"]?.contains("header") == true, "body 切出来的是：\(bodies["body"] ?? "")")
+        XCTAssertTrue(bodies["header"]?.contains("这是标题") == true,
+                      "header 切出来的是：\(bodies["header"] ?? "")")
+        XCTAssertFalse(bodies["header"]?.contains("VStack") == true,
+                       "切到别的成员身上去了：\(bodies["header"] ?? "")")
+    }
+
+    /// 属性和方法两种写法都得认。只认一种的话，另一种被摘掉照样绿。
+    func testViewMembersCoverBothComputedPropertiesAndFunctions() {
+        let source = """
+            struct Sheet: View {
+                var body: some View { VStack { header } }
+                private var header: some View { Text("标") }
+                private func row(_ item: Item) -> some View { Text(item.name) }
+            }
+            """
+        let names = SourceGuard.viewTypes(in: source).first?.viewMembers.map(\.name) ?? []
+        XCTAssertEqual(Set(names), ["body", "header", "row"], "漏认了写法：\(names)")
+    }
+
+    /// 没有 `body` 的类型不是视图，别去查它——否则每个协议实现、每个测试替身都会被误报。
+    func testTypesWithoutABodyAreNotTreatedAsViews() {
+        let source = """
+            struct InertBridge: CoachBridge {
+                func preflight() -> BridgeReadiness { BridgeReadiness(ok: false, messages: []) }
+            }
+            """
+        XCTAssertEqual(SourceGuard.viewTypes(in: source).count, 0)
+    }
+
+    /// `mentions` 是可达性判定的地基：它把 `runner.header` 认成「调用了成员 header」的话，
+    /// 整条守卫会有一堆假的「走得到」，等于关掉。
+    func testMentionsIgnoresPropertyAccessOnSomethingElse() {
+        XCTAssertTrue(SourceGuard.mentions("header", in: "VStack { header }"))
+        XCTAssertTrue(SourceGuard.mentions("header", in: "VStack { self.header }"))
+        XCTAssertFalse(SourceGuard.mentions("header", in: "Text(runner.header)"))
+        XCTAssertFalse(SourceGuard.mentions("header", in: "Text(headerTitle)"))
+        XCTAssertFalse(SourceGuard.mentions("row", in: "narrow(1)"))
+    }
+
+    // MARK: - 文案里指的按钮真的存在吗
+
+    /// 按钮清单必须是从真源码里读出来的。读不到（写法失效）就抛错——
+    /// 返回空集合的话，「文案指的按钮存在吗」那条断言会恒真。
+    func testLiteralButtonTitlesComeFromTheRealSourceAndNeverComeBackEmpty() throws {
+        let titles = try SourceGuard.literalButtonTitles()
+        XCTAssertTrue(titles.contains("开始练习"), "扫按钮的写法失效了：\(titles.sorted())")
+        XCTAssertTrue(titles.contains("我已经复制好了"), "扫按钮的写法失效了：\(titles.sorted())")
+        XCTAssertFalse(titles.contains("补生成复盘报告"), "这颗按钮界面上并不存在")
+    }
+
+    /// 「点『X』」要认得出来，且**不能把带插值的那种当成字面标题**——
+    /// `点「\\(retry.buttonTitle)」` 的取值要跑起来才知道，当字面量查会报一堆假违规，
+    /// 然后这条守卫会被人以「误报太多」为由整条删掉。
+    func testClickTargetsAreFoundAndInterpolatedOnesAreLeftToRuntime() {
+        let message = "下一步：点「重新检查」，或者点一下「打开系统设置」。"
+        XCTAssertEqual(SourceGuard.clickTargets(in: message), ["重新检查", "打开系统设置"])
+
+        let code = #"return "下一步：点「\(retry.buttonTitle)」，或点「补生成复盘报告」。""#
+        XCTAssertEqual(SourceGuard.clickTargets(in: code).count, 2, "插值那处也该被认出来")
+        XCTAssertEqual(SourceGuard.literalClickTargets(in: code), ["补生成复盘报告"],
+                       "插值那处不该被当成字面标题：\(SourceGuard.literalClickTargets(in: code))")
     }
 
     /// 元测试要去读测试自己的源码。读不到同样必须抛错。

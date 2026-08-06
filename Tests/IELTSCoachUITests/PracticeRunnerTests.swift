@@ -338,11 +338,71 @@ final class PracticeRunnerTests: XCTestCase {
         Self.assertPointsAtTheButtonThatIsActuallyThere(runner)
     }
 
+    /// **解析失败那句话，一个字都不许把用户支到界面上不存在的地方。**
+    ///
+    /// 这句话是拼出来的：`PracticeRunner.archive` 把 `ReviewParser` 抛出来的错原样嵌进去。
+    /// 而 `ReviewParser` 在 `IELTSCoachCore` 里，`coach` 命令行也在用它，它那句
+    /// 「下一步：点「补生成复盘报告」让 ChatGPT 重新输出一次」是命令行时代的说法——
+    /// `grep -rn 'Button(' Sources/IELTSCoachUI/` 全仓库没有这颗按钮。
+    ///
+    /// **Core 的文案不能改**（命令行那边照它做是对的），该退让的是界面这一侧：
+    /// 只取诊断、丢掉它自带的「下一步」，然后由界面写一句界面上真做得到的下一步。
+    ///
+    /// 这条同时钉住诊断没被一起砍掉——只剩一句「解析不出来」的话，
+    /// 用户分不出是 ChatGPT 输出被截断了，还是压根就没按格式写。
+    func testAParseFailureNeverRepeatsTheCommandLineEraNextStep() async throws {
+        let directory = try Self.temporaryDirectory()
+        let bridge = FakeBridge()
+        bridge.voiceActive = true
+        bridge.copyResult = .success("ChatGPT 这次只回了一段闲聊，没有 JSON。"
+                                     + String(repeating: "凑长度", count: 80))
+        let runner = Self.runner(bridge: bridge, directory: directory)
+
+        try await runner.start(setup: Self.setup())
+        try? await runner.finishPractice()
+
+        guard case .failed = runner.stage else { return XCTFail("解析失败该进失败态") }
+        let shown = runner.stage.userFacingText
+
+        XCTAssertFalse(shown.contains("补生成复盘报告"),
+                       "把 `ReviewParser` 那句命令行时代的「下一步」原样转述给了界面用户，"
+                           + "而界面上没有这颗按钮，照着找会找不到（铁律 4）。原话：\(shown)")
+        XCTAssertTrue(shown.contains("没有返回可识别的标准复盘JSON"),
+                      "诊断被一起砍掉了。只说「解析不出来」的话，用户分不出是输出被截断了"
+                          + "还是压根没按格式写：\(shown)")
+        Self.assertEveryNamedButtonExists(in: shown)
+    }
+
+    /// 同一类毛病还能从别处溜过去：`PracticeStage` 每一步那句话里也在指按钮
+    /// （`.idle` 指「开始练习」、`.practicing` 指「我练完了」）。
+    /// 那几句是写死的字面量，改了按钮标题却忘了改这里，用户照样找不到。
+    func testEveryStageThatTellsTheUserToClickSomethingNamesARealButton() {
+        var checked = 0
+        for stage in Self.allStages {
+            let targets = SourceGuard.clickTargets(in: stage.userFacingText)
+            guard !targets.isEmpty else { continue }
+            checked += 1
+            Self.assertEveryNamedButtonExists(in: stage.userFacingText)
+        }
+        XCTAssertGreaterThanOrEqual(checked, 2,
+                                    "一步都没扫到「点『…』」，这条测试等于空转")
+    }
+
     /// 「下一步」里指名的那颗按钮，必须就是这时界面上真会画出来的那一颗。
     ///
     /// 界面画的是 `runner.retry` 对应的那一颗（`PracticeSheet` 只在 `.failed` 时按
     /// `runner.retry` 画一颗，`.needsManualCopy` 时画「我已经复制好了」）。
     /// 文案里指了另一颗的话，用户拿着一句「再用「X」这条路重来」在界面上找不到 X。
+    ///
+    /// **这条断言之前只比对另外两种 `PracticeRetry`，于是漏掉了一整类。**
+    /// 实测：解析失败那句话是把 `error.localizedDescription` 原样嵌进去拼出来的，
+    /// 而那个 error 来自 `ReviewParser`（Core，命令行也在用），原话是
+    /// 「下一步：点「补生成复盘报告」让 ChatGPT 重新输出一次」——
+    /// **全 App 没有这颗按钮**，用户照着找会找不到，而这条断言当时是绿的。
+    ///
+    /// 所以现在改成：把这句话里每一处「点『X』」都揪出来，逐个对着
+    /// **从源码里读出来的**按钮清单查。清单是读出来的不是手写的，
+    /// 所以将来改了按钮标题、或者新加一种重试，这里会跟着变红而不是悄悄失效。
     static func assertPointsAtTheButtonThatIsActuallyThere(
         _ runner: PracticeRunner, file: StaticString = #filePath, line: UInt = #line) {
         let shown = runner.stage.userFacingText
@@ -351,12 +411,37 @@ final class PracticeRunnerTests: XCTestCase {
         }
         XCTAssertTrue(shown.contains("「\(retry.buttonTitle)」"),
                       "「下一步」没指出该点哪颗按钮：\(shown)", file: file, line: line)
-        for other in [PracticeRetry.restart, .wrapUp, .clipboard]
-        where other.buttonTitle != retry.buttonTitle {
+        for other in PracticeRetry.allCases where other.buttonTitle != retry.buttonTitle {
             XCTAssertFalse(shown.contains("「\(other.buttonTitle)」"),
                            "「下一步」指的「\(other.buttonTitle)」这时界面上根本没有"
                                + "（画出来的是「\(retry.buttonTitle)」）：\(shown)",
                            file: file, line: line)
+        }
+        assertEveryNamedButtonExists(in: shown, file: file, line: line)
+    }
+
+    /// 一句面向用户的话里，凡是「点『X』」，X 都得是界面上真有的按钮。
+    ///
+    /// 清单 = 界面模块里字面写死的 `Button("…")` ∪ `PracticeRetry` 那几个算出来的标题
+    /// （后者画出来的是 `Button(retry.buttonTitle)`，扫不到字面标题）。
+    /// 两边都不是手写的：新加一种重试、改一颗按钮的字，清单自己会跟着变。
+    static func assertEveryNamedButtonExists(
+        in message: String, file: StaticString = #filePath, line: UInt = #line) {
+        do {
+            let buttons = try SourceGuard.literalButtonTitles()
+                .union(PracticeRetry.allCases.map(\.buttonTitle))
+            let named = SourceGuard.clickTargets(in: message)
+            XCTAssertFalse(named.isEmpty,
+                           "这句话里一处「点『…』」都没有，这条检查等于空转：\(message)",
+                           file: file, line: line)
+            for target in named where !buttons.contains(target) {
+                XCTFail("这句话让用户去点「\(target)」，而界面上没有这颗按钮（铁律 4）。"
+                            + "界面上真有的是：\(buttons.sorted().joined(separator: "、"))。"
+                            + "原话：\(message)",
+                        file: file, line: line)
+            }
+        } catch {
+            XCTFail("读不到按钮清单，这条检查等于空转：\(error)", file: file, line: line)
         }
     }
 
