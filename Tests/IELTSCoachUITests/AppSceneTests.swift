@@ -47,6 +47,36 @@ final class AppSceneTests: XCTestCase {
                 + "也就多一次开机 preflight。下一步：确认没有第二个场景在开第二个根视图。")
     }
 
+    /// **设置窗口（⌘,）与它里面那一页的接线，同样得有人守。**
+    ///
+    /// 实测：把 main.swift 里 `Settings { RecordingSettingsScene() }` 那一行删掉，
+    /// `swift test` 是 804 条全绿——因为「保存我的回答录音」那一页的测试测的是
+    /// `RecordingSettingsViewModel`（逻辑），没有一条问过「这一页到底挂上 App 了吗」。
+    /// 后果是整页从 App 里消失：开关、麦克风权限引导、磁盘占用提示全都没了，
+    /// ⌘, 打开是一个空窗口，而全套测试照样绿。
+    ///
+    /// 这正是上一轮复审刚抓过的同一类缺口（「整份 Phase 5 计划没有任何一个任务认领
+    /// 把录音器接到 App 上」，commit 5ee085c）：**逻辑测得再扎实，也证明不了它被接上了。**
+    func testTheSettingsWindowActuallyOpensTheRecordingSettingsPage() throws {
+        let code = try SourceGuard.repositoryCode(Self.mainPath)
+
+        XCTAssertTrue(
+            code.contains("Settings {"),
+            "入口文件里没有 `Settings { … }` 场景，⌘, 打开的会是一个空的设置窗口："
+                + "录音开关、麦克风权限引导、磁盘占用提示整页从 App 里消失。"
+                + "下一步：把 `Settings { RecordingSettingsScene() }` 加回 `CoachApp.body`；"
+                + "真要改成别的写法（例如 `Settings` 与 `{` 之间不留空格），同步改这条断言。")
+
+        // 光有 `Settings { }` 不够——里面是空的一样等于这一页不存在。
+        // `memberBody` 切的是 `Settings` 后面那对大括号里的内容，找不到会抛错（不会静默放行）。
+        let settingsScene = try SourceGuard.memberBody(of: "Settings", in: code)
+        XCTAssertTrue(
+            settingsScene.contains("RecordingSettingsScene()"),
+            "设置窗口里没有 `RecordingSettingsScene()`，⌘, 打开的是一个空窗口。"
+                + "下一步：确认 `Settings { RecordingSettingsScene() }` 还在；"
+                + "这一页换了别的类型名的话，同步改这条断言。")
+    }
+
     /// 同一类缺陷还能从哪儿溜过去：往 App 目标里再加一个文件，在里面开第二个场景。
     /// 上面那条只盯 main.swift，这条盯整个目标。
     func testNoOtherFileInTheAppTargetOpensASecondWindow() throws {

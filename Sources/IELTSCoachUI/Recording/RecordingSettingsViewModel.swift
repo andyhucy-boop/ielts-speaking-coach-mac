@@ -8,10 +8,25 @@ import Observation
 @MainActor
 @Observable
 public final class RecordingSettingsViewModel {
-    /// 开关的当前值。**只反映已经落盘的事实。**
+    /// 开关的当前值 = **这一刻到底录不录**，也就是「磁盘上存着同意」**且**「麦克风权限在手里」。
+    ///
     /// 权限没拿到时它必须是 false——显示成「开」却什么都不录，
-    /// 用户练完发现没录音时完全无从查起。
+    /// 用户练完发现没录音时完全无从查起。这有两条路会走到：
+    ///
+    /// 1. 拨开关的当下就没拿到权限（`setEnabled` 里那条 guard）；
+    /// 2. **先前在有权限时开过，后来权限没了**——用户在系统设置里关掉了麦克风，
+    ///    或换了台机器 / 重装后 TCC 被重置。这时磁盘上仍写着 `recordingEnabled=true`，
+    ///    而 `RecordingConsent.readiness` 会判 `.blocked`，练习一秒都不会录。
+    ///    照着磁盘显示成「开」，界面就在说一件不成立的事。
+    ///
+    /// 所以这里存的**不是**磁盘原值。磁盘上那句「同意」由 `consentAt` 照实反映：
+    /// 它不会因为权限没了就被抹掉（那是用户给过的授权，`refresh()` 更不该反过来写盘），
+    /// 权限给回来之后开关自己回到「开」。两条都由
+    /// `testTheSwitchGoesBackToOffWhenThePermissionIsRevokedAfterConsent` 与
+    /// `testTheSwitchIsOnAgainOnceThePermissionComesBack` 守着。
     public private(set) var enabled = false
+    /// 磁盘上记的那次同意的时间戳。空串 = 没同意过。
+    /// **它跟着磁盘走，不跟着权限走**——理由见 `enabled`。
     public private(set) var consentAt = ""
     public private(set) var permission: MicrophonePermissionState = .notDetermined
     /// 非 nil 时界面必须显示。中文，写明发生了什么与下一步做什么。
@@ -43,7 +58,9 @@ public final class RecordingSettingsViewModel {
         permission = authorizer.currentStatus()
         do {
             let state = try store.load()
-            enabled = state.settings.recordingEnabled
+            // 磁盘上的同意 **且** 权限还在手里，才算「开」。少了后半句，
+            // 用户事后在系统设置里关掉麦克风之后，这一页会一直显示「开」而一秒都不录。
+            enabled = state.settings.recordingEnabled && permission == .granted
             consentAt = state.settings.recordingConsentAt
             usage = try recordings.usage()
 
@@ -100,11 +117,20 @@ public final class RecordingSettingsViewModel {
     /// 打开录音文件夹用的 URL。视图拿它去调 NSWorkspace。
     public var recordingsFolderURL: URL { recordings.directory.recordingsDirectory }
 
+    /// 三句话对三种处境。中间那句是**权限被事后撤销**才会出现的：
+    /// 开关显示成「关」而磁盘上确实记着一次同意，不把这个错位说破的话，
+    /// 用户只会觉得「我明明开过，怎么自己关了」。
     public var consentText: String {
-        guard enabled, !consentAt.isEmpty else {
+        guard !consentAt.isEmpty else {
             return "录音默认关闭。打开之后才会申请麦克风权限。"
         }
-        return "你在 \(consentAt) 同意保存录音。"
+        // `guidance` 只在权限不在手里时非 nil（granted 时没什么要说的）。
+        guard !enabled, let blocked = permission.guidance else {
+            return "你在 \(consentAt) 同意保存录音。"
+        }
+        return "你在 \(consentAt) 同意保存录音，但麦克风权限现在不在本应用手里，"
+            + "所以上面的开关停在「关」，练习时不会录音（已经录下的录音都还在）。"
+            + blocked
     }
 
     /// 落盘。**返回 false 时调用方必须直接返回**，不能接着报一句「已开启」——

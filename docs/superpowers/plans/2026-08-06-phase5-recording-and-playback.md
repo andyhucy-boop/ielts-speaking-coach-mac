@@ -3113,6 +3113,41 @@ git add Sources/IELTSCoachUI/Recording/RecordingSettingsViewModel.swift \
 git commit -m "feat(ui): 录音开关、麦克风权限引导与磁盘占用提示"
 ```
 
+- [x] **Step 7（复审补漏，计划原本没有这三条）**
+
+上面 Step 1 的那份测试全都测 `RecordingSettingsViewModel` 的逻辑，**没有一条问过
+「这一页到底挂上 App 了吗」，也没有一条覆盖「事后被撤销权限」这条路**。实测三处缺口：
+
+1. **接线没人守。** 把 `Sources/IELTSCoachApp/main.swift` 里
+   `Settings { RecordingSettingsScene() }` 删掉，`swift test` 是「Executed 804 tests,
+   with 0 failures」——整页（开关、权限引导、占用提示）从 App 里消失、⌘, 打开是空窗口，
+   而全套测试照样全绿。这与 Task 7b 认领的是同一类缺口（逻辑测得再扎实也证明不了它被接上）。
+   补 `AppSceneTests.testTheSettingsWindowActuallyOpensTheRecordingSettingsPage`：
+   扫 main.swift，要求有 `Settings {`，且那对大括号里有 `RecordingSettingsScene()`。
+2. **「出路按钮」的前置条件没人守。** 把 `setEnabled` 里的 `permission = status` 删掉，
+   `swift test --filter RecordingSettingsViewModelTests` 全绿——而
+   `RecordingSettingsView.needsSystemSettings` 只看 `permission`，它停在 `.notDetermined`
+   那张带「打开系统设置」的卡片就不出现，用户被拒之后再无出路。
+   在 `testTheSwitchStaysOffWhenThePermissionIsRefused` 里补
+   `XCTAssertEqual(viewModel.permission, .denied)`。
+3. **事后被撤销权限时开关仍显示「开」。** `refresh()` 原本无条件把 `enabled` 设成磁盘上的值：
+   用户先前在授权状态下开过（`recordingEnabled=true`），后来在系统设置里关掉麦克风、
+   或换机 / 重装后 TCC 被重置 → 开关显示「开」，而 `RecordingConsent.readiness` 判 `.blocked`，
+   练习一秒都不录。这与本任务「权限没拿到时开关必须停在「关」」的硬规则直接冲突，且零测试。
+   **取「让 `enabled` 只在 `permission == .granted` 时为开」**（不改硬规则，也不改产品语义）：
+   `enabled = state.settings.recordingEnabled && permission == .granted`；
+   磁盘上那次同意**不动**（`refresh()` 是读盘操作，不该反过来写盘），权限给回来开关自己回到「开」；
+   `consentText` 增加中间一句，把「你同意过、但现在录不了、下一步怎么办」说破。
+   补 `testTheSwitchGoesBackToOffWhenThePermissionIsRevokedAfterConsent` 与
+   `testTheSwitchIsOnAgainOnceThePermissionComesBack`（后者防止把 `enabled` 写死成 false）。
+
+突变验证（四次，均实测）：删 `Settings { RecordingSettingsScene() }` → AppSceneTests 变红；
+把 `Settings` 的内容换成 `EmptyView()` → 同一条变红；删 `permission = status` →
+`testTheSwitchStaysOffWhenThePermissionIsRefused` 变红；把 `&& permission == .granted` 去掉 →
+`testTheSwitchGoesBackToOffWhenThePermissionIsRevokedAfterConsent` 变红。
+Step 5 的突变 A 在这次改动之后重跑仍然变红（`enabled` 变成派生值之后，
+接住它的是同一条测试里「更不能把「开」写进 state.json」那句断言）。
+
 ---
 
 ## Task 9: 训练记录页内嵌播放器 + 单条录音删除

@@ -100,6 +100,14 @@ final class RecordingSettingsViewModelTests: XCTestCase {
 
         XCTAssertFalse(viewModel.enabled, "没权限时开关必须停在关")
         XCTAssertTrue(try XCTUnwrap(viewModel.notice).contains("下一步"))
+        // **这一条钉的是那颗「出路按钮」的前置条件。** 用户在系统弹窗上点了「不允许」之后，
+        // `permission` 必须跟着变成 `.denied`——`RecordingSettingsView.needsSystemSettings`
+        // 只看这个属性，它停在 `.notDetermined` 的话，那张带「打开系统设置」的卡片根本不出现，
+        // 而 macOS 一辈子只弹一次系统对话框：用户从此没有任何出路，只能对着开关反复拨。
+        // 只断言 notice 的文案是不够的（文案对了、按钮不出现，一样是死路）。
+        XCTAssertEqual(viewModel.permission, .denied,
+                       "在系统弹窗上被拒之后，权限状态必须落到 .denied，"
+                           + "否则界面上那张「打开系统设置」的卡片不会出现")
         let saved = try StateStore(directory: directory).load()
         XCTAssertFalse(saved.settings.recordingEnabled, "更不能把「开」写进 state.json")
     }
@@ -143,6 +151,54 @@ final class RecordingSettingsViewModelTests: XCTestCase {
 
         XCTAssertNotEqual(second.consentAt, firstConsent)
         XCTAssertFalse(second.consentAt.isEmpty)
+    }
+
+    // MARK: - 事后被撤销权限
+
+    /// **开过之后权限没了，是另一条路。** 前面那两条测的都是「拨开关的当下没拿到权限」；
+    /// 这一条测的是用户先前在有权限时开过（`state.json` 里 `recordingEnabled=true`），
+    /// 后来在系统设置里把麦克风关掉、或换了台机器 / 重装后 TCC 被重置。
+    ///
+    /// 这时候 `RecordingConsent.readiness` 会判 `.blocked`，练习一秒都不会录，
+    /// 而开关如果照着磁盘显示成「开」，界面就在说一件不成立的事——
+    /// 正是这个类型开头那句注释要挡的：「显示成「开」却什么都不录，
+    /// 用户练完发现没录音时完全无从查起」。
+    func testTheSwitchGoesBackToOffWhenThePermissionIsRevokedAfterConsent() async throws {
+        // 先在有权限的时候正常开一次：磁盘上因此有了 recordingEnabled=true + 同意时间。
+        let consented = makeViewModel(FakeMicrophoneAuthorizer(current: .granted))
+        await consented.setEnabled(true)
+        XCTAssertTrue(consented.enabled, "前提没成立：有权限时开关本来就该是开的")
+
+        // 用户后来把麦克风权限收回去了。重开这一页（= 新建一份视图模型）。
+        let revoked = makeViewModel(FakeMicrophoneAuthorizer(current: .denied))
+
+        XCTAssertFalse(revoked.enabled,
+                       "权限已经不在手里，开关必须停在「关」——照着磁盘显示成「开」，"
+                           + "等于告诉用户正在录，而实际上一秒都不会录")
+        XCTAssertEqual(revoked.permission, .denied)
+        // 但**不许替用户撤回同意**：那是他给过的授权，权限给回来之后仍然算数，
+        // 而且 refresh() 是读盘操作，不该反过来写盘。
+        let saved = try StateStore(directory: directory).load()
+        XCTAssertTrue(saved.settings.recordingEnabled,
+                      "开关只是显示成关，磁盘上那次同意不该被悄悄抹掉")
+        // 文案得把这个「开关是关的、但你确实同意过」的错位说清楚，并给出下一步。
+        XCTAssertTrue(revoked.consentText.contains(revoked.consentAt),
+                      "同意时间还在磁盘上，就得照实说出来")
+        XCTAssertTrue(revoked.consentText.contains("下一步"),
+                      "得告诉用户怎么把权限拿回来，光说「关了」不算合格")
+    }
+
+    /// 权限给回来之后开关自己回到「开」——那次同意仍然算数，不用再拨一次。
+    /// 少了这一条，把 `enabled` 写死成 `false` 也能骗过上面那条。
+    func testTheSwitchIsOnAgainOnceThePermissionComesBack() async {
+        let consented = makeViewModel(FakeMicrophoneAuthorizer(current: .granted))
+        await consented.setEnabled(true)
+
+        _ = makeViewModel(FakeMicrophoneAuthorizer(current: .denied))
+        let restored = makeViewModel(FakeMicrophoneAuthorizer(current: .granted))
+
+        XCTAssertTrue(restored.enabled, "同意还在磁盘上、权限也回来了，开关就该是开的")
+        XCTAssertFalse(restored.consentAt.isEmpty)
     }
 
     // MARK: - 占用提示
