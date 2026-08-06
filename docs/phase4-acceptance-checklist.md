@@ -2,8 +2,9 @@
 
 日期：2026-08-06
 对应计划：`docs/superpowers/plans/2026-08-06-phase4-transcript-and-history.md` 的 **Task 13**
-代码基线：分支 `phase2-bridge`，最后一条提交 `4f37e19`（Task 1–12 已全部完成并提交）
-自动化测试现状：`swift test` **690 条全绿**（执行 5.93 秒）
+代码基线：分支 `phase2-bridge`，最后一条提交 `8da6196`（Task 1–12 已全部完成并提交，
+外加复审后补的那一笔「把采样器接到 App 上」，见第 1 节）
+自动化测试现状：`swift test` **693 条全绿**（执行 6.37 秒）
 
 ---
 
@@ -28,47 +29,30 @@ Task 13 是 Phase 4 唯一**不能由子代理代劳**的任务：它要真的�
 
 ## 1. 开始之前：三件必须先知道的事
 
-### ⛔ 阻断项：现在真机上采不到任何逐字稿（子代理复核发现，尚未修复）
+### ✅ 已修：采样器现在真的接到 App 上了（原本是阻断项，`8da6196`）
 
-**现象**：App 里练一场，`transcript` 一定是空的，训练记录点开只会显示
+**原本的现象**：App 里练一场，`transcript` 一定是空的，训练记录点开只会显示
 「这一场没有逐字稿…」——不管「记录对话逐字稿」开关是开还是关。
+根因是 `AppState.makePracticeRunner()` 没传 `transcript:`，而 `PracticeRunner`
+那个参数的默认值是 nil，`TranscriptCollector.begin()` 第一行
+`guard let sampler else { return }` 直接返回。**`AXTranscriptSampler` 这个类
+在整个 App 里从来没有被 new 出来过**，`settings.transcriptEnabled` 也只被读来画界面。
 
-**证据**（两行代码就能看完）：
+**为什么会漏**：Phase 4 计划里 Task 6 的改动文件只有 `PracticeRunner.swift` 与
+`PracticeSheet.swift`，Task 9 改 `AppState.swift` 但只加了 `setTranscriptEnabled`。
+**十三个任务没有一个认领「把真的采样器接到真的 App 上」这件事**——这是计划本身的缺口。
 
-- `Sources/IELTSCoachUI/AppState.swift:181`
-  ```swift
-  PracticeRunner(bridge: makeBridge(), pasteboard: SystemPasteboard(), directory: directory)
-  ```
-  没有传 `transcript:` 参数。
-- `Sources/IELTSCoachUI/Session/PracticeRunner.swift:106`
-  ```swift
-  transcript: (any TranscriptSampling)? = nil,
-  ```
-  默认值是 `nil` → `TranscriptCollector(sampler: nil)` → `begin()` 第一行 `guard let sampler else { return }` 直接返回。
+**现在的实现**（`Sources/IELTSCoachUI/AppState.swift`）：`makePracticeRunner()`
+按 `state.settings.transcriptEnabled` 决定注入 `AXTranscriptSampler(access: LiveAXAccess())`
+还是传 nil，**开关在开练那一刻读一次**（练到一半拨开关不会让这一场记一半）。
+守着它的是 `AppStateTests` 里「采样器必须真的接到练习上」那一组三条测试。
 
-也就是说：**`AXTranscriptSampler` 这个类在整个 App 里从来没有被 new 出来过**
-（`grep -rn "AXTranscriptSampler" Sources` 只在它自己的定义文件里有一处）。
-`state.settings.transcriptEnabled` 这个开关目前也**只被读来画界面**，没有任何地方拿它决定要不要采样。
+**对本清单的影响**：第 4–5 节现在**有内容可验了**，请照常走；
+第 7A 第 4 步也不再是假通过。**第 3 节自始至终不受影响**：它绕过 App 直接看 AX 树。
 
-**为什么会漏**：Phase 4 计划里，Task 6 的改动文件只有 `PracticeRunner.swift` 与 `PracticeSheet.swift`，
-Task 9 改 `AppState.swift` 但只加了 `setTranscriptEnabled`。**十三个任务没有一个认领
-「把真的采样器接到真的 App 上」这件事。** 这是计划本身的缺口，不是实现者做漏了。
-
-**后果**：第 4–5 节关于逐字稿的每一项（考官问题有没有漏、说话人判得对不对、有没有重复、
-有没有混进不是对话的东西）**都验不了**——不是「验不过」，是「根本没有内容可验」。
-**第 3 节不受影响**：它绕过 App 直接看 AX 树，现在就能做。
-
-**下一步**（三选一，由你决定）：
-
-1. **先补上再验**（推荐）：让实施者补一个任务，把 `makePracticeRunner()` 改成按
-   `state.settings.transcriptEnabled` 决定是否注入 `AXTranscriptSampler(access: LiveAXAccess())`，
-   并补一条真的会红的测试（要能证明「开关开着时采样器真的被造出来了」）。改动很小，
-   但**不能顺手改**——本项目的铁律是先写会红的测试。
-2. **先做第 3 节**：第 3 节用 `axprobe dump` 直接看 AX 树，**不依赖上面这条链路**，
-   现在就能做，而且它回答的是本阶段最大的未知。做完再决定要不要等修复。
-3. 只验第 6–8 节（训练记录页、开关持久化、单条删除、重新导入）——这些不依赖采样器。
-   但要注意：**第 6 节「关掉开关后 transcript 是空的」这一条现在会「通过」，但是假通过**
-   （因为开着也是空的），修复之后必须重验。
+> 仍然要有心理准备：接上不等于采得对。**能不能采到、说话人判不判得出，
+> 到这一步为止全部只有单元测试（喂的是假的 AX 树）撑着**，真机上一次都没跑过——
+> 那正是第 3 节和第 5 节要回答的事。
 
 ---
 
@@ -88,7 +72,7 @@ Task 9 改 `AppState.swift` 但只加了 `setTranscriptEnabled`。**十三个任
 
 ### ℹ️ `swift test` 耗时已经超过计划里那条线
 
-Phase 4 完成标准第一条写「全绿且总耗时仍在 2 秒以内」。实测：**690 条全绿，5.93 秒**。
+Phase 4 完成标准第一条写「全绿且总耗时仍在 2 秒以内」。实测：**693 条全绿，6.37 秒**。
 最慢的几条是 Phase 3 的 `IconPipelineTests`（合计约 2 秒，要真的调 `sips`/`iconutil`），
 Phase 4 贡献最大的一条是 `PracticeRunnerArchiveTests.testGivingUpMidwayStopsTheSampling`（0.457 秒）。
 **这不影响本次真机验收**，但那条完成标准现在勾不上，记在这里免得以后当成新问题重查一遍。
@@ -114,7 +98,7 @@ Phase 4 贡献最大的一条是 `PracticeRunnerArchiveTests.testGivingUpMidwayS
 
 ## 3. 【最先做】用 `axprobe dump` 回答本阶段最大的未知（约 10 分钟）
 
-**这一步不用练整场，也不依赖第 1 节那个阻断项。** 它直接看 ChatGPT 的 AX 树，
+**这一步不用练整场，也完全不经过本工具那条采样链路。** 它直接看 ChatGPT 的 AX 树，
 回答两个问题：语音会话里的字幕**读不读得到**、说话人**判不判得出**。
 
 > 这一步要用终端。**这不违反「全程不需要打开终端」那条硬标准**——那条标准约束的是
@@ -203,7 +187,9 @@ grep -n '复制' /tmp/ax-voice.txt
 - [ ] **数一下从双击图标到开口说第一句用了几次点击**（成品标准第 1 条：≤ 3 次）
 - [ ] 留意启动那 9 秒里界面有没有一直在说话（「正在新建会话…」「正在启动语音…」…）
 - [ ] 留意练习面板上有没有出现「**已记录 N 条对话**」，N 有没有在涨
-      ——**第 1 节那个阻断项没修的话，这一行根本不会出现**（`transcriptTurnCount > 0` 才画）
+      ——`transcriptTurnCount > 0` 才画这一行，所以**它一直不出现就说明一条都没采到**，
+      这时请直接跳到第 3 节用 `axprobe dump` 看一眼 AX 树，那才分得清是「读不到字幕」
+      还是「读到了但被过滤掉了」
 - [ ] 点「我练完了」，等它取回复盘
 - [ ] 把面板最后那句「错题本 N 条，词汇本 M 条，重训目标 K 个。复盘原文存在 …」**抄下来**（第 8 节要用）
 
@@ -259,9 +245,27 @@ cd ~/Projects/ielts-speaking-coach-mac
 IELTS_SPEAKING_DATA_DIR=/tmp/ielts-empty-check ".build/IELTS Speaking Coach.app/Contents/MacOS/IELTSCoachApp"
 ```
 
-**必须直接跑包里那个可执行文件，不能用 `open`**：`open` 走的是 LaunchServices，
-它不会把你在终端里设的环境变量传给 App，你会看到的还是真实数据目录——
-而那正好长得像「环境变量没生效」和「空状态坏了」都说得通，最容易看走眼。
+**先 ⌘Q 把 App 完全退出再跑这一句。** 真正会让你看走眼的是这件事：
+**App 已经在运行时，再启动它一次只会把它切到前台，不会用新的环境变量重新拉起**，
+于是你看到的还是真实数据目录——而这时「环境变量没生效」和「空状态坏了」都说得通，
+最容易查错方向。直接跑包里那个可执行文件是更保险的做法：它每次都是一个新进程。
+
+用 `open` 也可以，环境变量是传得过去的（下面两种写法等价，**同样要先 ⌘Q 退出**）：
+
+```bash
+IELTS_SPEAKING_DATA_DIR=/tmp/ielts-empty-check open ".build/IELTS Speaking Coach.app"
+open --env IELTS_SPEAKING_DATA_DIR=/tmp/ielts-empty-check ".build/IELTS Speaking Coach.app"
+```
+
+> 这一段本来写的是「`open` 走 LaunchServices，不会把环境变量传给 App」，那是**错的**，
+> 已在本机（macOS 26.5.2）实测推翻：造一个最小 .app（执行体只把该变量写进文件），
+> `IELTS_SPEAKING_DATA_DIR=/tmp/ielts-empty-check open EnvProbe.app` 得到
+> `IELTS_SPEAKING_DATA_DIR=[/tmp/ielts-empty-check]`；`man open` 也写着
+> 「Opened applications inherit environment variables just as if you had launched
+> the application directly through its full path」，并另有 `--env VAR` 选项。
+> 「已在运行时只切前台、不重新拉起」这一条同样是实测的：连着两次 `open` 传不同的值，
+> 只产生了第一次那一条启动记录。
+
 这一次会走一遍权限检查页，需要的话点「先跳过」即可（只看空状态用不到辅助功能）。
 
 ---
@@ -275,7 +279,8 @@ IELTS_SPEAKING_DATA_DIR=/tmp/ielts-empty-check ".build/IELTS Speaking Coach.app/
 3. [ ] 开关必须**还是关着的** —— 掉了的话多半是 `AppState.setTranscriptEnabled` 没写进盘，
        或 `CoachSettings` 的 `CodingKeys` 漏了字段
 4. [ ] 再练一场（可以很短），确认这一场的逐字稿是空的、且**没有**弹出「逐字稿不完整」的警告
-       —— ⚠️ **第 1 节那个阻断项没修之前，这一条是假通过**（开着也一样是空的），修完要重验
+       —— 这一条只有在第 4 节那一场**真的采到了东西**的前提下才说明问题：
+       两场都空，说明的是采样根本没成，不是开关管用
 5. [ ] 把开关打开，恢复默认
 
 ### 7B 单条删除（决策 4）
@@ -405,3 +410,4 @@ git commit -m "docs: Phase 4 真机验收结果"
 - **复盘原文还在** → `pending-reviews/` 里的 `.txt` 一律不会被自动清理（这是刻意的，
   「那是用户练了半小时换来的原文，删不删由他自己决定」），随时可以在收件箱里重试
 - **想在不碰真实数据的情况下折腾** → 全程加 `IELTS_SPEAKING_DATA_DIR=/tmp/某个目录` 启动
+  （**每次都要先 ⌘Q 完全退出**，否则只是把已经在跑的那个切到前台，换的目录不生效，见第 6 节）
