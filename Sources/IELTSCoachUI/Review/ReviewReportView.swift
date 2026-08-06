@@ -31,6 +31,10 @@ struct ReviewReportView: View {
     @State private var document: ReviewDocument?
     /// 读不到或解析不了时那句中文说明（含文件路径）。非 nil 时右半边只显示它。
     @State private var failure: String?
+    /// 待处理复盘的收件箱（决策 2）。**nil 表示还没清点完，不是「没有待处理的」**——
+    /// 拿 0 顶替的话，「读完了确实没有」和「还没读」长得一模一样，正是本项目最忌讳的静默。
+    @State private var inbox: PendingReviewViewModel?
+    @State private var isShowingInbox = false
 
     private var sessions: [PracticeSession] {
         ReviewReportViewModel.archivedSessions(in: app.state)
@@ -46,8 +50,14 @@ struct ReviewReportView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.lg) {
-            SectionHeader(number: 5, label: "REVIEW REPORTS",
-                          title: SidebarItem.reviewReports.title)
+            // 入口摆在这里、**排在下面那个分支之前**，是因为条数为 0 时它也必须在，
+            // 一次复盘都还没成功归档的人（恰恰最可能是取复盘一直失败的那位）更是要看得见它。
+            HStack(alignment: .top, spacing: Spacing.lg) {
+                SectionHeader(number: 5, label: "REVIEW REPORTS",
+                              title: SidebarItem.reviewReports.title)
+                Spacer(minLength: Spacing.md)
+                pendingReviewEntry
+            }
             if sessions.isEmpty {
                 emptyState
             } else {
@@ -62,6 +72,68 @@ struct ReviewReportView: View {
         .background(Palette.canvas)
         // 换一次会话就重读一次文件。放在 body 里读盘的话，每次重绘都要碰一次磁盘。
         .task(id: selected?.id) { loadSelected() }
+        // 同理：清点 pending-reviews 目录也要读盘，只在这一页出现时做一次。
+        .task { loadInbox() }
+        // 收件箱里补进去的复盘要出现在左边那一列，所以关掉它之后重读一次训练数据。
+        .sheet(isPresented: $isShowingInbox, onDismiss: { app.reload() }) { inboxSheet }
+    }
+
+    // MARK: - 待处理复盘的入口（决策 2）
+
+    /// 「重新导入待处理的复盘」。
+    ///
+    /// **标题逐字不能改**：`PracticeRunner` 取复盘失败时那两句话、`PendingReviewStore`
+    /// 落盘撞名那句话，写的都是「到「复盘报告」页用「重新导入待处理的复盘」…」。
+    /// 名字对不上，用户拿着那句提示会一直找（铁律 4）。
+    ///
+    /// **刻意不是主行动**：这一页的主角是复盘本身，用次一级的 `.bordered`
+    /// （DESIGN-SYSTEM 第 4 节：每页最多一个主行动）。
+    private var pendingReviewEntry: some View {
+        VStack(alignment: .trailing, spacing: Spacing.xs) {
+            Button("重新导入待处理的复盘") { isShowingInbox = true }
+                .buttonStyle(.bordered)
+            Text(pendingCountText)
+                .font(Typography.label)
+                .monospacedDigit()
+                .foregroundStyle(Palette.textSecondary)
+        }
+    }
+
+    /// 待处理条数。**0 也要显示出来**，那是「清点过了，确实没有」的意思；
+    /// 还没清点完时说的是另一句话，两者不能长得一样。
+    private var pendingCountText: String {
+        guard let inbox else { return "正在清点待处理的复盘…" }
+        return "待处理 \(inbox.rows.count) 份"
+    }
+
+    @ViewBuilder private var inboxSheet: some View {
+        if let inbox {
+            PendingReviewInboxView(model: inbox, onClose: { isShowingInbox = false })
+        } else {
+            // 清点还没做完就被点开了（正常情况下碰不到：清点是毫秒级的本地读盘）。
+            // 这里不能给一块空白，更不能假装「没有待处理的复盘」。
+            VStack(spacing: Spacing.sm) {
+                ProgressView()
+                Text("正在清点待处理的复盘…下一步：等一下再点开；"
+                     + "一直停在这里的话，多半是数据目录读不了，关掉这张表看看页面上的提示。")
+                    .font(Typography.body)
+                    .foregroundStyle(Palette.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("关闭") { isShowingInbox = false }
+                    .buttonStyle(.bordered)
+            }
+            .padding(Spacing.xl)
+            .frame(minWidth: 360, alignment: .leading)
+            .background(Palette.canvas)
+        }
+    }
+
+    /// 清点待处理的复盘。**走 `AppState`**：数据目录在它手上，视图自己解析一次的话，
+    /// 补进去的复盘可能落到另一个目录里，而用户看不到任何报错。
+    private func loadInbox() {
+        let model = app.makePendingReviewViewModel()
+        model.refresh()
+        inbox = model
     }
 
     // MARK: - 左边：哪几次练习有复盘

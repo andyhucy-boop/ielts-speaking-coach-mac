@@ -181,6 +181,19 @@ public final class AppState {
         PracticeRunner(bridge: makeBridge(), pasteboard: SystemPasteboard(), directory: directory)
     }
 
+    /// 造一份「重新导入待处理的复盘」的视图模型：**与本 AppState 同一个数据目录**。
+    ///
+    /// 放在这里而不是让视图自己 new 一个，理由和 `makePracticeRunner`、`loadReview` 一样：
+    /// `directory` 与 `store` 都是私有的，而它们私有是有道理的——App 与命令行必须读写
+    /// 同一个目录，多一处解析目录就多一处走岔的机会。补进去的复盘要是落在另一个目录里，
+    /// 用户回到「复盘报告」页只会看到什么都没变，而且不会有任何报错。
+    ///
+    /// 每次打开收件箱都造一份新的：它带着「上一次操作说了什么」（`notice`）的状态，
+    /// 复用同一份会让上次的提示留在这次的屏幕上。
+    public func makePendingReviewViewModel() -> PendingReviewViewModel {
+        PendingReviewViewModel(directory: directory, store: store)
+    }
+
     /// 读出某次练习的复盘，拆成复盘报告页要显示的分区。
     ///
     /// 放在这里而不是让视图自己拼路径，理由和 `applyImport` 一样：`directory` 是私有的，
