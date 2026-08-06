@@ -67,6 +67,7 @@ enum SourceGuard {
         case noEnumCases(name: String)
         case switchNotFound(subject: String)
         case noButtonTitles
+        case noToggleTitles
         case noViewBody(type: String)
 
         var description: String {
@@ -112,6 +113,12 @@ enum SourceGuard {
                     + "整个界面一颗按钮都没有是不可能的，所以这多半是扫描写法失效了——"
                     + "而失效之后「文案里指的按钮真的存在吗」那条断言会永远绿。"
                     + "下一步：确认按钮的写法是不是变了（例如改成了自定义组件），同步改这里的扫描。"
+            case .noToggleTitles:
+                return "扫遍 \(uiSourceRelativeRoot) 一个 `Toggle(\"…\")` 都没找到。"
+                    + "这个 App 至少有「保存我的回答录音」和「记录对话逐字稿」两个开关，"
+                    + "所以这多半是扫描写法失效了——而失效之后「文案里指的开关真的存在吗」"
+                    + "那条断言会永远绿。"
+                    + "下一步：确认开关的写法是不是变了（例如标题改成了变量），同步改这里的扫描。"
             case .noViewBody(let type):
                 return "\(type) 里找不到 `var body: some View`，"
                     + "「每一段渲染都得从 body 走得到」这条断言对它就无从谈起。"
@@ -1229,6 +1236,30 @@ enum SourceGuard {
         }
         guard !titles.isEmpty else { throw Failure.noButtonTitles }
         return titles
+    }
+
+    /// 界面模块里**字面写死的**开关标题清单（`Toggle("…")`）。
+    ///
+    /// 与按钮同理，一个都扫不到就抛错。
+    static func literalToggleTitles() throws -> Set<String> {
+        var titles: Set<String> = []
+        for url in try swiftFiles() {
+            let source = stripLineComments(
+                try read(contentsOf: url, describedAs: try relativePath(of: url)))
+            titles.formUnion(captures(of: #"Toggle\s*\(\s*"([^"\\]+)""#, in: source))
+        }
+        guard !titles.isEmpty else { throw Failure.noToggleTitles }
+        return titles
+    }
+
+    /// 用户在界面上**点得到**、且标题是字面量的控件：按钮加开关。
+    ///
+    /// **「下一步：点『X』」里的 X 不一定是按钮。** 麦克风权限那几句话指的就是
+    /// `Toggle("保存我的回答录音")`——一颗开关。只拿按钮清单去查的话，
+    /// 指对了开关反而会被报成「幽灵控件」，然后这条守卫会被人以「误报」为由删掉；
+    /// 反过来，把开关排除在清单外，也就没人能证明那句话指对了东西。
+    static func literalControlTitles() throws -> Set<String> {
+        try literalButtonTitles().union(literalToggleTitles())
     }
 
     /// 一句面向用户的话里，指名让用户去点的那些东西：`点「X」`、`点一下「X」`。

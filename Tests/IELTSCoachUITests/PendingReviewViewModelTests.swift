@@ -254,6 +254,43 @@ final class PendingReviewViewModelTests: XCTestCase {
         XCTAssertEqual(try pendingFileNames(), ["s1.txt"], "解析失败时一个字都不许动那个文件")
     }
 
+    /// **「点『补生成复盘报告』」那条老毛病的第三处。**
+    ///
+    /// `ReviewParser` 在 `IELTSCoachCore` 里，`coach` 命令行也在用它，它那句
+    /// 「下一步：点「补生成复盘报告」让 ChatGPT 重新输出一次」在终端那边是对的，
+    /// 但**图形界面里没有这颗按钮**。`PracticeRunner`（`diagnosisOnly`）和
+    /// `ReviewReportLoader` 都各自把它砍掉过，唯独这一页原样透传了
+    /// `error.localizedDescription`——用户会连读到两句「下一步」，
+    /// 第一句指着一颗全 App 都找不到的按钮，然后一直找。
+    ///
+    /// 这一条同时守两头：**幽灵按钮不许出现**，而**诊断不许一起砍掉**——
+    /// 只剩一句「解析不了」的话，用户分不出是输出被截断了还是压根没按格式写。
+    func testAParseFailureNeverSendsTheUserAfterAButtonThatDoesNotExist() throws {
+        _ = try PendingReviewStore.write(rawText: "这不是一份复盘", sessionID: "s1",
+                                         directory: directory)
+        let model = self.model()
+        model.refresh()
+        model.reimport(try XCTUnwrap(model.rows.first))
+        let notice = try XCTUnwrap(model.notice)
+
+        let controls = try SourceGuard.literalControlTitles()
+        let named = SourceGuard.clickTargets(in: notice)
+        XCTAssertFalse(named.isEmpty,
+                       "这句话里一处「点『…』」都没有，这条检查等于空转：\(notice)")
+        for target in named where !controls.contains(target) {
+            XCTFail("这句话让用户去点「\(target)」，而界面上没有这个控件（铁律 4）。"
+                        + "界面上真有的是：\(controls.sorted().joined(separator: "、"))。"
+                        + "下一步：把 `ReviewParser` 自带的「下一步」砍掉"
+                        + "（`PracticeRunner.diagnosisOnly(_:)`），只留诊断，"
+                        + "「下一步」由这一页自己写——这一页有的是「查看原文」。"
+                        + "原话：\(notice)")
+        }
+
+        XCTAssertTrue(notice.contains("没有返回可识别的标准复盘JSON"),
+                      "诊断被一起砍掉了。只说「解析不了」的话，用户分不出是 ChatGPT 的输出被截断了"
+                          + "还是压根没按格式写，也就无从判断该重新输出还是自己把结尾补上：\(notice)")
+    }
+
     /// **归档抛错时，那个文件同样一个字都不许动。**
     ///
     /// 计划的突变清单里第二行（把 `markImported` 挪到 `store.mutate` 之前）本来没有测试接得住——

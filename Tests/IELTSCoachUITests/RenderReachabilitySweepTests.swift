@@ -112,12 +112,16 @@ final class RenderReachabilitySweepTests: XCTestCase {
 
     // MARK: - 二、文案里指名让用户点的东西，界面上得真有
 
-    /// 界面模块里字面写死的「点『X』」，X 必须是界面上真存在的按钮标题。
+    /// 界面模块里字面写死的「点『X』」，X 必须是界面上真存在的控件标题。
+    ///
+    /// **清单是按钮加开关**（`literalControlTitles`），不是只有按钮：麦克风权限那几句话
+    /// 指的就是一颗 `Toggle`（「保存我的回答录音」）。只查按钮的话，指得完全正确的
+    /// 一句话会被报成幽灵控件，几次误报之后这条守卫就会被人整条删掉。
     ///
     /// 带字符串插值的那些（`点「\\(retry.buttonTitle)」`）扫源码判不了，
     /// 交给 `PracticeRunnerTests` 在运行期查——那边会真的把运行器跑进失败态再看那句话。
     func testEveryButtonNamedInUICopyActuallyExists() throws {
-        let buttons = try SourceGuard.literalButtonTitles()
+        let controls = try SourceGuard.literalControlTitles()
         var checked = 0
         var report: [String] = []
 
@@ -127,16 +131,16 @@ final class RenderReachabilitySweepTests: XCTestCase {
                 try SourceGuard.read(contentsOf: url, describedAs: path))
             for target in SourceGuard.literalClickTargets(in: code) {
                 checked += 1
-                guard !buttons.contains(target) else { continue }
+                guard !controls.contains(target) else { continue }
                 report.append("\(path) 让用户去点「\(target)」")
             }
         }
 
         XCTAssertTrue(report.isEmpty,
-                      "下面这些「下一步」指的按钮，界面上一颗都找不到（铁律 4）：\n"
+                      "下面这些「下一步」指的控件，界面上一个都找不到（铁律 4）：\n"
                           + report.map { "  • " + $0 }.joined(separator: "\n")
-                          + "\n界面上真有的按钮是：\(buttons.sorted().joined(separator: "、"))。"
-                          + "\n下一步：把文案改成指界面上真有的那颗，或者干脆把那颗按钮做出来。")
+                          + "\n界面上真有的按钮和开关是：\(controls.sorted().joined(separator: "、"))。"
+                          + "\n下一步：把文案改成指界面上真有的那个，或者干脆把那颗控件做出来。")
 
         XCTAssertGreaterThanOrEqual(checked, 6, "一句「点『…』」都没扫到，这条测试等于空转")
     }

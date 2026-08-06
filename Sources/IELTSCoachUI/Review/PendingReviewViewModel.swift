@@ -153,7 +153,14 @@ public final class PendingReviewViewModel {
             report = try ReviewParser.parse(raw, requireAnswerUpgrades: false)
         } catch {
             // 解析失败时**一个字都不许动那个文件**——它是用户练了半小时换来的东西。
-            notice = "「\(row.sessionID)」还是解析不了：\(error.localizedDescription) "
+            //
+            // **只取诊断、丢掉 `ReviewParser` 自带的那句「下一步」**（`diagnosisOnly`）。
+            // 它在 Core 里，命令行也在用，那句「点「补生成复盘报告」让 ChatGPT 重新输出一次」
+            // 在终端那边是对的，可**图形界面里没有这颗按钮**。原样透传的话，
+            // 用户会连读到两句「下一步」，第一句指着一颗全 App 都找不到的按钮，
+            // 然后一直找（铁律 4：下一步必须是真做得到的一步）。
+            // `PracticeRunner` 与 `ReviewReportLoader` 早就各自这么退让过，这一页此前漏了。
+            notice = "「\(row.sessionID)」还是解析不了：\(PracticeRunner.diagnosisOnly(error))。"
                 + "下一步：点「查看原文」看看 ChatGPT 到底输出了什么；"
                 + "若确实不是标准格式，回 ChatGPT 里让它按要求重新输出一次，"
                 + "复制之后新练一场时会自动落盘。这个文件原样留着，没有被改动。"

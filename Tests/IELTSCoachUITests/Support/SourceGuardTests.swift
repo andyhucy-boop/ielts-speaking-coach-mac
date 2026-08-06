@@ -707,6 +707,23 @@ final class SourceGuardTests: XCTestCase {
         XCTAssertFalse(titles.contains("补生成复盘报告"), "这颗按钮界面上并不存在")
     }
 
+    /// 控件清单必须**同时**认得按钮和开关。
+    ///
+    /// 只认按钮的话，「下一步：点『保存我的回答录音』」这句指得完全正确的话
+    /// 会被报成「幽灵控件」——误报几次之后，这条守卫就会被人整条删掉。
+    /// 反过来，开关不在清单里，也就没人证明得了那句话指对了东西。
+    func testLiteralControlTitlesCoverSwitchesAndNotJustButtons() throws {
+        let toggles = try SourceGuard.literalToggleTitles()
+        XCTAssertTrue(toggles.contains("保存我的回答录音"),
+                      "扫开关的写法失效了：\(toggles.sorted())")
+
+        let controls = try SourceGuard.literalControlTitles()
+        XCTAssertTrue(controls.contains("保存我的回答录音"),
+                      "控件清单里没有那颗开关：\(controls.sorted())")
+        XCTAssertTrue(controls.contains("开始练习"),
+                      "控件清单把按钮那一半弄丢了：\(controls.sorted())")
+    }
+
     /// 「点『X』」要认得出来，且**不能把带插值的那种当成字面标题**——
     /// `点「\\(retry.buttonTitle)」` 的取值要跑起来才知道，当字面量查会报一堆假违规，
     /// 然后这条守卫会被人以「误报太多」为由整条删掉。
