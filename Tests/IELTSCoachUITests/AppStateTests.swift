@@ -473,4 +473,128 @@ final class AppStateTests: XCTestCase {
                       "文件删不掉把记录本身的删除也拦下了——用户会卡在一条删不掉的记录上，"
                           + "而他真正想做的只是让它从列表里消失。")
     }
+
+    // MARK: - 采样器必须真的接到练习上（复审 BI-2）
+
+    // Phase 4 的十三个任务没有一个认领「把 AXTranscriptSampler 接到 App 上」这件事：
+    // `makePracticeRunner()` 不传 `transcript:`，默认值是 nil，`TranscriptCollector.begin()`
+    // 第一行 `guard let sampler else { return }` 直接返回。后果是**真机上练一场，
+    // 逐字稿一定是空的**——不管「记录对话逐字稿」开关是开是关，界面上也看不出任何异样。
+    // `PracticeRunnerArchiveTests` 那一组测的是「给了采样器之后拼得对不对」，
+    // 它们全绿也证明不了「App 会给采样器」，因为它们自己把采样器传了进去。
+    //
+    // 下面三条各守一段，缺一段这个缺口就能再溜回来：
+    // 1. 开关开着 → 练一场，逐字稿真的进了训练记录（守「接上了」）
+    // 2. 开关关掉 → 采样器一次都不被问到（守「开关真的管用」）
+    // 3. 生产默认那一份工厂造出来的真的是 `AXTranscriptSampler`（守「真机上采的是 AX 树」）
+
+    /// 开关开着时，从 `makePracticeRunner()` 拿到的那台驱动器**真的会去采样**，
+    /// 而且采到的东西真的落进了 `state.sessions` 里那条记录。
+    ///
+    /// **这条是 BI-2 的判据。** 全程用假 Bridge 与假采样器，不碰真实 ChatGPT（铁律 5）。
+    func testPracticeStartedFromTheAppRecordsTheTranscriptWhenTheSwitchIsOn() async throws {
+        let sampler = Self.scriptedSampler()
+        let app = Self.appState(directory: directory, sampler: sampler)
+        XCTAssertTrue(app.state.settings.transcriptEnabled, "前提没成立：开关默认就该是开的")
+
+        let runner = app.makePracticeRunner()
+        try await runner.start(setup: Self.setup())
+        try await runner.finishPractice()
+
+        // 断言落在「内容」上而不是「采样器被调了几次」：调用次数对不对，
+        // 换不来用户在训练记录里看到的那几行字。
+        XCTAssertEqual(runner.transcriptTurnCount, 2,
+                       "练习面板上那行「已记录 N 条对话」会一直是 0，"
+                           + "因为 App 根本没把采样器交给驱动器。")
+        let session = try XCTUnwrap(try StateStore(directory: directory).load().sessions.first)
+        XCTAssertEqual(session.transcript.map(\.text),
+                       ["Do you live in a house or a flat?", "I live in a flat with my parents."],
+                       "这一场的逐字稿是空的——训练记录点开只会显示「这一场没有逐字稿…」，"
+                           + "成品标准第 5 条（考官问过的每一个问题都能找到）当场落空。")
+        XCTAssertEqual(session.transcript.map(\.role), ["assistant", "user"])
+    }
+
+    /// 开关关掉时，采样器**一次都不该被问到**。
+    ///
+    /// 只有上面那条的话，「不管开关一律注入」也是绿的——而那意味着用户明明关掉了，
+    /// 练习时还在读 ChatGPT 窗口上的字。界面显示的状态和真实行为对不上，
+    /// 是本项目最不能接受的那一种失败。
+    func testTurningTheSwitchOffReallyStopsTheSampling() async throws {
+        let sampler = Self.scriptedSampler()
+        let app = Self.appState(directory: directory, sampler: sampler)
+        app.setTranscriptEnabled(false)
+
+        let runner = app.makePracticeRunner()
+        try await runner.start(setup: Self.setup())
+        try await runner.finishPractice()
+
+        XCTAssertEqual(sampler.sampleCount, 0,
+                       "用户把「记录对话逐字稿」关掉了，练习时却还在读 ChatGPT 窗口上的字。")
+        XCTAssertTrue(try XCTUnwrap(try StateStore(directory: directory).load().sessions.first)
+            .transcript.isEmpty)
+        XCTAssertNil(runner.transcriptNotice, "用户自己关掉的功能不该报警")
+    }
+
+    /// 生产默认那一份工厂造出来的必须是真的 `AXTranscriptSampler`。
+    ///
+    /// 上面两条都是拿假采样器测的：把生产默认换成一个永远返回空的采样器，它们照样全绿，
+    /// 而真机上逐字稿仍然是空的——这正是 BI-2 那个缺口的形状，所以这一层也得有人守。
+    ///
+    /// **构造它没有副作用**：`LiveAXAccess.init` 是空的，`sample()` 不被调用就不碰
+    /// 任何 AX 接口，更不会启动 ChatGPT（铁律 5）。这与 `AppState.liveBridge` 同理，
+    /// 与一按下去就会启动 ChatGPT 的 `livePreflight` 不同。
+    func testTheProductionDefaultReallyBuildsAnAXTranscriptSampler() {
+        let sampler = AppState.liveTranscriptSampler()
+
+        XCTAssertTrue(sampler is AXTranscriptSampler,
+                      "真机上练习时用的不是从 ChatGPT 的无障碍树上采样的那一个，"
+                          + "而是 \(type(of: sampler))。逐字稿会永远是空的，"
+                          + "而所有拿假采样器写的测试都照样全绿。")
+    }
+
+    // MARK: - 上面三条用的装置
+
+    /// 注入假 Bridge 与假采样器的 `AppState`。**不碰真实 ChatGPT（铁律 5）。**
+    ///
+    /// `makeBridge` 交出去的那台假 Bridge 会正常吐出一份合法复盘，
+    /// 好让 `finishPractice()` 一路走到归档——逐字稿正是在归档那一步落进训练记录的。
+    private static func appState(directory: DataDirectory,
+                                 sampler: any TranscriptSampling) -> AppState {
+        let bridge = FakeBridge()
+        bridge.copyResult = .success(rawReview)
+        return AppState(directory: directory,
+                        preflight: { .init(ok: true, messages: []) },
+                        makeBridge: { bridge },
+                        makeTranscriptSampler: { sampler })
+    }
+
+    private static func setup() -> SessionSetup {
+        SessionSetup(question: Question(id: "p1-home-001", part: 1, topic: "Home",
+                                        prompt: "Do you live in a house or a flat?"),
+                     focusPart: .part1, durationMinutes: 5, goal: "")
+    }
+
+    /// 背景板一次（`begin`），之后每一次都是完整的这一场（`tick` / `finish`）。
+    /// 与 `PracticeRunnerArchiveTests.scriptedSampler` 同一套脚本，理由见那边的注释。
+    private static func scriptedSampler() -> FakeTranscriptSampler {
+        let background = TranscriptFragment(speaker: .learner,
+                                            text: "You will act as an IELTS Speaking examiner.")
+        return FakeTranscriptSampler([
+            TranscriptSweep(fragments: [background]),
+            TranscriptSweep(fragments: [
+                background,
+                TranscriptFragment(speaker: .examiner, text: "Do you live in a house or a flat?"),
+                TranscriptFragment(speaker: .learner, text: "I live in a flat with my parents.")
+            ])
+        ])
+    }
+
+    private static let rawReview = """
+        <<<IELTS_REVIEW_JSON:appstate-test>>>
+        {"summary":"这次整体还行。",
+         "must_correct":[{"learner_said":"I very like it.","correction":"I really like it.",
+                          "why_it_matters":"very 不能直接修饰动词"}],
+         "vocabulary":[],"priority_target":null}
+        <<<END_IELTS_REVIEW_JSON:appstate-test>>>
+        """
 }

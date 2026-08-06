@@ -32,6 +32,7 @@ public final class AppState {
     private let store: StateStore
     private let preflight: @Sendable () -> BridgeReadiness
     private let makeBridge: @Sendable () -> any CoachBridge & Sendable
+    private let makeTranscriptSampler: @Sendable () -> any TranscriptSampling
     /// 首次环境检查是否已经发起过。见 `startInitialPermissionCheckIfNeeded()`。
     private var didStartInitialCheck = false
 
@@ -50,13 +51,28 @@ public final class AppState {
         return AXDriver(access: access, locator: AXLocator(access: access))
     }
 
+    /// 生产环境真正用的那一台逐字稿采样器。**构造它本身没有副作用**——
+    /// `LiveAXAccess.init` 是空的，不启动 ChatGPT、不碰磁盘，只有 `sample()` 被调用时
+    /// 才会去读无障碍树。与 `liveBridge` 同理，单元测试与预览一律注入假采样器（铁律 5）。
+    ///
+    /// **它与 `liveBridge` 各自持有一份 `LiveAXAccess` 是有意的**：
+    /// `LiveAXAccess.snapshotTree()` 每次调用都会清空 rawID 映射并把代次 +1，
+    /// 让驱动器和采样器共用一份的话，采样器每 2.5 秒一次的遍历会把驱动器
+    /// 手上正等着按的那个元素引用作废（症状是「按钮明明在，按下去没反应」）。
+    nonisolated public static let liveTranscriptSampler: @Sendable () -> any TranscriptSampling = {
+        AXTranscriptSampler(access: LiveAXAccess())
+    }
+
     public init(directory: DataDirectory = .resolve(),
                 preflight: @escaping @Sendable () -> BridgeReadiness = AppState.livePreflight,
-                makeBridge: @escaping @Sendable () -> any CoachBridge & Sendable = AppState.liveBridge) {
+                makeBridge: @escaping @Sendable () -> any CoachBridge & Sendable = AppState.liveBridge,
+                makeTranscriptSampler: @escaping @Sendable () -> any TranscriptSampling
+                    = AppState.liveTranscriptSampler) {
         self.directory = directory
         self.store = StateStore(directory: directory)
         self.preflight = preflight
         self.makeBridge = makeBridge
+        self.makeTranscriptSampler = makeTranscriptSampler
         // 这里只读本地磁盘（毫秒级）。环境检查**不在**构造函数里做，见下面两个方法的说明。
         reload()
     }
@@ -177,8 +193,21 @@ public final class AppState {
     ///
     /// 每次开练都造一台新的：`PracticeRunner` 带着「这一场是哪道题」的状态，
     /// 复用同一台会让上一场的残留状态影响下一场。
+    ///
+    /// **「记录对话逐字稿」这个开关就在这里生效**：开着才造采样器，关着传 nil
+    /// （`PracticeRunner` 收到 nil 就安静地什么都不做，不报错、不留提示——
+    /// 那是用户自己的选择，不该渲染成警告）。开关在**开练这一刻**读一次，
+    /// 而不是练到一半跟着变：一场练习记一半逐字稿，比记全或不记都难解释。
+    ///
+    /// 这一步曾经漏掉过：Phase 4 的十三个任务没有一个认领「把采样器接到 App 上」，
+    /// 于是 `AXTranscriptSampler` 在整个 App 里从来没有被造出来过，真机上练一场
+    /// 逐字稿一定是空的，而界面上看不出任何异样。守着它的是 `AppStateTests` 里
+    /// 「采样器必须真的接到练习上」那一组三条。
     public func makePracticeRunner() -> PracticeRunner {
-        PracticeRunner(bridge: makeBridge(), pasteboard: SystemPasteboard(), directory: directory)
+        PracticeRunner(bridge: makeBridge(),
+                       pasteboard: SystemPasteboard(),
+                       directory: directory,
+                       transcript: state.settings.transcriptEnabled ? makeTranscriptSampler() : nil)
     }
 
     /// 造一份「重新导入待处理的复盘」的视图模型：**与本 AppState 同一个数据目录**。
