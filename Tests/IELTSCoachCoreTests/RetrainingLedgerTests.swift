@@ -22,13 +22,24 @@ final class RetrainingLedgerTests: XCTestCase {
 
     // MARK: - progress
 
-    func testProgressIsNotStartedWhenNoSessionIsLinked() {
+    /// 用例里必须同时有「没挂钩的普通练习」和「挂在别的目标上的复训会话」：
+    /// 只放普通练习的话，它们的 retrainingKind 恒为 nil，progress 怎么写都是空数组，
+    /// 这条测试就一点约束力都没有（本项目消灭空转测试的老账）。
+    func testProgressIsNotStartedWhenNothingIsLinkedToThisTarget() {
+        let othersLink = link("k2", source: "s0", original: "q1")
         let progress = RetrainingLedger.progress(
             for: target("k", session: "s0"),
-            sessions: [session("s1", question: "q1"), session("s2", question: "q2")])
+            sessions: [session("s1", question: "q1"),                   // 普通练习，没挂钩
+                       session("s2", question: "q2"),                   // 普通练习，没挂钩
+                       session("s3", question: "q1", link: othersLink), // 别的目标的原题重答
+                       session("s4", question: "q9", link: othersLink)])// 别的目标的换题验证
+        XCTAssertEqual(progress.targetID, "k@s0",
+                       "进度必须自报是哪个目标的，否则界面拿它对号入座时会串台")
         XCTAssertEqual(progress.stage, .notStarted)
-        XCTAssertTrue(progress.originalRetrySessionIDs.isEmpty)
-        XCTAssertTrue(progress.transferSessionIDs.isEmpty)
+        XCTAssertTrue(progress.originalRetrySessionIDs.isEmpty,
+                      "没挂钩的普通练习、以及挂在别的目标上的复训，都不算这个目标的进度")
+        XCTAssertTrue(progress.transferSessionIDs.isEmpty,
+                      "没挂钩的普通练习、以及挂在别的目标上的复训，都不算这个目标的进度")
     }
 
     func testProgressSeparatesOriginalRetriesFromTransfers() {
@@ -130,6 +141,18 @@ final class RetrainingLedgerTests: XCTestCase {
         state.targets = [target("k", session: "s0")]
         XCTAssertFalse(RetrainingLedger.setStatus(.retired, of: "k@不存在", in: &state))
         XCTAssertEqual(state.targets[0].status, "new")
+    }
+
+    /// 取消退休：`.new` 写进 status 的必须正好是 "new"。这一条钉的是 `.new` 的 rawValue——
+    /// 它一旦拼错，status 会变成一个既不是 "retired" 也不是 "new" 的值，
+    /// rank 不报错、照常把它排进推荐，用户看不出任何异常。属于禁止的静默失败。
+    func testSetStatusBackToNewUnretiresTheTarget() {
+        var state = CoachState.empty()
+        state.targets = [target("k", session: "s0", status: "retired")]
+        XCTAssertTrue(RetrainingLedger.setStatus(.new, of: "k@s0", in: &state))
+        XCTAssertEqual(state.targets[0].status, "new")
+        XCTAssertEqual(RetrainingPolicy.rank(targets: state.targets, issues: []).map(\.id),
+                       ["k@s0"], "取消退休后必须真的回到推荐里")
     }
 
     /// 退休之后必须真的从推荐里消失——RetrainingPolicy.rank 认的就是这个字符串。
