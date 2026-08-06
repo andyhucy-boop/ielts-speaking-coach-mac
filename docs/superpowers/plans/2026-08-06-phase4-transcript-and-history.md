@@ -2474,9 +2474,14 @@ git commit -m "feat(ui): 练习结束落训练记录、逐字稿与复盘报告"
 > ### 写给 Phase 9 实现者的话
 >
 > Phase 9 Task 3 也要创建 `Sources/IELTSCoachCore/Storage/PendingReviewStore.swift`。
-> **Phase 4 已经把它建好了，`write` 的实现与 Phase 9 计划里那份逐字一致。**
-> 届时不要新建、不要覆盖，跑一次 `swift test --filter PendingReviewStoreTests`
-> 确认全绿即可，然后直接进 Task 4。
+> **Phase 4 已经把它建好了，届时不要新建、不要覆盖**，跑一次
+> `swift test --filter PendingReviewStoreTests` 确认全绿即可，然后直接进 Task 4。
+>
+> **注意：Phase 4 这一份的 `write` 比 Phase 9 计划里抄的那份严格**——它在判断文件名
+> 是否被占用时，连 `<id>.txt.imported` 一起看（原因见下面 `write` 的文档注释）。
+> 拿 Phase 9 计划里那段代码覆盖回去，会把这道防线拆掉，
+> `PendingReviewStoreTests` 里的 `testANameWhoseImportedTwinExistsIsNeverHandedOutAgain`
+> 会变红。以磁盘上这一份为准。
 
 - [ ] **Step 1: 写失败的测试**
 
@@ -2530,6 +2535,69 @@ final class PendingReviewStoreTests: XCTestCase {
         XCTAssertEqual(second.lastPathComponent, "s1-2.txt")
         XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "第一次的复盘",
                        "先落盘的那份一个字都不能被覆盖")
+    }
+
+    func testANameWhoseImportedTwinExistsIsNeverHandedOutAgain() throws {
+        // 复盘解析失败的那一场压根不会进 state.sessions，下一次 SessionID.next 取
+        // 「当天已有编号的最大值 +1」，算出来还是同一个编号。此时 `<id>.txt` 确实
+        // 已经不在了（被改名成 `<id>.txt.imported`），只看 `<id>.txt` 在不在，
+        // 就会把这个已经用过的名字再发一次。
+        _ = try PendingReviewStore.write(rawText: "第一次的复盘", sessionID: "s1",
+                                         directory: directory)
+        let first = try XCTUnwrap(try PendingReviewStore.list(directory: directory).first)
+        let marked = try PendingReviewStore.markImported(first)
+
+        let second = try PendingReviewStore.write(rawText: "第二次的复盘", sessionID: "s1",
+                                                  directory: directory)
+        XCTAssertEqual(second.lastPathComponent, "s1-2.txt",
+                       "s1.txt 这个名字已经被 s1.txt.imported 占掉了，不能再发一次")
+        XCTAssertEqual(try String(contentsOf: marked, encoding: .utf8), "第一次的复盘",
+                       "已经入库的那份原文一个字都不能被动")
+
+        // write 交出来的路径，必须保证它的 .imported 孪生名也是空的。否则归档做完了、
+        // markImported 却因为目标已存在而失败，文件留在待处理列表里，用户再点一次
+        // 导入就再归档一次，IssueRecord.occurrences 会一次次累加。
+        let secondEntry = try XCTUnwrap(
+            try PendingReviewStore.list(directory: directory)
+                .first { $0.fileName == second.lastPathComponent })
+        XCTAssertNoThrow(try PendingReviewStore.markImported(secondEntry),
+                         "落盘时发的名字必须是连 .imported 孪生名一起空着的")
+    }
+
+    func testTextIdenticalToAnAlreadyImportedFileStillGetsItsOwnPendingFile() throws {
+        // 「内容相同就复用」这条捷径不能跨过 .imported：那份已经入库，不在待处理列表里，
+        // 把它的路径交回去，调用方会以为自己落盘成功了，用户却在收件箱里看不到这一份。
+        _ = try PendingReviewStore.write(rawText: "同样的内容", sessionID: "s1",
+                                         directory: directory)
+        let first = try XCTUnwrap(try PendingReviewStore.list(directory: directory).first)
+        _ = try PendingReviewStore.markImported(first)
+
+        let second = try PendingReviewStore.write(rawText: "同样的内容", sessionID: "s1",
+                                                  directory: directory)
+        XCTAssertEqual(second.lastPathComponent, "s1-2.txt")
+        XCTAssertEqual(try PendingReviewStore.list(directory: directory).map(\.fileName),
+                       ["s1-2.txt"], "新落盘的这一份必须能在待处理列表里看见")
+    }
+
+    func testAPendingFileIsNotReusedWhenItsImportedTwinIsAlreadyThere() throws {
+        // 磁盘上同时躺着 s1.txt 和 s1.txt.imported——用户手工往 pending-reviews 里
+        // 放过文件，或者旧版本留下的。内容一模一样也不能把 s1.txt 交回去：
+        // 它的 .imported 名字已经被占，归档做完后 markImported 会失败。
+        _ = try PendingReviewStore.write(rawText: "同样的内容", sessionID: "s1",
+                                         directory: directory)
+        let entry = try XCTUnwrap(try PendingReviewStore.list(directory: directory).first)
+        try FileManager.default.copyItem(
+            at: entry.url,
+            to: entry.url.deletingLastPathComponent()
+                .appendingPathComponent(entry.fileName + PendingReviewStore.importedSuffix))
+
+        let again = try PendingReviewStore.write(rawText: "同样的内容", sessionID: "s1",
+                                                 directory: directory)
+        XCTAssertEqual(again.lastPathComponent, "s1-2.txt")
+        let againEntry = try XCTUnwrap(
+            try PendingReviewStore.list(directory: directory)
+                .first { $0.fileName == again.lastPathComponent })
+        XCTAssertNoThrow(try PendingReviewStore.markImported(againEntry))
     }
 
     func testRejectsSessionIDsThatEscapeTheDataDirectory() {
@@ -2610,6 +2678,30 @@ final class PendingReviewStoreTests: XCTestCase {
                        "原文一个字都不能改——用户可能想回头看当时 ChatGPT 写了什么")
     }
 
+    func testMarkingImportedOntoAnOccupiedNameExplainsItselfInChinese() throws {
+        // 手工往 pending-reviews 里放文件是允许的（`coach reimport` 就是这么用的），
+        // 所以「`<id>.txt` 和 `<id>.txt.imported` 同时存在」没法从源头彻底杜绝。
+        // 撞上了要说人话：归档发生在标记之前，此刻档案已经写完了，
+        // 用户再点一次导入就再归档一次，IssueRecord.occurrences 会重复累加。
+        _ = try PendingReviewStore.write(rawText: "原文", sessionID: "s1", directory: directory)
+        let entry = try XCTUnwrap(try PendingReviewStore.list(directory: directory).first)
+        try FileManager.default.copyItem(
+            at: entry.url,
+            to: entry.url.deletingLastPathComponent()
+                .appendingPathComponent(entry.fileName + PendingReviewStore.importedSuffix))
+
+        XCTAssertThrowsError(try PendingReviewStore.markImported(entry)) { error in
+            XCTAssertTrue(error is CoachError,
+                          "不能把 Foundation 的英文原始错误直接摆到界面上：\(error)")
+            let message = error.localizedDescription
+            XCTAssertTrue(message.contains("下一步"), "要说清下一步做什么：\(message)")
+            XCTAssertTrue(message.contains("s1.txt"), "要说清是哪个文件：\(message)")
+            XCTAssertTrue(message.contains("导入"), "要提醒别再导一次，否则出现次数会重复累加：\(message)")
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: entry.url.path),
+                      "标记失败也不能把原文弄丢")
+    }
+
     func testDeletingReallyRemovesTheFile() throws {
         _ = try PendingReviewStore.write(rawText: "原文", sessionID: "s1", directory: directory)
         let entry = try XCTUnwrap(try PendingReviewStore.list(directory: directory).first)
@@ -2676,22 +2768,39 @@ public enum PendingReviewStore {
     /// 同名文件已存在时的行为：
     /// - 内容完全相同 → 直接复用，重试不会堆出一堆一样的文件
     /// - 内容不同 → 改用 `<id>-2.txt`、`<id>-3.txt`…，**绝不覆盖已经落盘的内容**
+    /// - 名字被 `<id>.txt.imported` 占着 → 一样要换名，见下
+    ///
+    /// **交出去的路径，必须保证它的 `.imported` 孪生名也是空的。** `markImported`
+    /// 只改名不删除，而复盘解析失败的那一场压根不会进 `state.sessions`，
+    /// 下一次 `SessionID.next` 取「当天已有编号的最大值 +1」会算出同一个编号。
+    /// 此时 `<id>.txt` 确实不在了，光看它在不在就会把这个用过的名字再发一次；
+    /// 等归档做完、`markImported` 撞上已存在的 `<id>.txt.imported` 抛错，文件就
+    /// 留在了待处理列表里——用户再点一次导入就再归档一次，
+    /// 而 `ReviewArchiver` 只在 `sourceSessionIds` 上去重，`IssueRecord.occurrences`
+    /// 会跟着一次次累加，且没有任何提示。这正是决策 2 要防的那种静默失真。
     @discardableResult
     public static func write(rawText: String, sessionID: String,
                              directory: DataDirectory) throws -> URL {
         let safeID = try SessionID.validated(sessionID)
         try directory.createIfNeeded()
 
+        let fileManager = FileManager.default
         var candidate = directory.pendingReviewsDirectory.appending(path: "\(safeID).txt")
         var suffix = 2
-        while FileManager.default.fileExists(atPath: candidate.path) {
-            if let existing = try? String(contentsOf: candidate, encoding: .utf8),
+        while true {
+            let markedTwinExists = fileManager.fileExists(atPath: importedTwin(of: candidate).path)
+            guard fileManager.fileExists(atPath: candidate.path) || markedTwinExists else { break }
+            // 「内容相同就复用」这条捷径不能跨过已入库的那一份：它不在待处理列表里，
+            // 把它的路径交回去，调用方会以为落盘成功了，用户却在收件箱里看不到这一份。
+            if !markedTwinExists,
+               let existing = try? String(contentsOf: candidate, encoding: .utf8),
                existing == rawText {
                 return candidate
             }
             guard suffix <= 100 else {
                 throw CoachError.stateUnreadable(
-                    "同一个会话编号「\(safeID)」下已经有 100 份内容不同的复盘原文，不再继续新建文件。"
+                    "同一个会话编号「\(safeID)」下已经占用了 100 个文件名"
+                    + "（含已经标记为入库的），不再继续新建文件。"
                     + "下一步：到 \(directory.pendingReviewsDirectory.path) 清理掉不需要的文件，"
                     + "或在「复盘报告」页用「重新导入待处理的复盘」把它们处理掉。")
             }
@@ -2701,6 +2810,12 @@ public enum PendingReviewStore {
 
         try rawText.write(to: candidate, atomically: true, encoding: .utf8)
         return candidate
+    }
+
+    /// `<name>.txt` 对应的已入库标记文件 `<name>.txt.imported`。
+    private static func importedTwin(of url: URL) -> URL {
+        url.deletingLastPathComponent()
+            .appendingPathComponent(url.lastPathComponent + importedSuffix)
     }
 
     /// 列出还没入库的复盘原文，新的在前。
@@ -2745,11 +2860,27 @@ public enum PendingReviewStore {
     }
 
     /// 标记为已入库：**不删除，只改名**。
+    ///
+    /// 失败了要说人话。`write` 已经保证自己发出去的名字连 `.imported` 孪生名一起空着，
+    /// 但用户手工往 `pending-reviews/` 里放文件是允许的（`coach reimport` 就是这么用的），
+    /// 所以撞名这件事没法从源头彻底杜绝。而这一步失败的后果比一般的改名失败重：
+    /// 归档发生在标记之前，此刻档案已经写完，文件却还留在待处理列表里，
+    /// 用户再点一次导入就再归档一次，`IssueRecord.occurrences` 会重复累加。
+    /// 提示里必须把「别再导一次」说出来（`coach reimport` 同一情形下的警告也是这么写的）。
     @discardableResult
     public static func markImported(_ entry: PendingReviewEntry) throws -> URL {
-        let target = entry.url.deletingLastPathComponent()
-            .appendingPathComponent(entry.fileName + importedSuffix)
-        try FileManager.default.moveItem(at: entry.url, to: target)
+        let target = importedTwin(of: entry.url)
+        do {
+            try FileManager.default.moveItem(at: entry.url, to: target)
+        } catch {
+            throw CoachError.stateUnreadable(
+                "「\(entry.fileName)」的内容已经归进档案，但要把它标记为已入库（改名成"
+                + "「\(target.lastPathComponent)」）时失败了：\(error.localizedDescription) "
+                + "最常见的原因是这个名字已经被占。"
+                + "下一步：先别再点一次导入——归档已经做完，再导一次会让错题的「出现次数」重复累加；"
+                + "到 \(entry.url.deletingLastPathComponent().path) 把这个编号下不需要的那份"
+                + "删掉或改个别的名字，再回来刷新列表。")
+        }
         return target
     }
 
@@ -2762,7 +2893,7 @@ public enum PendingReviewStore {
 - [ ] **Step 4: 运行，确认通过**
 
 Run: `swift test --filter PendingReviewStoreTests`
-Expected: PASS（12 个测试）
+Expected: PASS（16 个测试）
 
 Run: `swift test`
 Expected: 全绿
@@ -2771,11 +2902,14 @@ Expected: 全绿
 
 | 把这一行改成 | 哪条测试必须变红 |
 |---|---|
-| `write` 里 `if let existing = ... existing == rawText { return candidate }` 整块删掉 | `testWritingTheSameTextTwiceReusesTheSameFile` |
-| `write` 里的 `while FileManager.default.fileExists` 循环整个删掉（直接写 `<id>.txt`） | `testDifferentTextNeverOverwritesWhatIsAlreadyThere` |
+| `write` 里 `if !markedTwinExists, let existing = ... { return candidate }` 整块删掉 | `testWritingTheSameTextTwiceReusesTheSameFile` |
+| `write` 里那个 `while true` 循环整个删掉（直接写 `<id>.txt`） | `testDifferentTextNeverOverwritesWhatIsAlreadyThere`、`testGivesUpWithAnActionableErrorInsteadOfLoopingForever`、`testANameWhoseImportedTwinExistsIsNeverHandedOutAgain` 等 5 条 |
+| `write` 的存在性判断去掉 `\|\| markedTwinExists`（只看 `<id>.txt`） | `testANameWhoseImportedTwinExistsIsNeverHandedOutAgain`、`testTextIdenticalToAnAlreadyImportedFileStillGetsItsOwnPendingFile` |
+| `write` 复用捷径的 `!markedTwinExists,` 去掉 | `testAPendingFileIsNotReusedWhenItsImportedTwinIsAlreadyThere` |
 | `write` 里的 `let safeID = try SessionID.validated(sessionID)` 改成 `let safeID = sessionID` | `testRejectsSessionIDsThatEscapeTheDataDirectory` |
 | `list` 里的 `.filter { $0.pathExtension.lowercased() == "txt" }` 删掉 | `testMarkingAsImportedKeepsTheFileButHidesItFromTheList` |
 | `read` 里的 `do/catch` 去掉、直接 `try? ... ?? ""` | `testReadingAFileThatIsGoneSaysSoInsteadOfReturningEmpty` |
+| `markImported` 里的 `do/catch` 去掉、直接 `try moveItem` | `testMarkingImportedOntoAnOccupiedNameExplainsItselfInChinese` |
 
 - [ ] **Step 6: 提交**
 
