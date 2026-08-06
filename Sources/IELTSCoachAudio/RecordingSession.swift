@@ -41,15 +41,22 @@ public struct RecordingOutcome: Equatable, Sendable {
 /// - 「文件已关」与「时长是多少」如果不是一起发布的，并发的 `finish()` 会读到
 ///   一个还没写回去的 0，把一条真录音当成「一秒都没录到」删掉；
 /// - 「还在录吗」的判断与随后的 `engine.start()` 如果不是互斥的，收尾之后
-///   麦克风会停在开着的状态，中断警告也会写在 `finish()` 读完之后，用户看不到。
+///   麦克风会停在开着的状态，中断警告也会写在 `finish()` 读完之后，用户看不到；
+/// - **重启采集的那段时间里，文件可能已经被另一条线关掉了。** 拿重启前的判断去宣告
+///   「已经自动接上继续录」，用户就会被骗着继续说，而麦克风开着、文件已关，
+///   后面每一个字都不进任何文件——他练完点开回听才发现后半段没了，
+///   而且永远搞不清哪半段丢了、为什么丢。
 ///
-/// 两条都实测复现过，所以下面的规矩不是洁癖：
+/// 三条都实测复现过，所以下面的规矩不是洁癖：
 ///
 /// 1. 所有可变状态一律在 `state` 里读写；
 /// 2. `finish()` 必须等**已经在跑**的设备变化处理完，再去收尾；
 /// 3. 锁里允许的慢动作只有 `writer.write` 与 `writer.finish`；
 ///    **绝不能握着锁去调 `engine.stop()`**——真实的 `AVAudioEngine` 停下来时会等
-///    当前那条 tap 回调返回，而 tap 回调正卡在这把锁上，那就是死锁。
+///    当前那条 tap 回调返回，而 tap 回调正卡在这把锁上，那就是死锁；
+/// 4. 松开锁做过慢动作（`engine.stop()` / `engine.start()`）之后，**重新拿锁时
+///    要重新判断**：松手期间别的线可能已经把文件关了、也可能已经开始收尾了。
+///    松手之前的判断在松手之后一律不作数。
 public final class RecordingSession: @unchecked Sendable {
     public typealias WriterFactory = @Sendable (URL) throws -> AudioSegmentWriter
 
@@ -202,12 +209,47 @@ public final class RecordingSession: @unchecked Sendable {
         do {
             try engine.start(onBuffer: { [weak self] buffer in self?.append(buffer) })
             state.lock()
-            interruptions.append(RecordingInterruption(at: at, recovered: true))
-            warnings.append(
-                "录音中途因为音频输入设备变化（多半是插拔了耳机）断了一下，已经自动接上继续录，"
-                + "切换的那一两秒没有录进去。"
-                + "下一步：回听时留意这一小段；若刚好是关键回答，把这道题再练一次。")
+            // **重启成功不等于还录得下去。**
+            //
+            // 上面那道守卫过了之后到这一行，中间隔着一整次 `engine.stop()`——真实的
+            // 采集器停下来时会等当前那条 tap 回调返回，那就是几十毫秒的窗口。就在这个
+            // 窗口里，音频线程上的写盘失败可能已经把文件关掉了（`append` 的 catch 分支：
+            // 磁盘满了就当场关文件，保住已经录到的部分）。这时候照着稿子念
+            // 「已经自动接上继续录」，用户就会接着说下去，而实际上**文件已经关了、
+            // 麦克风还开着**，后面每一个字都不进任何文件。等他练完点开回听才发现后半段
+            // 没了，而且永远搞不清是哪半段、为什么。
+            //
+            // 所以宣告恢复之前必须重新确认写入端还活着：`writer == nil` 就是「已经关了」。
+            // 这一次实测复现过（`testRestartDoesNotClaimRecoveryWhenTheFileWasClosedDuringTheRestart`），
+            // 别把这个判断改回无条件。
+            //
+            // **这里只问 `writer`，不问 `stopped`。** `stopped` 为真而文件还开着，说明
+            // 用户刚点了「练完」、`finish()` 正等着我们这一段落定：它会把文件正常关好、
+            // 把麦克风关掉，这次切换也确实接上过，中断照实报给用户才对
+            // （`testFinishDuringADeviceChangeStopsTheMicrophoneAndStillReportsTheInterruption`）。
+            // 真正不能宣告恢复的，是文件已经关掉的那一种。
+            let writeSideIsAlive = writer != nil
+            if writeSideIsAlive {
+                interruptions.append(RecordingInterruption(at: at, recovered: true))
+                warnings.append(
+                    "录音中途因为音频输入设备变化（多半是插拔了耳机）断了一下，已经自动接上继续录，"
+                    + "切换的那一两秒没有录进去。"
+                    + "下一步：回听时留意这一小段；若刚好是关键回答，把这道题再练一次。")
+            } else {
+                interruptions.append(RecordingInterruption(at: at, recovered: false))
+                warnings.append(
+                    "录音中途因为音频输入设备变化（多半是插拔了耳机）断了一下，这一次没有接着录："
+                    + "录音文件在那之前已经因为写入失败关掉了，麦克风也已经关上，"
+                    + "后面说的话不会再录进去。"
+                    + "\n已经录到的部分完整保存在 \(relativePath)，练习本身不受影响。"
+                    + "下一步：点「我练完了」结束这次练习并回听已经录到的部分；"
+                    + "下一次练习会重新开始录。")
+            }
             state.unlock()
+            // 文件都关了，麦克风却是我们刚刚亲手重新打开的——不关掉它，练习结束前
+            // 那盏灯就一直亮着，而它录下的东西没有任何人收。
+            // 锁外调，理由同 `append` 里那一句：真实的采集器停下来会等 tap 回调返回。
+            if !writeSideIsAlive { engine.stop() }
         } catch {
             // 接不回来就收尾。**先关文件再报错**：已经录到的部分必须留在磁盘上。
             state.lock()

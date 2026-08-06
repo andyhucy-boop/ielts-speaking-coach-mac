@@ -221,6 +221,60 @@ final class RecordingSessionTests: XCTestCase {
                        "文件已经关了，绝不能告诉用户「已自动接上继续录」")
     }
 
+    /// **重启采集的那段时间里，文件已经被关掉了**——这时候绝不能宣告「已经自动接上继续录」。
+    ///
+    /// 真实顺序（三条线，全部是既有代码走得到的路）：
+    ///
+    /// 1. 设备变化处理在通知线程上过了「还在录吗」那道守卫；
+    /// 2. `engine.stop()`——真实的 `AVAudioEngine` 停下来时会等当前那条 tap 回调返回，
+    ///    这一等就是几十毫秒的窗口；
+    /// 3. **就在这个窗口里**，音频线程上还在路上的那个缓冲区写盘失败了：
+    ///    `append` 当场把文件关掉（保住已经录到的部分），并要求停止采集；
+    /// 4. 重启成功，于是宣告「已经自动接上继续录」。
+    ///
+    /// 用户看到的是「已经自动接上继续录」，实际是**文件已经关了、麦克风还开着**，
+    /// 后面说的每一个字都不进任何文件。这比「插拔耳机会中断录音，请重来」糟得多：
+    /// 后者他知道发生了什么，前者他是被骗着继续说，练完才发现后半段没了。
+    func testRestartDoesNotClaimRecoveryWhenTheFileWasClosedDuringTheRestart() throws {
+        let session = makeSession()
+        try session.start()
+        engine.deliver(makePCMBuffer())          // 前半段真的录到了
+
+        let engine = self.engine!
+        let writer = self.writer!
+        let closed = DispatchSemaphore(value: 0)
+        // 第 2 次 start（设备变化之后的重启）还没返回时，音频线程上的写盘失败把文件关掉。
+        engine.onStartCall = { call in
+            guard call == 2 else { return }
+            Thread.detachNewThread {
+                writer.failOnWrite = true
+                engine.deliverAfterStop(makePCMBuffer())
+                closed.signal()
+            }
+            XCTAssertEqual(closed.wait(timeout: .now() + 5), .success,
+                           "模拟写盘失败的那条线程没跑完，这条测试的前提就没成立")
+        }
+
+        engine.unplugHeadphones()
+
+        XCTAssertEqual(writer.finishCount, 1,
+                       "前提没成立：这条测的就是「重启期间文件已经被关掉了」")
+        XCTAssertFalse(engine.isRunning,
+                       "文件已经关了，麦克风却还开着——用户以为在录，实际每个字都没落地")
+
+        let outcome = session.finish()
+        XCTAssertFalse(outcome.interruptions.contains(where: \.recovered),
+                       "文件都关了还记成「接上了」，训练记录里这一条会写着「已恢复」")
+        let warning = try XCTUnwrap(outcome.warning)
+        XCTAssertFalse(warning.contains("已经自动接上"),
+                       "文件已经关了，却告诉用户「已经自动接上继续录」——他会接着说下去，后半段全丢")
+        XCTAssertTrue(warning.contains("下一步"))
+        // 已经录到的那一半必须照常交出来：这条路径上丢的是「后面」，不是「前面」。
+        XCTAssertEqual(outcome.relativePath, relativePath)
+        XCTAssertEqual(outcome.duration, 12)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fileURL.path))
+    }
+
     // MARK: - 其他失败
 
     func testWriteFailureStopsRecordingButKeepsWhatWasWritten() throws {
@@ -405,6 +459,49 @@ final class RecordingSessionTests: XCTestCase {
                       "一条真录音被当成空文件删掉了")
         XCTAssertFalse(try XCTUnwrap(outcome.warning).contains("一秒录音都没录到"),
                        "明明录到了，却告诉用户一秒都没录到")
+    }
+
+    /// 用户点「练完」的同一瞬间又插拔了一次耳机：**收尾一旦开始，新来的设备变化不许再打开麦克风。**
+    ///
+    /// 守的是同一条规矩的两半——`finish()` 里那句 `stopped = true`，
+    /// 和设备变化那道守卫里的 `!stopped`。删掉任何一半，麦克风都会在收尾开始之后被重新
+    /// 打开，而 `finish()` 那一次 `stop()` 已经过去了，**再没有任何人会去关它**：
+    /// 用户练完关掉窗口，菜单栏那盏麦克风灯还亮着，录下的东西没有任何人收。
+    /// 顺带还会往这次的结果里塞一条「已经自动接上继续录」——那时候他早就不说话了。
+    ///
+    /// 两处实测都验过：各删一处，原有的 18 条全绿。
+    ///
+    /// 假采集器把设备变化钉在 `finish()` 的 `stop()` 里，只是为了让这条缝落在一个确定的
+    /// 位置上、红绿可重复；真实链路上它是两条各跑各的线（`AudioCaptureEngine` 的线程约定
+    /// 明写这个回调可能在任意线程上来，`RecordingSession` 那把锁正是为此存在）。
+    func testADeviceChangeArrivingWhileFinishingDoesNotReopenTheMicrophone() throws {
+        let session = makeSession()
+        try session.start()
+        engine.deliver(makePCMBuffer())
+
+        let engine = self.engine!
+        let handled = DispatchSemaphore(value: 0)
+        engine.onStopCall = { call in
+            guard call == 1 else { return }        // 收尾的那一次 stop
+            Thread.detachNewThread {
+                engine.unplugHeadphones()          // 通知线程：耳机被拔了
+                handled.signal()
+            }
+            XCTAssertEqual(handled.wait(timeout: .now() + 5), .success,
+                           "模拟设备变化的那条线程没跑完，这条测试的前提就没成立")
+        }
+
+        let outcome = session.finish()
+
+        XCTAssertEqual(engine.startCount, 1,
+                       "收尾已经开始了还去重启采集：练完之后麦克风还开着，再没有人会去关它")
+        XCTAssertFalse(engine.isRunning, "练完了麦克风还开着")
+        XCTAssertTrue(outcome.interruptions.isEmpty,
+                      "收尾开始之后才来的设备变化，不该记进这一次练习的结果")
+        XCTAssertNil(outcome.warning,
+                     "用户点完「练完」才拔的耳机，不该告诉他「已经自动接上继续录」")
+        XCTAssertEqual(outcome.relativePath, relativePath)
+        XCTAssertEqual(writer.finishCount, 1, "文件不能被关第二次")
     }
 
     /// 用户在设备切换的那一瞬间点了「练完」。

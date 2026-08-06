@@ -18,6 +18,7 @@ final class FakeCaptureEngine: AudioCaptureEngine, @unchecked Sendable {
     private var running = false
     private var failStartAt: Int?
     private var startHook: (@Sendable (Int) -> Void)?
+    private var stopHook: (@Sendable (Int) -> Void)?
     private var sink: (@Sendable (AVAudioPCMBuffer) -> Void)?
     /// stop() 之后仍然留着的那份回调，专门用来模拟「还在路上的缓冲区」。
     private var lastSink: (@Sendable (AVAudioPCMBuffer) -> Void)?
@@ -47,6 +48,16 @@ final class FakeCaptureEngine: AudioCaptureEngine, @unchecked Sendable {
         set { lock.lock(); startHook = newValue; lock.unlock() }
     }
 
+    /// 同上，但插在 stop() 里，参数是「这是第几次 stop」。
+    ///
+    /// 用户点「练完」时 `finish()` 的第一件事就是停采集，而真实的采集器停下来要等
+    /// 采集队列上的活做完（`CaptureWorkQueue`）——「收尾已经开始、还没收完」这条缝
+    /// 就在这段时间里。设备变化正好在这时候来，是这条缝里唯一会开麦克风的事。
+    var onStopCall: (@Sendable (Int) -> Void)? {
+        get { lock.lock(); defer { lock.unlock() }; return stopHook }
+        set { lock.lock(); stopHook = newValue; lock.unlock() }
+    }
+
     func start(onBuffer: @escaping @Sendable (AVAudioPCMBuffer) -> Void) throws {
         lock.lock()
         starts += 1
@@ -71,9 +82,13 @@ final class FakeCaptureEngine: AudioCaptureEngine, @unchecked Sendable {
     func stop() {
         lock.lock()
         stops += 1
+        let call = stops
         sink = nil
         running = false
+        let hook = stopHook
         lock.unlock()
+        // 钩子一定要在锁外调，理由同 start()：它里面会有另一条线程回头调进来。
+        hook?(call)
     }
 
     /// 模拟麦克风送来一段音频。
