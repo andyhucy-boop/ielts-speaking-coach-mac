@@ -7,32 +7,80 @@ import Foundation
 /// 有了它，「插拔耳机」这条路径可以在没有麦克风、没有权限、也不用真去拔线的
 /// 情况下完整测到——这正是把 AVAudioEngine 藏在 protocol 后面的全部理由。
 ///
-/// `@unchecked Sendable` 只在测试里成立：下面这些状态全部只被测试线程碰。
+/// **下面每一处状态都是真的用锁保护的**，不是靠「只有测试线程碰」这句话糊过去：
+/// 「用户在设备切换的那一瞬间点了练完」这类测试必须真的开第二条线程，
+/// 假实现自己先有数据竞争的话，测出来的红绿就没有意义了。
 final class FakeCaptureEngine: AudioCaptureEngine, @unchecked Sendable {
-    var onConfigurationChange: (@Sendable () -> Void)?
-
-    private(set) var startCount = 0
-    private(set) var stopCount = 0
-    /// 第几次调用 start 要抛错（1 表示第一次）。nil 表示每次都成功。
-    var failStartAtCall: Int?
-
+    private let lock = NSLock()
+    private var configurationChangeHandler: (@Sendable () -> Void)?
+    private var starts = 0
+    private var stops = 0
+    private var running = false
+    private var failStartAt: Int?
+    private var startHook: (@Sendable (Int) -> Void)?
     private var sink: (@Sendable (AVAudioPCMBuffer) -> Void)?
     /// stop() 之后仍然留着的那份回调，专门用来模拟「还在路上的缓冲区」。
     private var lastSink: (@Sendable (AVAudioPCMBuffer) -> Void)?
 
-    func start(onBuffer: @escaping @Sendable (AVAudioPCMBuffer) -> Void) throws {
-        startCount += 1
-        if failStartAtCall == startCount {
-            throw RecordingEngineError.engineStartFailed("测试用的启动失败。下一步：这是测试。")
-        }
-        sink = onBuffer
-        lastSink = onBuffer
+    var onConfigurationChange: (@Sendable () -> Void)? {
+        get { lock.lock(); defer { lock.unlock() }; return configurationChangeHandler }
+        set { lock.lock(); configurationChangeHandler = newValue; lock.unlock() }
     }
 
-    func stop() { stopCount += 1; sink = nil }
+    var startCount: Int { lock.lock(); defer { lock.unlock() }; return starts }
+    var stopCount: Int { lock.lock(); defer { lock.unlock() }; return stops }
+
+    /// 采集器现在是不是开着的。真实实现里这一位就是「麦克风灯还亮不亮」。
+    var isRunning: Bool { lock.lock(); defer { lock.unlock() }; return running }
+
+    /// 第几次调用 start 要抛错（1 表示第一次）。nil 表示每次都成功。
+    var failStartAtCall: Int? {
+        get { lock.lock(); defer { lock.unlock() }; return failStartAt }
+        set { lock.lock(); failStartAt = newValue; lock.unlock() }
+    }
+
+    /// 在 start() 执行到一半时插一脚，参数是「这是第几次 start」。
+    /// 真实的 AVAudioEngine 重启要花上百毫秒，「重启还没返回」这条缝
+    /// 只有把那段时间撑开才测得到。
+    var onStartCall: (@Sendable (Int) -> Void)? {
+        get { lock.lock(); defer { lock.unlock() }; return startHook }
+        set { lock.lock(); startHook = newValue; lock.unlock() }
+    }
+
+    func start(onBuffer: @escaping @Sendable (AVAudioPCMBuffer) -> Void) throws {
+        lock.lock()
+        starts += 1
+        let call = starts
+        let shouldFail = failStartAt == call
+        let hook = startHook
+        lock.unlock()
+
+        if shouldFail {
+            throw RecordingEngineError.engineStartFailed("测试用的启动失败。下一步：这是测试。")
+        }
+        // 钩子一定要在锁外调：它里面会有另一条线程回头调 stop()。
+        hook?(call)
+
+        lock.lock()
+        sink = onBuffer
+        lastSink = onBuffer
+        running = true
+        lock.unlock()
+    }
+
+    func stop() {
+        lock.lock()
+        stops += 1
+        sink = nil
+        running = false
+        lock.unlock()
+    }
 
     /// 模拟麦克风送来一段音频。
-    func deliver(_ buffer: AVAudioPCMBuffer) { sink?(buffer) }
+    func deliver(_ buffer: AVAudioPCMBuffer) {
+        lock.lock(); let target = sink; lock.unlock()
+        target?(buffer)
+    }
 
     /// 模拟**已经在路上、stop() 拦不住**的那一两个缓冲区。
     ///
@@ -41,27 +89,65 @@ final class FakeCaptureEngine: AudioCaptureEngine, @unchecked Sendable {
     /// 「已经收尾了就安静丢掉」那条守卫防的就是它。
     /// 用 `deliver` 测不到这条路径——`stop()` 已经把 sink 清掉了，
     /// 缓冲区根本到不了 `RecordingSession`，测的就成了假麦克风自己。
-    func deliverAfterStop(_ buffer: AVAudioPCMBuffer) { lastSink?(buffer) }
+    func deliverAfterStop(_ buffer: AVAudioPCMBuffer) {
+        lock.lock(); let target = lastSink; lock.unlock()
+        target?(buffer)
+    }
 
     /// 模拟用户插拔耳机 / 切换声卡。
-    func unplugHeadphones() { onConfigurationChange?() }
+    func unplugHeadphones() {
+        lock.lock(); let handler = configurationChangeHandler; lock.unlock()
+        handler?()
+    }
 }
 
 final class FakeSegmentWriter: AudioSegmentWriter, @unchecked Sendable {
-    private(set) var writtenCount = 0
-    private(set) var finishCount = 0
-    var failOnWrite = false
-    /// finish() 报告的时长。设成 0 就是「一秒都没录到」。
-    var secondsToReport: TimeInterval = 12
+    private let lock = NSLock()
+    private var writes = 0
+    private var finishes = 0
+    private var failWrite = false
+    private var seconds: TimeInterval = 12
+    private var finishHook: (@Sendable () -> Void)?
 
-    func write(_ buffer: AVAudioPCMBuffer) throws {
-        if failOnWrite {
-            throw RecordingEngineError.writeFailed("测试用的写入失败。下一步：这是测试。")
-        }
-        writtenCount += 1
+    var writtenCount: Int { lock.lock(); defer { lock.unlock() }; return writes }
+    var finishCount: Int { lock.lock(); defer { lock.unlock() }; return finishes }
+
+    var failOnWrite: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return failWrite }
+        set { lock.lock(); failWrite = newValue; lock.unlock() }
     }
 
-    func finish() -> TimeInterval { finishCount += 1; return secondsToReport }
+    /// finish() 报告的时长。设成 0 就是「一秒都没录到」。
+    var secondsToReport: TimeInterval {
+        get { lock.lock(); defer { lock.unlock() }; return seconds }
+        set { lock.lock(); seconds = newValue; lock.unlock() }
+    }
+
+    /// 在 finish() 执行到一半时插一脚。
+    /// 真实的 finish() 要把 m4a 的索引写出去，是实打实的磁盘操作；
+    /// 「收尾还没落定的那条缝」只有把这段时间撑开才测得到。
+    var onFinish: (@Sendable () -> Void)? {
+        get { lock.lock(); defer { lock.unlock() }; return finishHook }
+        set { lock.lock(); finishHook = newValue; lock.unlock() }
+    }
+
+    func write(_ buffer: AVAudioPCMBuffer) throws {
+        lock.lock(); let shouldFail = failWrite; lock.unlock()
+        if shouldFail {
+            throw RecordingEngineError.writeFailed("测试用的写入失败。下一步：这是测试。")
+        }
+        lock.lock(); writes += 1; lock.unlock()
+    }
+
+    func finish() -> TimeInterval {
+        lock.lock()
+        finishes += 1
+        let hook = finishHook
+        let reported = seconds
+        lock.unlock()
+        hook?()      // 锁外：钩子里那条线程会回头调到这个假写入器上
+        return reported
+    }
 }
 
 /// 造一段音频数据。内容是什么无所谓——编排层只是把它转手交给写入器。

@@ -11,6 +11,17 @@ private final class TestClock: @unchecked Sendable {
     func read() -> Date { now }
 }
 
+/// 跨线程放一个 outcome。下面几条并发测试里，「用户点练完」跑在另一条线程上，
+/// 它拿到的结果得有地方存。
+private final class OutcomeBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: RecordingOutcome?
+    var value: RecordingOutcome? {
+        get { lock.lock(); defer { lock.unlock() }; return stored }
+        set { lock.lock(); stored = newValue; lock.unlock() }
+    }
+}
+
 final class RecordingSessionTests: XCTestCase {
     private let relativePath = "recordings/2026-08-06T10-45-30Z.m4a"
     /// 2026-08-06T10:45:30Z，与 relativePath 里的文件名对得上。
@@ -265,9 +276,47 @@ final class RecordingSessionTests: XCTestCase {
 
         let outcome = session.finish()
         XCTAssertEqual(outcome.relativePath, "")
-        XCTAssertTrue(try XCTUnwrap(outcome.warning).contains("下一步"))
+        let warning = try XCTUnwrap(outcome.warning)
+        XCTAssertTrue(warning.contains("下一步"))
         XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path),
                        "0 秒的空文件不该留在 recordings 里占位置")
+        // 删成功这一套说法要钉住，删失败那一套（下一条）才有对照。
+        XCTAssertTrue(warning.contains("已经把空文件删掉了"),
+                      "真删掉了就要说清楚删掉了，用户才知道 recordings 里为什么没有这一条")
+    }
+
+    /// 空文件**删不掉**的时候（被别的程序占着、权限不对、只读卷），
+    /// 绝不能照着「已经删掉了」的稿子念。
+    ///
+    /// 那个 0 字节文件还留在 recordings/ 里：`RecordingStore.usage()` 会把它算进占用，
+    /// `orphanFileNames`（注释明写「不主动删」）会把它当成孤儿报给用户——
+    /// 界面上就会同时出现「已经删掉了」和「有 1 个孤儿录音占着地方」两句互相打脸的话。
+    func testEmptyFileThatCannotBeDeletedIsReportedAsStillThere() throws {
+        try XCTSkipIf(geteuid() == 0, "root 能无视目录权限，删除不会失败，这条测不出来")
+
+        // 把文件放进一个不可写的目录里，删除就会失败——这是真的删失败，不是打桩。
+        let locked = root.appending(path: "locked")
+        try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: true)
+        fileURL = locked.appending(path: "2026-08-06T10-45-30Z.m4a")
+        writer.secondsToReport = 0
+        let session = makeSession()
+        try session.start()
+        try FileManager.default.setAttributes([.posixPermissions: 0o500],
+                                              ofItemAtPath: locked.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700],
+                                                   ofItemAtPath: locked.path)
+        }
+
+        let outcome = session.finish()
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fileURL.path),
+                      "前提没成立：这条测的就是「删失败了文件还在」")
+        let warning = try XCTUnwrap(outcome.warning)
+        XCTAssertFalse(warning.contains("已经把空文件删掉了"),
+                       "根本没删掉却说已经删掉了，用户转头就会在设置页看到它被当成孤儿报出来")
+        XCTAssertTrue(warning.contains(relativePath), "文件还在，就得告诉用户它在哪")
+        XCTAssertTrue(warning.contains("下一步"), "删不掉之后该怎么办，必须写出来")
     }
 
     func testFinishIsIdempotent() throws {
@@ -312,5 +361,88 @@ final class RecordingSessionTests: XCTestCase {
 
         XCTAssertEqual(engine.startCount, 1, "已经收尾了还去重启采集，等于凭空打开麦克风")
         XCTAssertEqual(session.finish(), outcome, "收尾之后的设备变化不该改变结果")
+    }
+
+    // MARK: - 用户「恰好在这一瞬间点了练完」
+    //
+    // 下面两条都要真的开第二条线程。用不着模拟器也不用硬件：收尾这件事本来就有
+    // 三条线同时在碰——音频回调线程、设备变化通知线程、点「练完」的界面线程。
+    // 单线程跑完的测试对这三条线之间的缝一无所知，而那些缝里丢的是用户的录音。
+
+    /// 音频线程正在收尾（写盘失败那条路径）时，用户同一瞬间点了「练完」。
+    ///
+    /// 「文件已经关了」与「时长是多少」之间只要有一条缝，这条并发的 finish()
+    /// 就会读到一个还没写回去的 0，把一条真录音当成「一秒都没录到」：
+    /// 删掉文件、返回空路径、再告诉用户什么都没录到。**这不是丢录音，是主动删。**
+    func testFinishDuringAnInFlightCloseDoesNotDeleteARealRecording() throws {
+        let session = makeSession()
+        try session.start()
+        engine.deliver(makePCMBuffer())          // 真的录到了东西
+
+        let entered = DispatchSemaphore(value: 0)
+        let done = DispatchSemaphore(value: 0)
+        let box = OutcomeBox()
+        // 收尾（真实实现里是写 m4a 索引，要花时间）正做到一半时，另一条线程点「练完」。
+        writer.onFinish = {
+            Thread.detachNewThread {
+                entered.signal()
+                box.value = session.finish()
+                done.signal()
+            }
+            entered.wait()
+            Thread.sleep(forTimeInterval: 0.2)   // 给那条线程足够时间把 finish() 跑完
+        }
+
+        writer.failOnWrite = true
+        engine.deliver(makePCMBuffer())          // 触发音频线程上的收尾
+
+        XCTAssertEqual(done.wait(timeout: .now() + 5), .success, "并发的 finish() 没能返回")
+        let outcome = try XCTUnwrap(box.value)
+        XCTAssertEqual(outcome.duration, 12, "收尾还没落定，时长就被当成 0 读走了")
+        XCTAssertEqual(outcome.relativePath, relativePath,
+                       "一条真录音被当成「一秒都没录到」，连路径都不给了")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fileURL.path),
+                      "一条真录音被当成空文件删掉了")
+        XCTAssertFalse(try XCTUnwrap(outcome.warning).contains("一秒录音都没录到"),
+                       "明明录到了，却告诉用户一秒都没录到")
+    }
+
+    /// 用户在设备切换的那一瞬间点了「练完」。
+    ///
+    /// 收尾与「停掉再重启采集」这两段必须互斥。不互斥的话真实顺序会是
+    /// stop → stop → start 返回，采集器停在**已启动**状态：练习结束了麦克风还开着，
+    /// 而且再没有人去关它。同一条缝里，「已经自动接上继续录」那条警告会在
+    /// finish() 读完之后才写进去，用户永远看不到——正是本任务要消灭的「悄悄少了一段」。
+    func testFinishDuringADeviceChangeStopsTheMicrophoneAndStillReportsTheInterruption() throws {
+        let session = makeSession()
+        try session.start()
+        engine.deliver(makePCMBuffer())
+
+        let entered = DispatchSemaphore(value: 0)
+        let done = DispatchSemaphore(value: 0)
+        let box = OutcomeBox()
+        // 第 2 次 start（设备变化之后的重启）还没返回时，另一条线程点「练完」。
+        engine.onStartCall = { call in
+            guard call == 2 else { return }
+            Thread.detachNewThread {
+                entered.signal()
+                box.value = session.finish()
+                done.signal()
+            }
+            entered.wait()
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+
+        engine.unplugHeadphones()
+
+        XCTAssertEqual(done.wait(timeout: .now() + 5), .success, "并发的 finish() 没能返回")
+        XCTAssertFalse(engine.isRunning,
+                       "练完了麦克风还开着——收尾之后再没有任何人会去关它")
+        let outcome = try XCTUnwrap(box.value)
+        XCTAssertEqual(outcome.interruptions.count, 1,
+                       "中断确实发生了，结果里却一条都没有")
+        let warning = try XCTUnwrap(outcome.warning,
+                                    "断过一次却什么都不说，用户永远不知道少了一段")
+        XCTAssertTrue(warning.contains("已经自动接上"))
     }
 }
