@@ -157,6 +157,100 @@ final class QuestionBankPDFImportTests: XCTestCase {
         }
     }
 
+    // MARK: - 真的碰 PDFKit 的那一行
+    //
+    // ⚠️ 上面每一条都是注入一个假的取文字闭包测出来的，所以**真正调 PDFKit 的那一行
+    // 一个测试都没有**。复审实测过三个突变，全量测试一条都不红：
+    //
+    //   1. `QuestionBankFileReader.pdfPlainText` 改成 `{ _ = url; return nil }`；
+    //   2. `QuestionBankImport.importFile` 的默认参数换成 `{ _ in nil }`；
+    //   3. `QuestionBankFileReader.text` 的默认参数换成 `{ _ in nil }`。
+    //
+    // 三处任何一处坏掉，用户选任何一份真实的文字版 PDF 都会被告知「这多半是扫描件」，
+    // 然后照着提示去做一次根本不需要的文字识别。
+    //
+    // 下面这几条用 `TestPDF` 现场画一份含已知文字的真 PDF 来堵这三个口子。
+    // **不用仓库根目录那份真实的 81 页 PDF**：它在 .gitignore 里、不在版本控制中，
+    // 换台机器就没有了，依赖它等于让这些守卫在别处悄悄失效。
+
+    /// 最底下那一行：`PDFDocument(url:)?.string`。
+    ///
+    /// 一正一反两半都要有——只测正的话，把这个函数写成 `return "Part1 必 考 题"` 也能全绿。
+    func testPDFKitReallyPullsTheTextOutOfARealPDF() throws {
+        let lines = ["Part 1 T opics", "Part1 必 考 题", "1-Study and work",
+                     "Do you work or are you a student?"]
+        let url = try makeTemporaryFile(named: "季度题库.pdf", bytes: try TestPDF.data(lines: lines))
+
+        let text = try XCTUnwrap(
+            QuestionBankFileReader.pdfPlainText(at: url),
+            "PDFKit 没从一份真 PDF 里取出任何文字。这一行是全项目唯一碰 PDFKit 的地方，"
+                + "它一断，用户选任何 PDF 都会被误判成扫描件。")
+        XCTAssertEqual(TestPDF.meaningfulLines(of: text), lines,
+                       "取出来的文字跟画进去的对不上：\(text)")
+    }
+
+    /// 反的那一半：不是 PDF 的文件必须取不出文字（`nil`），而不是回一段写死的东西。
+    func testPDFKitReportsNothingForAFileThatIsNotAPDFAtAll() throws {
+        let url = try makeTemporaryFile(named: "季度题库.pdf",
+                                        bytes: Data([0xFF, 0xFE, 0x00, 0x01, 0x02]))
+        XCTAssertNil(QuestionBankFileReader.pdfPlainText(at: url),
+                     "一堆随机字节被当成了 PDF 并「取出」了文字——这一行没有在读文件")
+    }
+
+    /// 中间那一层的默认参数：`text(at:format:)` 不传 `pdfText` 时必须走 PDFKit。
+    ///
+    /// 这里**刻意不传** `pdfText`，走的就是产品代码里的那个默认值。
+    /// 默认值一旦被换成 `{ _ in nil }`，这条会红在「扫描件」那句话上。
+    func testTextUsesPDFKitByDefaultSoARealPDFIsNotMistakenForAScan() throws {
+        let lines = ["Part 1 T opics", "Part1 必 考 题", "1-Study and work",
+                     "Do you work or are you a student?"]
+        let url = try makeTemporaryFile(named: "季度题库.pdf", bytes: try TestPDF.data(lines: lines))
+
+        let text = try QuestionBankFileReader.text(at: url, format: .pdf)
+
+        XCTAssertEqual(TestPDF.meaningfulLines(of: text), lines,
+                       "不传 pdfText 时没有走 PDFKit（或者取到的文字不对）：\(text)")
+    }
+
+    /// 最外面那一层的默认参数：界面调的就是 `importFile(at:)` 这一个入口（不传 `pdfText`）。
+    ///
+    /// 这条是从用户的角度看的那一整条路：一份真 PDF 进去，题目出来。
+    /// 断言逐条比 prompt，与上面那条注入假文字的测试期望完全一致——
+    /// 差别只在于文字这次是真的从 PDF 里抽出来的。
+    func testImportFileUsesPDFKitByDefaultSoAChosenPDFYieldsQuestions() throws {
+        let url = try makeTemporaryFile(
+            named: "季度题库.pdf",
+            bytes: try TestPDF.data(lines: Self.pdfPlainText.split(separator: "\n").map(String.init)))
+
+        let result = try QuestionBankImport.importFile(at: url)
+
+        XCTAssertEqual(result.questions.map(\.prompt), [
+            "Do you work or are you a student?",
+            "Describe one of your friends who learned a skill from someone (not a teacher)",
+            "Is it necessary to continue learning after finishing formal education?"
+        ], "选中一份真 PDF 之后没有导出题目。取文字那一步没走 PDFKit，"
+            + "或者三步没有串起来——用户会看到「这多半是扫描件」，而文件明明是文字版。")
+        XCTAssertEqual(result.questions.map(\.part), [1, 2, 3])
+        XCTAssertEqual(result.source.title, "季度题库")
+    }
+
+    /// 真正的扫描件（整页都是图、一个字都没有）也要走通同一条路并说清楚。
+    ///
+    /// 上面那条同名的测试是拿假闭包返回 nil 试的；真实文件里 PDFKit 返回的是**空串**，
+    /// 这个区别只有拿真文件才试得出来。两条都要有：
+    /// 空串那条分支要是漏了，用户看到的会是一句莫名其妙的「没有解析出任何题目」。
+    func testARealImageOnlyPDFIsExplainedAsAScannedFile() throws {
+        let url = try makeTemporaryFile(named: "季度题库.pdf",
+                                        bytes: try TestPDF.imageOnlyPageData())
+        XCTAssertThrowsError(try QuestionBankImport.importFile(at: url)) { error in
+            let message = error.localizedDescription
+            XCTAssertTrue(message.contains("扫描件"),
+                          "整页都是图的 PDF 没被解释成扫描件：" + message)
+            XCTAssertTrue(message.contains("下一步"), message)
+            XCTAssertTrue(message.contains("季度题库.pdf"), message)
+        }
+    }
+
     // MARK: -
 
     private func makeTemporaryFile(named name: String, bytes: Data) throws -> URL {

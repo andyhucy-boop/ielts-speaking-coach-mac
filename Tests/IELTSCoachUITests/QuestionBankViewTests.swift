@@ -71,5 +71,15 @@ final class QuestionBankViewTests: XCTestCase {
             because: "这一页又开始自己按文本读用户选中的文件了。PDF 不是文本文件，这样读必然失败，"
                 + "而报出来的「另存为 UTF-8」对一份 PDF 是做不到的事。"
                 + "下一步：读文件交给 `QuestionBankFileReader.text(at:format:)`（`importFile` 已经在用）。")
+
+        // 同一类缺陷的另一条溜法：入口是调对了，却在这里塞进自己的取文字闭包，
+        // 把走 PDFKit 的那个默认值顶掉。`QuestionBankPDFImportTests` 拿真 PDF 守的是
+        // **默认参数**，覆盖掉默认值的话那几条照样绿，而用户选中的 PDF 已经读不出字了。
+        SourceGuard.assertOmits(
+            "pdfText:", in: Self.view,
+            because: "这一页给 `importFile` 传了自己的取文字闭包，把默认的 PDFKit 那条路顶掉了。"
+                + "拿真 PDF 守着默认参数的那几条测试管不到这儿——它们测的是默认值。"
+                + "下一步：这一页只调 `QuestionBankImport.importFile(at:)`，取文字交给默认实现；"
+                + "确实需要在界面里换实现的话，先补一条能覆盖新写法的测试。")
     }
 }

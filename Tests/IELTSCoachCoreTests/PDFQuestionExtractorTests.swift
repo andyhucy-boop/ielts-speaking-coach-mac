@@ -290,9 +290,19 @@ final class PDFQuestionExtractorTests: XCTestCase {
         XCTAssertTrue(result.warnings.joined().contains("下一步"), "\(result.warnings)")
     }
 
-    // MARK: - id 必须基于内容
+    // MARK: - id 不随位置漂移
+    //
+    // ⚠️ 这条原先叫 `testIDsAreContentBasedSoInsertionDoesNotShiftThem`（「id 必须基于内容」），
+    // 名不副实：它只问了「插入新话题之后 id 变没变」，而**常量 id 也满足这一条**。
+    // 复审把 `QuestionBankImporter.questionID` 改成 `_ = (topic, prompt); return "p\(part)"`
+    // （完全不看内容），全量测试 0 失败；拿真实那份 81 页 PDF 实测，1264 道题只剩 3 个不同的 id，
+    // 经 `merge` 去重后题库塌成 3 道。
+    //
+    // 「内容不同 → id 必须不同」那一半现在由 `QuestionIDTests` 守（part / topic / prompt
+    // 三个维度各自单独变、加上 merge 之后还剩几道题）。这里保留的是另一半：位置无关。
+    // 名字按它真正测的东西改过了。
 
-    func testIDsAreContentBasedSoInsertionDoesNotShiftThem() throws {
+    func testInsertingANewTopicAboveDoesNotShiftTheIDsBelow() throws {
         let onlyHome = """
         Part 1 T opics
         Part1 必 考 题
