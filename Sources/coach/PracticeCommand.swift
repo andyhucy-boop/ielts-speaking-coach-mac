@@ -152,7 +152,17 @@ enum PracticeCommand {
                 print("   好消息是复盘原文一个字都没丢，就在 \(pendingPath.path)；"
                     + "但这一场还没有归进档案，也还没有记进训练记录。")
                 print("   下一步：确认「\(directory.root.path)」这个目录存在且可写，"
-                    + "然后运行 coach reimport 把这份原文重新入库。")
+                    + "然后运行 coach reimport，把这份原文里的错题和词汇补进档案。")
+                // ⚠️ 这句限定不能省。coach reimport 只调 ReviewArchiver.archive 归错题与词汇，
+                // 它不写 reports/<id>.json，也不往 state.sessions 里加任何东西
+                //（见 ReimportCommand，以及 CoachCLIGuidanceTests 里守着这条前提的那条测试）。
+                // 只说「运行 coach reimport 重新入库」的话，用户照着做完，「训练记录」和
+                // 「复盘报告」两页里这一场依然永远不存在，而他不会知道为什么——
+                // 那正是 PendingReviewViewModel.successNotice 的注释里禁止的
+                // 「下一步承诺一件兑现不了的事」。
+                print("   要先说清楚：coach reimport 只补错题和词汇。"
+                    + "「训练记录」和「复盘报告」这两页里补不回这一场——"
+                    + "要那两页也有这一场，只能重新练一次。")
                 return 1
             }
 

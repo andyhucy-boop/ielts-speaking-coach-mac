@@ -82,10 +82,17 @@ enum ReimportCommand {
                 continue
             }
 
-            // 文件名形如 sync-1785940167.txt，去掉扩展名当 sessionID——与
-            // PracticeCommand 里 requestID 的产生方式一致（见 ReviewRequestPrompt.marker
-            // 及 PracticeCommand.run 里 "sync-\(Int(Date()...))" 那一行），这样同一次
-            // 练习不管是当场归档还是事后 reimport，落进档案的 sessionID 都是同一个值。
+            // 去掉扩展名当 sessionID。文件名是 `PendingReviewStore.write` 起的，
+            // 正常情况下就是那一场的会话编号（形如 2026-08-06-001.txt）——所以同一次练习
+            // 不管是当场归档还是事后 reimport，落进档案的 sessionID 都是同一个值。
+            //
+            // 两种对不上的情况，都只影响「归档用的编号能不能对上训练记录里的某一场」，
+            // 不影响错题与词汇本身能不能补进档案：
+            // - 同一场落了第二份原文时，`PendingReviewStore.write` 会命名成 `<编号>-2.txt`，
+            //   这里会把 `<编号>-2` 整个当成 sessionID（界面那条路会先把 `-2` 去掉再归档，
+            //   见 `PendingReviewRow.linkedSessionID`）。
+            // - Phase 4 之前落盘的老文件叫 sync-1785940167.txt 那样，那是当时的请求时间戳，
+            //   压根不是任何一场练习的会话编号。
             let sessionID = file.deletingPathExtension().lastPathComponent
 
             // questionID 无从得知：pending-reviews 目录里的文件名不含题目 id，
