@@ -27,12 +27,21 @@ public protocol AudioCaptureEngine: AnyObject {
     ///
     /// onBuffer 在音频线程上被调用，实现方不必替它做任何序列化；
     /// 但**它可能反过来调到 `stop()`**（写盘失败时当场收摊），见下。
+    ///
+    /// 反过来，**`onBuffer` 里不许回头调 `start(onBuffer:)`**：重启采集是设备变化那条
+    /// 路径上的事（`RecordingSession.handleConfigurationChange`，跑在主线程）。
+    /// 真实实现停引擎时要等当前那条 tap 回调返回，在 tap 回调里重启就绕不开互相等。
     func start(onBuffer: @escaping @Sendable (AVAudioPCMBuffer) -> Void) throws
 
     /// 停止采集。允许在没 start 过的时候调用，必须是无害的。
     ///
     /// **可能在 `onBuffer` 回调里被调用**，因此 `stop()` 不得等待
     /// 「当前这条 onBuffer 回调返回」——那是自锁，练习会当场卡死。
+    ///
+    /// 但**在别的线程上调用时，返回就意味着麦克风真的关了**：
+    /// `RecordingSession.finish()` 里 `engine.stop()` 一返回就去关文件、报结果，
+    /// 这时候麦克风还开着的话，就再没有人会去关它了。两条合起来的做法见
+    /// `CaptureWorkQueue`：身处 tap 回调时才把拆 tap / 停引擎挪走异步做。
     func stop()
 }
 
