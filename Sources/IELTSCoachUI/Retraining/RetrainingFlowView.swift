@@ -7,7 +7,14 @@ import SwiftUI
 /// **这一页的成败判据只有一条：开口之后屏幕上不许再出现任何范答。**
 /// 原话、原答、高分版全归第一步；第二步一按下去它们就没了，只剩题目和这一次的唯一目标。
 /// 对着高分版念一遍不叫复训——那样练完，用户和这个工具都会以为他改掉了那个毛病。
-/// 「显不显示」不在这里判，全部问 `RetrainingStep`（它有测试守着）。
+///
+/// **「显不显示」不在这里判，全部问 `RetrainingStep`。** 材料分成三段
+///（`evidenceBody` / `modelAnswerCard` / `transcriptBody`），每段在 `content` 里由一句
+/// `if step.showsXxx` 把着门，各自只有那一个调用点。这不是形式主义：
+/// 复审实测过，把「第二步各画各的」那种写法里塞一句 `textCard(…evidence.modelAnswer)`，
+/// 941 条测试一条不红，而真机上高分版就画在开口前那一屏上。
+/// 现在两头都有守卫——`RetrainingStepTests` 钉住那几个属性答得对不对，
+/// `RetrainingFlowViewTests` 钉住这三句 `if` 还在、以及三段之外谁都不许碰证据字段。
 ///
 /// **换题验证（`run == .transfer`）从第二步开始**：正因为不给回看，才知道是不是真会了，
 /// 还是只记住了那个答案（DEFINITION-OF-DONE 第 2 节）。
@@ -134,15 +141,23 @@ struct RetrainingFlowView: View {
 
     // MARK: - 正文
 
+    /// 正文。**「这一步给不给看」全部问 `RetrainingStep`，这里不自己判。**
+    ///
+    /// 三段材料各一句 `if`，条件是那几个有测试守着的属性。写成「每一步各画各的」
+    ///（`switch step` 之后第二步一段、第三步一段）的话，谁往第二步那一段里塞一句
+    /// `textCard(…evidence.modelAnswer)` 都编得过、跑得通、没有一条测试会红——
+    /// 而那之后用户就是对着高分版念一遍。这条路复审已经实测走通过一次。
     @ViewBuilder private var content: some View {
         if outcome != nil {
             resultBody
         } else {
-            switch step {
-            case .evidence: evidenceBody
-            case .rehearsal: rehearsalBody
-            case .speaking: speakingBody
-            }
+            explanationCard
+            if step.showsGoal { goalLine }
+            if step.showsEvidence { evidenceBody }
+            if step.showsModelAnswer { modelAnswerCard }
+            if step.showsEvidence { transcriptBody }
+            if step == .rehearsal { rehearsalBody }
+            if step == .speaking { speakingBody }
         }
     }
 
@@ -182,11 +197,14 @@ struct RetrainingFlowView: View {
         }
     }
 
-    // MARK: - 第一步：回看证据
+    // MARK: - 第一步：回看证据（`step.showsEvidence` / `step.showsModelAnswer` 把门）
 
+    /// 当时说的原话、完整原答、复盘说要改什么。
+    ///
+    /// **高分版不在这一段里**：它单独成段（`modelAnswerCard`），由 `showsModelAnswer` 单独把门。
+    /// 分开是为了让「哪一样归哪个开关管」在源码上就是一一对应的——
+    /// 挤在一段里的话，那个开关就没有自己的上屏通道，等于没人用它。
     @ViewBuilder private var evidenceBody: some View {
-        explanationCard
-        goalLine
         if let evidence {
             // 材料不齐时那句中文说明要原样摆出来。少一块内容不要紧，
             // 少了还不说才要命——用户会以为这一页坏了。
@@ -197,19 +215,8 @@ struct RetrainingFlowView: View {
             if !evidence.originalAnswer.isEmpty {
                 textCard(title: "当时的完整原答", text: evidence.originalAnswer)
             }
-            if !evidence.modelAnswer.isEmpty {
-                textCard(title: "复盘给的高分版", text: evidence.modelAnswer)
-            }
             if !evidence.changes.isEmpty {
                 listCard(title: "复盘说改了什么", lines: evidence.changes)
-            }
-            if evidence.learnerTurns.isEmpty {
-                hintCard("这一场的逐字稿里没有认得出是你说的话。"
-                         + "下一步：上面的原话与原答照样可用；想让以后每一场都留下逐字稿，"
-                         + "到菜单「设置」里确认「记录对话逐字稿」是开着的。")
-            } else {
-                listCard(title: "逐字稿里你说过的话",
-                         lines: evidence.learnerTurns.map(\.text))
             }
         } else {
             hintCard("正在读取那一场的复盘和逐字稿。"
@@ -218,11 +225,35 @@ struct RetrainingFlowView: View {
         }
     }
 
+    /// 复盘给的高分版。**整页只有这一段会画它**，而且画不画由
+    /// `RetrainingStep.showsModelAnswer` 说了算——只有第一步返回真
+    ///（`RetrainingStepTests.testModelAnswerIsOnlyVisibleWhileReviewingEvidence`）。
+    @ViewBuilder private var modelAnswerCard: some View {
+        if let evidence, !evidence.modelAnswer.isEmpty {
+            textCard(title: "复盘给的高分版", text: evidence.modelAnswer)
+        }
+    }
+
+    /// 逐字稿里认得出是学员自己说的那几句。**同样是证据，同样只有第一步能看**：
+    /// 照着自己上次那份念，和照着高分版念是同一件事。
+    @ViewBuilder private var transcriptBody: some View {
+        if let evidence {
+            if evidence.learnerTurns.isEmpty {
+                hintCard("这一场的逐字稿里没有认得出是你说的话。"
+                         + "下一步：上面的原话与原答照样可用；想让以后每一场都留下逐字稿，"
+                         + "到菜单「设置」里确认「记录对话逐字稿」是开着的。")
+            } else {
+                listCard(title: "逐字稿里你说过的话",
+                         lines: evidence.learnerTurns.map(\.text))
+            }
+        }
+    }
+
     // MARK: - 第二步：提示已经撤掉，只剩题目和目标
 
+    /// **这一段里一个证据字段都不许出现。** `RetrainingFlowViewTests` 那条结构性守卫
+    /// 扫的就是「从这里顺着调用关系走得到的每一个成员」。
     @ViewBuilder private var rehearsalBody: some View {
-        explanationCard
-        goalLine
         if let question {
             questionCard(question)
         } else {
@@ -313,9 +344,8 @@ struct RetrainingFlowView: View {
 
     // MARK: - 第三步：练习进行中
 
+    /// 同 `rehearsalBody`：**这一段里一个证据字段都不许出现**。
     @ViewBuilder private var speakingBody: some View {
-        explanationCard
-        goalLine
         if let runner {
             stageCard(runner)
             if let archived = runner.archiveNotice { hintCard(archived) }
@@ -525,31 +555,31 @@ struct RetrainingFlowView: View {
         }
     }
 
+    /// 开口前那两步的按钮。**「这一步能按哪颗」同样问 `RetrainingStep`**，
+    /// 不按「按钮画在 `switch` 的哪一支里」定——按钮的位置随时会被挪，
+    /// 而「哪一步还看得见证据」「哪一步才能开口」是这一页的规矩。
     @ViewBuilder private var stepActions: some View {
-        switch step {
-        case .evidence:
+        if step == .speaking {
+            speakingActions
+        } else {
             Button("关掉") { onClose() }
                 .buttonStyle(.bordered)
-            Button("重答这道题") { advance(to: .rehearsal) }
-                .buttonStyle(.borderedProminent)
-                .tint(Palette.accent)
-                .keyboardShortcut(.defaultAction)
-
-        case .rehearsal:
-            Button("关掉") { onClose() }
-                .buttonStyle(.bordered)
+            // 第一步那颗：按下去，证据和高分版一起收走。
+            if step.showsEvidence {
+                Button("重答这道题") { advance(to: .rehearsal) }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Palette.accent)
+                    .keyboardShortcut(.defaultAction)
+            }
             // 一道题都挑不出来时不摆这颗永远按不动的按钮：那时页面上的
             // `EmptyStateView` 已经给了唯一能做的事（去导入题库）。
-            if question != nil || !pickable.isEmpty {
+            if step.canStartPractice, question != nil || !pickable.isEmpty {
                 Button("开始练习") { startPractice() }
                     .buttonStyle(.borderedProminent)
                     .tint(Palette.accent)
                     .disabled(question == nil && picked == nil)
                     .keyboardShortcut(.defaultAction)
             }
-
-        case .speaking:
-            speakingActions
         }
     }
 
