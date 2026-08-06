@@ -14,11 +14,19 @@ final class NavigationTests: XCTestCase {
         }
     }
 
-    func testPhase3ImplementsExactlyThreePages() {
-        // 本阶段只做今日训练、训练题库、复盘报告三页，其余显示占位。
-        // 断言数量而非只断言「至少三个」—— 多标了会让用户点进空页面。
+    func testImplementedPagesMatchWhatIsActuallyBuilt() {
+        // 断言集合相等而不是「至少包含」——多标一项会让用户点进一个空页面，
+        // 而空页面会让人以为程序坏了。
+        // Phase 4 把「训练记录」加了进来。后续阶段各自往里加自己的那一项，
+        // 不要把别人加的删掉：Phase 6 加 .retraining，Phase 7 加 .issues 与 .vocabulary，
+        // Phase 8 加 .plan，Phase 10 加 .upgrade 与 .feedback。
         let implemented = SidebarItem.allCases.filter(\.isImplemented)
-        XCTAssertEqual(Set(implemented), [.today, .questionBank, .reviewReports])
+        XCTAssertEqual(Set(implemented), [.today, .questionBank, .reviewReports, .history])
+    }
+
+    func testHistoryHasAMeaningfulTitleAndIcon() {
+        XCTAssertEqual(SidebarItem.history.title, "训练记录")
+        XCTAssertFalse(SidebarItem.history.systemImage.isEmpty)
     }
 
     func testTitlesAreUnique() {
@@ -36,14 +44,16 @@ final class NavigationTests: XCTestCase {
         }
     }
 
-    /// 未实现的七页必须说清「还没做」「将来会有什么」和**现在该干什么**。
+    /// 还没做的那几页必须说清「还没做」「将来会有什么」和**现在该干什么**。
     /// 空白页会让用户以为程序坏了——这条与错误信息的标准是同一条（成品标准第 8 条）。
     ///
     /// 「下一步」这一句不是可选的：只说「将来会有」等于把用户扔在一页死路上。
     /// 铁律 6 把「发生了什么 + 下一步做什么」明确扩展到了空状态与界面提示。
     func testEveryUnimplementedPageSaysWhatWillBeThereAndWhatToDoNow() {
         let unimplemented = SidebarItem.allCases.filter { !$0.isImplemented }
-        XCTAssertEqual(unimplemented.count, 7)
+        // Phase 4 交付「训练记录」之后从 7 降到 6。**这个数字只许降，不许升**——
+        // 升上去意味着有人把一页已经做出来的又标回了「还没做」。
+        XCTAssertEqual(unimplemented.count, 6)
         for item in unimplemented {
             XCTAssertFalse(item.placeholderDescription.isEmpty,
                            "「\(item.title)」的占位页会是一片空白，用户会以为程序坏了")

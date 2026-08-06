@@ -43,7 +43,8 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Sendable {
     /// 而不是空白——空白会让用户以为坏了。
     public var isImplemented: Bool {
         switch self {
-        case .today, .questionBank, .reviewReports: return true
+        // Phase 4 加了 .history。后续阶段各自往这里加自己的那一项，不要删别人的。
+        case .today, .questionBank, .reviewReports, .history: return true
         default: return false
         }
     }
@@ -62,7 +63,7 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Sendable {
     /// 已实现的页面不需要占位说明，返回空串。
     public var placeholderDescription: String {
         switch self {
-        case .today, .questionBank, .reviewReports: return ""
+        case .today, .questionBank, .reviewReports, .history: return ""
         case .plan:
             return "将来在这里选 7/14/30 天周期、定重点 Part，并看每日拆分。"
                 + "下一步：计划页做出来之前，先到「今日训练」照常练；练过的都会留着，"
@@ -71,10 +72,6 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Sendable {
             return "将来在这里挑一个复盘里的目标，带着它重练，再换题验证。"
                 + "下一步：先到「复盘报告」看上一次留下的目标，照着它再练一遍——"
                 + "这一页要做的就是把这件事自动化。"
-        case .history:
-            return "将来在这里按月回看每次练习的题目、复盘和录音。"
-                + "下一步：先到「复盘报告」翻最近几次练习；这一页没做完不影响记录，"
-                + "它们都存在数据目录里。"
         case .issues:
             return "将来在这里看反复出现的问题，以及它们有没有变少。"
                 + "下一步：先到「复盘报告」看每次练习点出来的问题，"
@@ -103,9 +100,9 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Sendable {
     /// 已实现的页面返回 nil——那儿不该冒出一个劝用户走开的按钮。
     public var placeholderFallback: SidebarItem? {
         switch self {
-        case .today, .questionBank, .reviewReports: return nil
+        case .today, .questionBank, .reviewReports, .history: return nil
         case .plan, .upgrade, .feedback: return .today
-        case .retraining, .history, .issues, .vocabulary: return .reviewReports
+        case .retraining, .issues, .vocabulary: return .reviewReports
         }
     }
 

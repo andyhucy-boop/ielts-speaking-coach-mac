@@ -6,6 +6,13 @@ import SwiftUI
 public struct RootView: View {
     @State private var app: AppState
     @State private var selection: SidebarItem? = .today
+    /// 从「训练记录」点「看这次的复盘」带过来的那一场。
+    ///
+    /// 放在这里而不是让两页自己商量：导航状态一直归 `RootView` 管，
+    /// 而「跳过去之后选中哪一场」正是导航的一部分。不带这个的话，
+    /// 用户点某一场的复盘，跳过去看到的是最近那一场——内容看着完全正常，
+    /// 但是别人家的，比一片空白更难被发现。
+    @State private var requestedReviewSessionID: String?
 
     /// 生产入口：真实数据目录 + 真实的环境检查。
     public init() { self.init(app: AppState()) }
@@ -89,7 +96,13 @@ public struct RootView: View {
             switch current {
             case .today: TodayView(app: app, onGo: { selection = $0 })
             case .questionBank: QuestionBankView(app: app)
-            case .reviewReports: ReviewReportView(app: app, onGo: { selection = $0 })
+            case .reviewReports: ReviewReportView(app: app, onGo: { selection = $0 },
+                                                  requestedSessionID: requestedReviewSessionID)
+            case .history: HistoryView(app: app, onGo: { selection = $0 },
+                                       onOpenReview: { session in
+                                           requestedReviewSessionID = session.id
+                                           selection = .reviewReports
+                                       })
             default: PlaceholderView(item: current, onGo: { selection = $0 })
             }
         }

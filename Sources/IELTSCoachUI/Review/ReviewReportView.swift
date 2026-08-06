@@ -17,6 +17,9 @@ struct ReviewReportView: View {
     /// 空状态那个按钮要把用户送到「今日训练」。导航状态在 `RootView` 手上，所以由它传进来，
     /// 与 `PlaceholderView` 的做法一致——这一页自己不持有导航状态。
     let onGo: (SidebarItem) -> Void
+    /// 从「训练记录」点「看这次的复盘」跳过来时，要看的是哪一场（由 `RootView` 传）。
+    /// 平时是 nil，那时这一页照旧落回最近的那一次。
+    var requestedSessionID: String?
 
     /// 用户点选的那一次。**不是 `selected` 本身**：会话列表会随 `app.state` 变，
     /// 存 id 才不会在刷新之后指着一份旧对象。
@@ -30,8 +33,11 @@ struct ReviewReportView: View {
     }
 
     /// 没点过时落回最近的那一次，而不是给一块空白。
+    ///
+    /// 优先级：**用户在这一页自己点的那一次**，压过从「训练记录」带过来的那一次。
+    /// 反过来的话，用户从训练记录跳过来之后就再也点不动左边这一列了。
     private var selected: PracticeSession? {
-        sessions.first { $0.id == selectedSessionID } ?? sessions.first
+        sessions.first { $0.id == (selectedSessionID ?? requestedSessionID) } ?? sessions.first
     }
 
     var body: some View {
@@ -52,6 +58,10 @@ struct ReviewReportView: View {
         .background(Palette.canvas)
         // 换一次会话就重读一次文件。放在 body 里读盘的话，每次重绘都要碰一次磁盘。
         .task(id: selected?.id) { loadSelected() }
+        // 又从「训练记录」跳过来一次（这次点的是另一场）。上面那个 `??` 只在
+        // `selectedSessionID` 还是 nil 时管用，用户之前在这一页点过之后就轮不到它了——
+        // 那时新带过来的那一场会被自己的旧选择挡住。
+        .onChange(of: requestedSessionID) { _, requested in selectedSessionID = requested }
     }
 
     // MARK: - 左边：哪几次练习有复盘

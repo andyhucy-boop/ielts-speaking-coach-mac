@@ -136,6 +136,38 @@ public final class AppState {
                                          warnings: result.warnings)
     }
 
+    /// 「记录对话逐字稿」开关（ROADMAP 第 5 节，默认开）。
+    ///
+    /// 写盘失败必须让用户看见——静默失败会让用户以为已经关掉了，实际还在记录。
+    /// 这属于本项目最不能接受的那种失败：界面显示的状态和真实行为对不上。
+    public func setTranscriptEnabled(_ enabled: Bool) {
+        do {
+            try store.mutate { $0.settings.transcriptEnabled = enabled }
+            reload()
+        } catch {
+            loadError = "没能保存「记录对话逐字稿」这个设置：\(error.localizedDescription) "
+                + "下一步：确认数据目录可写（默认在「资源库 › Application Support › "
+                + "IELTS Speaking Coach」），然后重试；在此之前这个开关仍按原来的设置生效。"
+        }
+    }
+
+    /// 删掉一条训练记录，连带清掉它的复盘报告与录音（决策 4）。
+    ///
+    /// **永不抛错**：返回 nil 表示一切顺利，返回字符串是给用户看的中文说明
+    /// （记录删掉了但有文件没删成，见 `SessionDeleter.delete`）。
+    ///
+    /// 放在这里而不是让视图自己 new 一台 `SessionDeleter`，理由和 `applyImport`、
+    /// `loadReview` 一样：`directory` 与 `store` 都是私有的，而它们私有是有道理的——
+    /// App 与命令行必须读写同一个目录，多一处解析目录就多一处走岔的机会。
+    @discardableResult
+    public func deleteSession(_ session: PracticeSession) -> String? {
+        let failure = SessionDeleter(directory: directory, store: store).delete(session)
+        // 删完必须重读：不重读的话那一行还留在界面上，用户会再点一次删除，
+        // 而这一次删的是一条已经不存在的记录。
+        reload()
+        return failure
+    }
+
     /// 造一台练习驱动器：**与本 AppState 同一个数据目录**，桥接注入进来的那个 Bridge。
     ///
     /// 放在这里而不是让视图自己 new 一个，理由和 `applyImport`、`loadReview` 一样：
