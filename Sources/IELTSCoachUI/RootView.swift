@@ -12,6 +12,9 @@ public struct RootView: View {
     /// 而「跳过去之后选中哪一场」正是导航的一部分。不带这个的话，
     /// 用户点某一场的复盘，跳过去看到的是最近那一场——内容看着完全正常，
     /// 但是别人家的，比一片空白更难被发现。
+    ///
+    /// **它是一次性的：用户自己再切一次页就作废**（见 `go(to:)`）。
+    /// 只写不清的话方向会反过来犯同一个错——见 `RootRouter.carriedReviewSession` 的说明。
     @State private var requestedReviewSessionID: String?
 
     /// 生产入口：真实数据目录 + 真实的环境检查。
@@ -68,13 +71,31 @@ public struct RootView: View {
 
     private var workspace: some View {
         NavigationSplitView {
-            List(SidebarItem.allCases, selection: $selection) { item in
+            List(SidebarItem.allCases, selection: sidebarSelection) { item in
                 Label(item.title, systemImage: item.systemImage).tag(item)
             }
             .navigationSplitViewColumnWidth(200)
         } detail: {
             detail
         }
+    }
+
+    /// 侧边栏的选中项。**不能直接把 `$selection` 交出去**：写进来的那一头还要顺手
+    /// 把「从训练记录带过来的那一场」作废掉（见 `go(to:)`）。
+    private var sidebarSelection: Binding<SidebarItem?> {
+        Binding(get: { selection }, set: { go(to: $0) })
+    }
+
+    /// 换一页。**凡是用户自己发起的切页都要走这里**——侧边栏，以及各页面里那些
+    /// 「去今日训练」「看复盘报告」按钮（它们走 `onGo`）。
+    ///
+    /// 唯一的例外是「训练记录 › 看这次的复盘」那条跳转：它要带着那一场过去，
+    /// 所以自己写 `requestedReviewSessionID` 与 `selection`，见 `detail` 里的 `onOpenReview`。
+    private func go(to item: SidebarItem?) {
+        // 先算再改：这个判断要拿「还没换页时的 selection」作依据。
+        requestedReviewSessionID = RootRouter.carriedReviewSession(
+            requestedReviewSessionID, navigatingFrom: selection, to: item)
+        selection = item
     }
 
     /// 侧边栏没选中任何一项时（比如用户按了 ⌘ 点掉选中）落回今日训练，
@@ -94,16 +115,22 @@ public struct RootView: View {
             .frame(maxWidth: 640, alignment: .leading)
         } else {
             switch current {
-            case .today: TodayView(app: app, onGo: { selection = $0 })
+            case .today: TodayView(app: app, onGo: { go(to: $0) })
             case .questionBank: QuestionBankView(app: app)
-            case .reviewReports: ReviewReportView(app: app, onGo: { selection = $0 },
+            case .reviewReports: ReviewReportView(app: app, onGo: { go(to: $0) },
                                                   requestedSessionID: requestedReviewSessionID)
-            case .history: HistoryView(app: app, onGo: { selection = $0 },
+                // 带过来的那一场换了，就得是一份全新的复盘页。
+                // 复盘页里「用户自己点的那一次」是 `@State`，不换身份的话，
+                // 万一 SwiftUI 把上一次进来时的选择留着，用户点「看这次的复盘」
+                // 看到的还是他上回在这一页点开的那一场。
+                .id(requestedReviewSessionID)
+            case .history: HistoryView(app: app, onGo: { go(to: $0) },
                                        onOpenReview: { session in
+                                           // 这一条不走 `go(to:)`：它就是要带着这一场过去。
                                            requestedReviewSessionID = session.id
                                            selection = .reviewReports
                                        })
-            default: PlaceholderView(item: current, onGo: { selection = $0 })
+            default: PlaceholderView(item: current, onGo: { go(to: $0) })
             }
         }
     }

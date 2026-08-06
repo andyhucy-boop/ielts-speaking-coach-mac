@@ -138,4 +138,25 @@ public enum RootRouter {
         if isCheckingPermission { return .checkingEnvironment }
         return permission == .ready ? .workspace : .permissionGate
     }
+
+    /// 用户自己切了一页之后，「从『训练记录』点『看这次的复盘』带过来的那一场」还留不留。
+    ///
+    /// **换了一页就必须清掉。** 不清的话这个值只写不清：用户点过一次之后它永远停在那一场，
+    /// 而复盘页里「用户自己点的那一次」是 `@State`，detail 那个 `switch` 换过分支再换回来时
+    /// 会重新初始化成 nil——于是此后每一次从侧边栏点「复盘报告」，落到的都是那一场旧的，
+    /// 而不是那个属性承诺的「没点过时落回最近的那一次」。用户练完新的一场点进复盘报告，
+    /// 看到的是几天前那一场：内容看着完全正常，但是别人家的，比一片空白更难被发现。
+    ///
+    /// **页面没换就保持原样。** `RootView` 里那句 `selection = .reviewReports` 是跳转本身，
+    /// SwiftUI 的 `List(selection:)` 有可能把同一个值再从绑定写回来一次；
+    /// 那一下不是用户切页，跟着清掉的话跳过去看到的还是最近那一场——
+    /// 等于把要修的毛病换个方向再犯一遍。
+    ///
+    /// 抽成纯函数是因为这段判断错了用户是直接看到别人家复盘的，
+    /// 而 `View` 里的一句赋值没有任何测试管得住（`NavigationTests` 钉着这两条）。
+    public static func carriedReviewSession(_ carried: String?,
+                                           navigatingFrom current: SidebarItem?,
+                                           to next: SidebarItem?) -> String? {
+        next == current ? carried : nil
+    }
 }

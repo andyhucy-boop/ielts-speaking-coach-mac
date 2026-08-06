@@ -184,8 +184,13 @@ final class HistoryViewTests: XCTestCase {
 
     func testOpeningARowPaintsTheWholeTranscript() throws {
         let card = try SourceGuard.memberBody(of: "private func rowCard", in: try Self.viewCode())
-        XCTAssertTrue(card.contains("expandedSessionID = "),
-                      "行点下去没有任何反应——没有它整页都是死的，逐字稿永远看不到。")
+        // **指名 `Self.toggling(...)`，不是只问「有没有给 expandedSessionID 赋值」。**
+        // 后者任何赋值都满足：复审实测把这一行改成 `expandedSessionID = nil`，656 条全绿，
+        // 而那之后逐字稿面板永远画不出来（见下面那条真跑起来的测试）。
+        XCTAssertTrue(card.contains("expandedSessionID = Self.toggling(expandedSessionID, to: row.id)"),
+                      "行点下去没有把展开状态交给 `HistoryView.toggling(_:to:)`。"
+                          + "自己在这儿现写一句赋值的话，「点开 / 再点收起 / 点另一行」"
+                          + "就没有任何真跑起来的测试管得住了。实际取到的行是：\n\(card)")
         XCTAssertTrue(card.contains("transcriptPane(row)"),
                       "展开之后没有画逐字稿。实际取到的是：\n\(card)")
 
@@ -202,6 +207,29 @@ final class HistoryViewTests: XCTestCase {
         XCTAssertTrue(turn.contains("speakerText(for: turn.role)"),
                       "没有标出这句是谁说的。考官的问题和自己的回答混成一片，"
                           + "复盘时根本没法看。")
+    }
+
+    /// **这条是复审 BI-2 的判据。**
+    ///
+    /// 上一条只扫源码，扫得出的只是「行里给 `expandedSessionID` 赋了个值」。
+    /// 复审实测把那一行改成 `expandedSessionID = nil`，656 条全绿——之后
+    /// `if expandedSessionID == row.id` 永远为假，逐字稿面板永远画不出来：
+    /// 验收要求 7（点开一行看这一场逐字稿全文，这一页的头号功能）整条死掉，
+    /// 而上一条测试后面那一串（transcriptPane / turn.text / speakerText / 复盘按钮）
+    /// 全在扫一段永远渲染不到的代码，一起退化成空转。
+    ///
+    /// 所以照 `speakerText(for:)` 那一招，把「点一下之后展开哪一场」抽成纯函数，
+    /// 用真跑起来的断言钉住三种点法。
+    func testClickingARowOpensItAndClickingTheSameRowAgainClosesIt() {
+        XCTAssertEqual(HistoryView.toggling(nil, to: "2026-08-06-001"), "2026-08-06-001",
+                       "一行都没展开时点一行，那一场没被展开——逐字稿永远看不到，"
+                           + "而这是这一页的头号功能。")
+        XCTAssertNil(HistoryView.toggling("2026-08-06-001", to: "2026-08-06-001"),
+                     "再点一次已经展开的那一行没有收起来，用户没有任何办法把它关上。")
+        XCTAssertEqual(HistoryView.toggling("2026-08-06-001", to: "2026-08-05-002"),
+                       "2026-08-05-002",
+                       "点另一行时展开的还是原来那一场——用户看的是别人家的逐字稿，"
+                           + "内容看着完全正常，比一片空白更难被发现。")
     }
 
     /// 判不出是谁说的那些（`role == "unknown"`，spec 2.3.9：流式输出中的消息还没有
@@ -271,6 +299,37 @@ final class HistoryViewTests: XCTestCase {
         XCTAssertTrue(review.contains("selectedSessionID ?? requestedSessionID"),
                       "两个来源的优先级没写清。用户在复盘页自己点过之后，"
                           + "他点的那一场必须压过从训练记录带过来的那一场。")
+    }
+
+    /// 上一条守的是「跳过去要落到他点的那一场」，这一条守的是它的另一半：
+    /// **用户自己切页之后，带过来的那一场就得作废**（复审 BI-3）。
+    ///
+    /// 判断本身是纯函数，由 `NavigationTests` 里两条真跑起来的测试钉着；
+    /// 这里只管接线——判断写对了却没人调用，等于没写。
+    func testEveryNavigationTheUserMakesHimselfGoesThroughTheDropper() throws {
+        let root = try SourceGuard.code("RootView.swift")
+        SourceGuard.assertRenders(
+            "RootRouter.carriedReviewSession(", inBodyOf: "private func go(to item:",
+            of: "RootView.swift",
+            because: "切页时没有把「从训练记录带过来的那一场」交给 "
+                + "`RootRouter.carriedReviewSession(_:navigatingFrom:to:)` 处理，"
+                + "那个值就又变成只写不清的了：用户点过一次「看这次的复盘」之后，"
+                + "此后每一次从侧边栏点「复盘报告」，落到的都是那一场旧的。")
+        SourceGuard.assertRenders(
+            "go(to:", inBodyOf: "private var sidebarSelection", of: "RootView.swift",
+            because: "侧边栏那个绑定写进去的时候没走 `go(to:)`，"
+                + "用户从侧边栏切页时带过来的那一场清不掉。")
+        XCTAssertTrue(root.contains("selection: sidebarSelection"),
+                      "侧边栏又直接绑到 `$selection` 上了，`sidebarSelection` 成了摆设——"
+                          + "用户点侧边栏时那段清理逻辑一次都不会跑。")
+        SourceGuard.assertRenders(
+            "onGo: { go(to: $0) }", in: "RootView.swift", atLeast: 4,
+            because: "页面里那些「去今日训练」「看复盘报告」按钮没走 `go(to:)`。"
+                + "`TodayView` 里就有一颗「看复盘报告」——从那儿进去同样会落到"
+                + "上回从训练记录带过来的那一场旧的。")
+        SourceGuard.assertOmits(
+            "onGo: { selection = $0 }", in: "RootView.swift",
+            because: "这是没走 `go(to:)` 的老写法，等于绕开了那段清理。")
     }
 
     // MARK: - 要求 10：一场都没练过的时候

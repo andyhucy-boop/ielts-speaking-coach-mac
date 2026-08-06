@@ -19,6 +19,10 @@ struct ReviewReportView: View {
     let onGo: (SidebarItem) -> Void
     /// 从「训练记录」点「看这次的复盘」跳过来时，要看的是哪一场（由 `RootView` 传）。
     /// 平时是 nil，那时这一页照旧落回最近的那一次。
+    ///
+    /// **它是一次性的**：用户自己再切一次页，`RootView` 就把它清掉
+    /// （`RootRouter.carriedReviewSession`），所以这一页收到的非 nil 值一定是刚点过来的那一次，
+    /// 不会是几天前那一场的残留。
     var requestedSessionID: String?
 
     /// 用户点选的那一次。**不是 `selected` 本身**：会话列表会随 `app.state` 变，
@@ -58,10 +62,6 @@ struct ReviewReportView: View {
         .background(Palette.canvas)
         // 换一次会话就重读一次文件。放在 body 里读盘的话，每次重绘都要碰一次磁盘。
         .task(id: selected?.id) { loadSelected() }
-        // 又从「训练记录」跳过来一次（这次点的是另一场）。上面那个 `??` 只在
-        // `selectedSessionID` 还是 nil 时管用，用户之前在这一页点过之后就轮不到它了——
-        // 那时新带过来的那一场会被自己的旧选择挡住。
-        .onChange(of: requestedSessionID) { _, requested in selectedSessionID = requested }
     }
 
     // MARK: - 左边：哪几次练习有复盘

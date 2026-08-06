@@ -385,4 +385,92 @@ final class AppStateTests: XCTestCase {
                       "没说清是哪个设置没保存上，用户不知道刚才那一下到底生效没有：" + message)
         XCTAssertTrue(message.contains("下一步"), "只说失败不说下一步不算合格：" + message)
     }
+
+    // MARK: - 删一条训练记录（复审 BI-1：这条路径此前一条行为测试都没有）
+
+    /// 造一条练习记录，顺手把它的复盘报告真的写到磁盘上。
+    ///
+    /// **报告文件必须真的存在**：`SessionDeleter` 里那句 `guard fileRemover.fileExists`
+    /// 会跳过不存在的文件，拿一个空路径来测的话，「复盘报告有没有被删掉」永远是真的。
+    private func recordSession(id: String, reportPath: String) throws -> PracticeSession {
+        try Data("{\"summary\":\"这份复盘必须跟着记录一起消失\"}".utf8)
+            .write(to: directory.root.appending(path: reportPath))
+        let session = PracticeSession(id: id, questionId: "q1", focusPart: .part1,
+                                      startedAt: "2026-08-06T10:00:00Z",
+                                      endedAt: "2026-08-06T10:20:00Z",
+                                      goal: "", transcript: [],
+                                      reportPath: reportPath, recordingPath: "")
+        try StateStore(directory: directory).mutate { $0.sessions.append(session) }
+        return session
+    }
+
+    /// **这条是复审 BI-1 的判据。**
+    ///
+    /// `AppState.deleteSession(_:)` 是删除按钮通往 `SessionDeleter` 的**唯一**生产路径，
+    /// 此前守着它的只有 `HistoryViewTests` 里一句扫源码的「视图里调了它」——
+    /// 那句话对函数体里写了什么一无所知。复审实测过两次突变，656 条一条不红：
+    ///
+    /// - 整个函数体换成 `_ = session; return nil`；
+    /// - 只删掉里面那句 `reload()`。
+    ///
+    /// 后果是用户点「删除这一场」、在确认框里确认，记录没删、复盘报告还留在磁盘上，
+    /// 而 `deletionFailure` 是 nil，界面一个字都不会说——界面显示的状态和真实行为对不上，
+    /// 正是本项目最忌讳的那一种失败。
+    ///
+    /// `SessionDeleterTests` 那 8 条跨不过 `AppState` 这一层：它们直接 new 一台
+    /// `SessionDeleter` 来测，删除按钮走的却是这里这条路。
+    func testDeletingASessionTakesItOffThePageAndOffTheDisk() throws {
+        let reportPath = "reports/2026-08-06-001.json"
+        let reportURL = directory.root.appending(path: reportPath)
+        let session = try recordSession(id: "2026-08-06-001", reportPath: reportPath)
+        let app = AppState(directory: directory, preflight: { .init(ok: true, messages: []) })
+        XCTAssertEqual(app.state.sessions.map(\.id), ["2026-08-06-001"],
+                       "前提就没成立：这条记录压根没进到界面读的那份 state 里，"
+                           + "下面「删掉之后没了」就成了一句废话。")
+
+        let failure = app.deleteSession(session)
+
+        XCTAssertNil(failure,
+                     "一切顺利却返回了一段给用户看的说明，界面会挂出「这次删除只做完了一半」："
+                         + (failure ?? ""))
+        // **这一条咬的是 `reload()`。** 不重读的话那一行还留在界面上，
+        // 用户会再点一次删除，而这一次删的是一条已经不存在的记录。
+        XCTAssertTrue(app.state.sessions.isEmpty,
+                      "删完没有重读，界面上那一行还在——用户会以为删除按钮坏了，再点一次。")
+        XCTAssertTrue(try StateStore(directory: directory).load().sessions.isEmpty,
+                      "记录只从内存里去掉了，没写进 state.json——关掉 App 再打开它就回来了。")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: reportURL.path),
+                       "这一场的复盘报告还躺在磁盘上（\(reportURL.path)）。"
+                           + "确认框里明写着「它的复盘报告都会从磁盘上消失」，那就得真的消失。")
+    }
+
+    /// 复盘报告删不掉时，那段中文说明必须一路传到界面上（铁律 7）。
+    ///
+    /// 没有这一条的话，`deleteSession` 里的 `return failure` 改成 `return nil` 不会有人红：
+    /// 记录照样从列表里消失，用户完全不知道磁盘上还躺着一个孤儿复盘文件。
+    func testAReportThatCannotBeDeletedIsSaidOutLoudInsteadOfSwallowed() throws {
+        // 以 root 跑测试时权限位拦不住 unlink，这条什么也测不到——直接跳过，不假装绿。
+        try XCTSkipIf(getuid() == 0, "以 root 身份跑时权限位拦不住删除，这条测不到东西")
+        let reportPath = "reports/2026-08-06-002.json"
+        let session = try recordSession(id: "2026-08-06-002", reportPath: reportPath)
+        let app = AppState(directory: directory, preflight: { .init(ok: true, messages: []) })
+        // 把 reports 目录设成不可写：里面的文件删不掉，而 state.json 在数据目录根上，
+        // 照常写得进去——这正是「记录删了、文件没删掉」那一半失败。
+        try FileManager.default.setAttributes([.posixPermissions: 0o500],
+                                              ofItemAtPath: directory.reportsDirectory.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                                   ofItemAtPath: directory.reportsDirectory.path)
+        }
+
+        let message = try XCTUnwrap(app.deleteSession(session),
+                                    "复盘报告没删掉却一声不吭。用户永远不会知道磁盘上还躺着它。")
+
+        XCTAssertTrue(message.contains(reportPath),
+                      "没说清是哪个文件没删掉，用户拿这句话找不到东西：" + message)
+        XCTAssertTrue(message.contains("下一步"), "只说失败不说下一步不算合格：" + message)
+        XCTAssertTrue(app.state.sessions.isEmpty,
+                      "文件删不掉把记录本身的删除也拦下了——用户会卡在一条删不掉的记录上，"
+                          + "而他真正想做的只是让它从列表里消失。")
+    }
 }

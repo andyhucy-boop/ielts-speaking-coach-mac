@@ -132,7 +132,7 @@ struct HistoryView: View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
             HStack(alignment: .top, spacing: Spacing.sm) {
                 Button {
-                    expandedSessionID = (expandedSessionID == row.id) ? nil : row.id
+                    expandedSessionID = Self.toggling(expandedSessionID, to: row.id)
                 } label: {
                     CoachCard {
                         VStack(alignment: .leading, spacing: Spacing.sm) {
@@ -190,6 +190,18 @@ struct HistoryView: View {
         .contentShape(RoundedRectangle(cornerRadius: Radius.control))
         .help("删除这条训练记录")
         .accessibilityLabel("删除这条训练记录")
+    }
+
+    /// 点了一行之后，展开着的应该是哪一场：点没展开的那一行就展开它，
+    /// 再点一次同一行就收起来，点另一行就换过去（同时只展开一场，否则整页会滚不动）。
+    ///
+    /// **放成 `static` 纯函数，和 `speakerText(for:)` 同一个理由**：扫源码只问得出
+    /// 「这一行给 `expandedSessionID` 赋了个值」，赋成 nil 也满足。复审实测把这里
+    /// 改成 `expandedSessionID = nil`，656 条全绿——而那之后 `if expandedSessionID == row.id`
+    /// 永远为假，逐字稿面板永远画不出来，这一页的头号功能整条死掉，
+    /// 底下那一串扫描（transcriptPane / turn.text / 复盘按钮）全在扫一段渲染不到的代码。
+    static func toggling(_ current: String?, to id: String) -> String? {
+        current == id ? nil : id
     }
 
     // MARK: - 展开之后：这一场的逐字稿全文
