@@ -62,5 +62,16 @@ final class RetrainingOutcomeTests: XCTestCase {
         let value = try report(#"{"priority_target":{"id":"   ","label":"L"}}"#)
         XCTAssertEqual(RetrainingOutcome.judge(report: value, targetKey: "logic-explain"),
                        .notNamedAgain)
+
+        // 上面那条断言其实钉不住「空白 id」这道守卫本身：targetKey 是 "logic-explain"，
+        // 守卫拿掉以后空串跟它一比仍然不等，照样返回 .notNamedAgain，结果一模一样。
+        // 守卫唯一改变行为的输入是「两边都空白」，所以必须显式钉住这一格。
+        // 后果具体：targetKey 空白是能发生的——`RetrainingPolicy.extractTarget` 虽然挡了，
+        // 但台账是从磁盘 JSON 解码回来的，`RetrainingLink(targetKey:)` 也是公开构造器，
+        // 旧数据或绕过 extractTarget 的调用方都能塞进一个空白 key。没有守卫时，
+        // 「台账里没记住目标」和「这份复盘没给出目标」两个空串会判等，
+        // 于是报「又被点名了」——凭两处「什么都没有」编出一个命中。
+        let blank = try report(#"{"priority_target":{"id":"   ","label":"L"}}"#)
+        XCTAssertEqual(RetrainingOutcome.judge(report: blank, targetKey: "  "), .notNamedAgain)
     }
 }
