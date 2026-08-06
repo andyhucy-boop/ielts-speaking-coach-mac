@@ -514,6 +514,56 @@ final class AppStateTests: XCTestCase {
                           + "而他真正想做的只是让它从列表里消失。")
     }
 
+    // MARK: - 内嵌播放器必须接到同一个数据目录上（Phase 5 复审 2026-08-07）
+
+    /// **这条守的是「接错了也全绿」那一类，本项目栽过四次。**
+    ///
+    /// `makeRecordingPlaybackViewModel(for:)` 此前没有任何运行期测试：守着它的只有
+    /// `RecordingPlayerViewTests` 里一句扫源码的「HistoryView 调了它」——那句话证明
+    /// 「调了」，不证明「调出来的东西指向同一个数据目录」。复审实测把这个方法里的
+    /// `store` 与 `recordings` 双双换成另一个目录，827 条一条不红。
+    ///
+    /// 后果正是这个方法自己的文档注释写着的那一条：训练记录页上每一场都显示
+    /// 「录音文件找不到了」，而文件其实好端端地躺在磁盘上；删录音则会写进一个
+    /// 不相干的 state.json，用户点完删除，这边的记录一个字都没变。
+    ///
+    /// `RecordingPlaybackViewModelTests` 那一组跨不过 `AppState` 这一层：
+    /// 它们自己把 `store` 和 `recordings` 传了进去，接线接到哪儿它们看不见。
+    func testTheEmbeddedPlayerReadsAndWritesTheSameDataDirectoryAsTheApp() throws {
+        let audioURL = directory.recordingsDirectory.appending(path: "x.m4a")
+        try Data(repeating: 0x41, count: 128).write(to: audioURL)
+        let session = PracticeSession(id: "2026-08-07-001", questionId: "q1", focusPart: .part1,
+                                      startedAt: "2026-08-07T10:00:00Z",
+                                      endedAt: "2026-08-07T10:20:00Z",
+                                      goal: "", transcript: [],
+                                      reportPath: "reports/2026-08-07-001.json",
+                                      recordingPath: "recordings/x.m4a")
+        try StateStore(directory: directory).mutate { $0.sessions = [session] }
+        let app = AppState(directory: directory, preflight: { .init(ok: true, messages: []) })
+
+        let viewModel = app.makeRecordingPlaybackViewModel(for: session)
+
+        // 读的这一头：播放器找的必须是**这个**目录里的那条 m4a。
+        XCTAssertEqual(viewModel.state, .ready(audioURL),
+                       "播放器去别处找这条录音了（实际是 \(viewModel.state)）。"
+                           + "真机上训练记录页每一场都会显示「录音文件找不到了」，"
+                           + "而文件好端端地躺在 \(audioURL.path)。")
+
+        viewModel.delete()
+
+        // 写的那一头：删录音必须落在**这个**目录的 state.json 上。
+        XCTAssertFalse(FileManager.default.fileExists(atPath: audioURL.path),
+                       "用户点了删除，音频文件还在 \(audioURL.path)。")
+        XCTAssertEqual(try StateStore(directory: directory).load().sessions.first?.recordingPath,
+                       "",
+                       "删完录音，这个目录的 state.json 里那条 recordingPath 还指着已经不在的"
+                           + "文件——播放器把清除写进了另一个 state.json。用户重开 App，"
+                           + "这一场会显示「录音文件找不到了」，而且永远清不掉。")
+        XCTAssertEqual(viewModel.notice, "录音已删除。这次练习的题目、逐字稿和复盘都还在。",
+                       "一切顺利却没有告诉用户删成功了，或者说的不是这句："
+                           + (viewModel.notice ?? "（一个字都没说）"))
+    }
+
     // MARK: - 采样器必须真的接到练习上（复审 BI-2）
 
     // Phase 4 的十三个任务没有一个认领「把 AXTranscriptSampler 接到 App 上」这件事：

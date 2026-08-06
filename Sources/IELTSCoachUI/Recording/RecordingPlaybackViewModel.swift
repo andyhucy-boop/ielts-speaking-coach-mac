@@ -60,6 +60,11 @@ public final class RecordingPlaybackViewModel {
     ///
     /// 顺序不能反。先清路径再删文件的话，删文件万一失败，那个文件就变成了
     /// 界面上看不见、用户也不知道存在的孤儿，只能靠 Finder 手动去翻。
+    ///
+    /// **文件删掉了不等于这条就删干净了。** 训练记录那一半没写成功时，
+    /// 绝不能接着报「录音已删除，其他都还在」——那是两重的谎：记录压根没更新，
+    /// 而磁盘上那个文件已经没了。所以这里看 `clearReferenceOnly()` 的成败，
+    /// 只有记录真的更新上了才说成功；没更新上就把它那句失败说明留在屏幕上（铁律 7）。
     public func delete() {
         do {
             try recordings.delete(relativePath: relativePath)
@@ -67,12 +72,16 @@ public final class RecordingPlaybackViewModel {
             notice = error.localizedDescription
             return
         }
-        clearReferenceOnly()
+        guard clearReferenceOnly() else { return }
         notice = "录音已删除。这次练习的题目、逐字稿和复盘都还在。"
     }
 
     /// 只把记录里的路径清掉，不碰任何文件。用于文件已经不在的情况。
-    public func clearReferenceOnly() {
+    ///
+    /// **返回记录是否真的更新成功。** `delete()` 靠它决定该不该说「已删除」——
+    /// 不交回来的话，写盘失败刚设进 `notice` 的那句说明会被下一行的成功文案盖掉。
+    @discardableResult
+    public func clearReferenceOnly() -> Bool {
         let target = sessionID
         do {
             try store.mutate { state in
@@ -85,9 +94,15 @@ public final class RecordingPlaybackViewModel {
             }
             relativePath = ""
             state = .none
+            return true
         } catch {
             notice = "训练记录没能更新：\(error.localizedDescription)"
                 + "\n下一步：确认数据目录可写、没有别的实例正在运行，然后再试一次。"
+            // 记录里那条路径还在，而它指的文件可能刚刚已经被 `delete()` 删掉了。
+            // 重算一次状态，让界面画的东西和磁盘现状对得上——不能一边说「没能更新」，
+            // 一边还摆着一颗按下去必然是哑的播放键。
+            refresh()
+            return false
         }
     }
 }
