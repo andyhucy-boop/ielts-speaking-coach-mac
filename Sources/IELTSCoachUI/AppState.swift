@@ -272,6 +272,28 @@ public final class AppState {
         PendingReviewViewModel(directory: directory, store: store)
     }
 
+    /// 造一份「这一场的录音」的视图模型：**与本 AppState 同一个数据目录**。
+    ///
+    /// 放在这里而不是让视图自己 new 一个，理由和 `makePendingReviewViewModel`、
+    /// `loadReview` 一样：`directory` 与 `store` 都是私有的，而它们私有是有道理的——
+    /// App 与命令行必须读写同一个目录，多一处解析目录就多一处走岔的机会。
+    /// 播放器要是去另一个目录里找那条 `recordings/*.m4a`，训练记录页上每一场都会
+    /// 显示「录音文件找不到了」，而文件其实好端端地躺在磁盘上。
+    ///
+    /// 每点开一场造一份新的：它带着这一场的 `sessionID` 与「上一次操作说了什么」
+    /// （`notice`）的状态，复用同一份会让上一场的提示留在这一场的屏幕上。
+    ///
+    /// **它写盘不经过本 AppState**（`RecordingPlaybackViewModel` 自己拿着 `StateStore`），
+    /// 所以删完录音之后界面必须自己 `reload()` 一次——`RecordingPlayerView` 的
+    /// `onRecordingRemoved` 就是干这个的。不重读的话，行上那个波形标记会一直留着。
+    public func makeRecordingPlaybackViewModel(
+        for session: PracticeSession) -> RecordingPlaybackViewModel {
+        RecordingPlaybackViewModel(sessionID: session.id,
+                                   relativePath: session.recordingPath,
+                                   store: store,
+                                   recordings: RecordingStore(directory: directory))
+    }
+
     /// 读出某次练习的复盘，拆成复盘报告页要显示的分区。
     ///
     /// 放在这里而不是让视图自己拼路径，理由和 `applyImport` 一样：`directory` 是私有的，

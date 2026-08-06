@@ -30,6 +30,12 @@ struct HistoryView: View {
     /// 删除只完成了一半时那段中文说明。**不做成一闪而过的提示**——用户来不及读，
     /// 而这段话里带着「哪几个文件没删掉、在哪儿」，是他自己去清理的唯一线索。
     @State private var deletionFailure: String?
+    /// 展开着的那一场的录音播放器。**跟着 `expandedSessionID` 一起换**。
+    ///
+    /// 放 `@State` 而不是每次画界面现造一份：那份视图模型带着「上一次操作说了什么」
+    /// （`notice`）的状态，每次重绘现造的话，「录音已删除。这次练习的题目、逐字稿和复盘
+    /// 都还在。」这句话会在下一次重绘时消失，用户根本来不及读。
+    @State private var playback: RecordingPlaybackViewModel?
 
     private var model: HistoryViewModel { HistoryViewModel(state: app.state) }
 
@@ -133,6 +139,10 @@ struct HistoryView: View {
             HStack(alignment: .top, spacing: Spacing.sm) {
                 Button {
                     expandedSessionID = Self.toggling(expandedSessionID, to: row.id)
+                    // 播放器跟着展开状态换。收起来时置 nil：留着的话，正在播的那条
+                    // 录音会在一个看不见的视图里继续响（`.onDisappear` 会停掉它）。
+                    playback = expandedSessionID == row.id
+                        ? app.makeRecordingPlaybackViewModel(for: row.session) : nil
                 } label: {
                     CoachCard {
                         VStack(alignment: .leading, spacing: Spacing.sm) {
@@ -144,6 +154,7 @@ struct HistoryView: View {
                                     .font(Typography.label)
                                     .foregroundStyle(Palette.textSecondary)
                                 Spacer(minLength: Spacing.sm)
+                                recordingBadge(row)
                                 // 等宽数字：条数从 9 跳到 12 时整行不该跟着抖。
                                 Text(row.turnCountText)
                                     .font(Typography.label)
@@ -171,8 +182,41 @@ struct HistoryView: View {
                 deleteButton(row)
             }
             if expandedSessionID == row.id {
+                // **播放器摆在逐字稿上方**：先听自己当时是怎么说的，再对照文字。
+                // 反过来的话，一屏逐字稿会把播放器顶到看不见的地方。
+                recordingPlayer
                 transcriptPane(row)
             }
+        }
+    }
+
+    /// 「这一场有录音」的标记。只认 `recordingPath` 非空，**不管文件在不在**——
+    /// 文件不在了这件事由展开之后的播放器说清楚（它会明说「找不到了」并给出下一步），
+    /// 在列表这一层去逐条摸磁盘，每滚一屏都要几十次 IO。
+    @ViewBuilder
+    private func recordingBadge(_ row: HistoryRow) -> some View {
+        if row.hasRecording {
+            // SF Symbols，不用 emoji（DESIGN-SYSTEM 第 4 节）。
+            Image(systemName: "waveform")
+                .font(Typography.label)
+                .foregroundStyle(Palette.textSecondary)
+                .help("这一场有录音，点开可以回听")
+                .accessibilityLabel("这一场有录音")
+        }
+    }
+
+    /// 展开之后那条内嵌播放器。
+    ///
+    /// `.id(...)` 不能省：换一场时视图在同一个位置上，不换 id 的话 SwiftUI 会复用
+    /// 同一个 `RecordingPlayerView`，里面那台 `AVAudioPlayer`（`@State`）还是上一场的。
+    ///
+    /// 删完之后 `app.reload()` 一次：播放器写盘不经过 `AppState`，不重读的话
+    /// 行上那个波形标记会一直留着，用户会再点一次删除。
+    @ViewBuilder
+    private var recordingPlayer: some View {
+        if let playback {
+            RecordingPlayerView(viewModel: playback, onRecordingRemoved: { app.reload() })
+                .id(playback.sessionID)
         }
     }
 
@@ -290,7 +334,9 @@ struct HistoryView: View {
 
     private func destroy(_ row: HistoryRow) {
         pendingDeletion = nil
-        if expandedSessionID == row.id { expandedSessionID = nil }
+        // 整条记录都要删掉了，展开着的播放器也得跟着收——留着的话它指着一条
+        // 已经不存在的记录，点「删除录音」会去删一个刚被连带删掉的文件。
+        if expandedSessionID == row.id { expandedSessionID = nil; playback = nil }
         // 返回 nil 表示一切顺利；非 nil 是「记录删了，但有文件没删掉」的中文说明。
         deletionFailure = app.deleteSession(row.session)
     }
