@@ -38,7 +38,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleExecutable</key><string>IELTSCoachApp</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.3.0</string>
+    <key>CFBundleShortVersionString</key><string>0.5.0</string>
     <key>CFBundleVersion</key><string>1</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>NSHighResolutionCapable</key><true/>
@@ -55,6 +55,19 @@ plutil -lint "$APP/Contents/Info.plist" >/dev/null || {
     echo "   下一步：检查 build-app.sh 里那段 heredoc 的标签是否闭合。"
     exit 1
 }
+
+# NSMicrophoneUsageDescription 一旦丢了，App 在第一次申请麦克风权限时会直接崩溃，
+# 而崩溃报告里看不出跟这个键有任何关系。上面那段 heredoc 很容易在后续改动里被误伤，
+# 所以这里当场验一次。
+MIC_USAGE="$(plutil -extract NSMicrophoneUsageDescription raw "$APP/Contents/Info.plist" 2>/dev/null || true)"
+if [ -z "$MIC_USAGE" ]; then
+    echo "❌ Info.plist 里缺少 NSMicrophoneUsageDescription，或者它的值是空的。"
+    echo "   后果：App 一申请麦克风权限就会闪退，且崩溃信息看不出原因。"
+    echo "   下一步：在 build-app.sh 的 Info.plist heredoc 里补回这个键，"
+    echo "   内容要用中文说明「录音用来做什么、存在哪里、能不能删」。"
+    exit 1
+fi
+echo "✓ 麦克风用途说明：$MIC_USAGE"
 
 echo "▶︎ 签名…"
 
