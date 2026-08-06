@@ -1,4 +1,5 @@
 import Foundation
+import IELTSCoachCore
 
 /// ChatGPT.app 的界面特征。**ChatGPT 改版时只改这个文件。**
 /// 别处不得硬编码任何界面标签。
@@ -31,6 +32,12 @@ public enum ChatGPTLabels {
     /// **不要写成 "Copy message"** —— 那是用户自己那条消息的复制按钮（挨着 Edit message），
     /// 复制的是提示词而不是复盘。两者结构相同，只能靠标签精确区分。
     public static let copyAssistantMessage = ["Copy", "复制"]
+
+    /// **用户自己**那条消息下方的复制按钮（spec 2.3.9 实测，挨着 `Edit message`）。
+    /// 与 `copyAssistantMessage` 结构完全相同（都是单个 AXImage 子节点），
+    /// **只能靠标签精确区分**。逐字稿靠这两个标签判断每段话是谁说的，搞反会让整份记录的
+    /// 说话人全反，而且不报错、不崩溃。
+    public static let copyUserMessage = ["Copy message", "复制消息"]
 
     /// 控制元素的合法 role。静音类是 AXCheckBox（subrole=AXToggleButton），
     /// 启停语音是 AXButton，两者结构判据相同（实测确认）。
@@ -105,5 +112,21 @@ public enum ChatGPTLabels {
 
     public static func isVoiceActive(_ nodes: [AXNodeSnapshot]) -> Bool {
         nodes.contains { $0.role == "AXImage" && $0.descriptionText == voiceActiveIndicator }
+    }
+
+    /// 这个节点能不能用来判定「前面攒的那些文本是谁说的」。
+    ///
+    /// 判据与 `matchControl` 对称（role + label + 结构三重，见 spec 2.3.1）：
+    /// 侧边栏里可能存在同名的会话行，但它嵌套着 AXButton（Pin chat / Archive chat），
+    /// 不是单个 AXImage 子节点，不满足结构判据。只按标签匹配会让说话人判别随机出错。
+    ///
+    /// **必须先判 `copyUserMessage` 再判 `copyAssistantMessage`** ——
+    /// 两个集合的元素是精确相等比较，不存在前缀吞并问题，但顺序写反了读起来容易误解，
+    /// 保持「先用户、后助手」这个固定顺序。
+    public static func speakerMarker(_ node: AXNodeSnapshot) -> TranscriptSpeaker? {
+        guard controlRoles.contains(node.role), node.isIconOnlyControl else { return nil }
+        if copyUserMessage.contains(node.label) { return .learner }
+        if copyAssistantMessage.contains(node.label) { return .examiner }
+        return nil
     }
 }
