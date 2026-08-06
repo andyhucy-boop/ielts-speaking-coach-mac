@@ -164,4 +164,119 @@ final class VocabularyExporterTests: XCTestCase {
                           "\(format) 必须告诉用户拿到文件之后干什么：\(format.howToUse)")
         }
     }
+
+    // MARK: - 计划里的测试没覆盖到的地方（补齐空转，2026-08-07）
+    //
+    // 下面每一条都对应一处「把产品代码改坏、上面 13 条测试全绿」的地方。
+
+    /// 计划里的 TSV 断言只用了 `high` 一档，`ankiTag` 写死成任何常量都不会被发现。
+    /// 标签错了的后果不是报错，是用户在 Anki 里按 `ielts-speaking::high` 筛出一堆
+    /// 本该「先放着」的词——他会照着这个顺序背下去。
+    func testTagColumnFollowsTheNormalizedPriorityForEveryLevel() {
+        let expected: [(raw: String, tag: String)] = [
+            ("high", "ielts-speaking ielts-speaking::high"),
+            ("normal", "ielts-speaking ielts-speaking::normal"),
+            ("low", "ielts-speaking ielts-speaking::low"),
+            ("紧急", "ielts-speaking ielts-speaking::normal")     // 没见过的写法归到 normal
+        ]
+        for (raw, tag) in expected {
+            let document = tsv([record("v1", basic: "good", priority: raw)])
+            let columns = dataLines(document)[0].components(separatedBy: "\t")
+            XCTAssertEqual(columns[2], tag, "priority=\(raw) 的标签列不对")
+        }
+    }
+
+    /// `title` 是要显示在「我的词汇」页上的中文档次名（Task 7 用它分组）。
+    /// 计划里一条都没测：三档全返回空字符串，13 条测试照样全绿，
+    /// 界面上就是三个没有名字的分组。
+    func testEveryPriorityLevelHasItsOwnChineseTitle() {
+        let titles = VocabularyPriority.allCases.map(\.title)
+        for title in titles {
+            XCTAssertFalse(title.trimmingCharacters(in: .whitespaces).isEmpty, "有档次没有中文名")
+        }
+        XCTAssertEqual(Set(titles).count, VocabularyPriority.allCases.count,
+                       "三档的名字必须互不相同，否则界面上分不出哪组是哪组")
+        XCTAssertEqual(VocabularyPriority.high.title, "优先记")
+    }
+
+    /// `deckName` / `noteType` 是 `export` 的公开参数。计划里只测了默认值，
+    /// 实现把它们原地忽略、写死成默认值，13 条测试全绿。
+    func testDeckNameAndNoteTypeComeFromTheArguments() throws {
+        let text = VocabularyExporter.export([record("v1", basic: "good")],
+                                             format: .ankiTSV,
+                                             deckName: "雅思口语::生词",
+                                             noteType: "Basic (and reversed card)",
+                                             exportedAt: exportedAt, calendar: utc).text
+        XCTAssertTrue(text.contains("#deck:雅思口语::生词"), "牌组名没有用传进来的值：\(text)")
+        XCTAssertTrue(text.contains("#notetype:Basic (and reversed card)"), "笔记类型没有用传进来的值")
+
+        let json = VocabularyExporter.export([record("v1", basic: "good")],
+                                             format: .ankiConnectJSON,
+                                             deckName: "雅思口语::生词",
+                                             noteType: "Basic (and reversed card)",
+                                             exportedAt: exportedAt, calendar: utc).text
+        let note = try XCTUnwrap(try JSONValue.decode(from: json)["params"]?["notes"]?.arrayValue?.first)
+        XCTAssertEqual(note["deckName"]?.stringValue, "雅思口语::生词")
+        XCTAssertEqual(note["modelName"]?.stringValue, "Basic (and reversed card)")
+    }
+
+    /// 文件头里的牌组名同样要清洗。带换行的牌组名会在文件开头凭空多出一行，
+    /// Anki 按第二行指令导入，卡片全进错牌组——而且不报任何错。
+    func testDeckNameWithNewlinesCannotInjectASecondHeaderLine() {
+        let text = VocabularyExporter.export([record("v1", basic: "good")],
+                                             format: .ankiTSV,
+                                             deckName: "牌组\n#deck:别的牌组",
+                                             exportedAt: exportedAt, calendar: utc).text
+        let deckLines = text.split(separator: "\n").filter { $0.hasPrefix("#deck:") }
+        XCTAssertEqual(deckLines.count, 1, "牌组名里的换行必须被清洗掉，不能多出一条 #deck 指令：\(text)")
+    }
+
+    /// 文件名的日期必须按传进来的日历算。计划里那条用的是 01:00Z——
+    /// 在东八区仍是同一天，所以实现把 `calendar` 参数丢掉直接用 `.current`，
+    /// 那条测试照样过。晚上练完导出，文件名会写成前一天。
+    func testFileNameDayFollowsTheGivenCalendarNotTheMachineTimeZone() {
+        var shanghai = Calendar(identifier: .gregorian)
+        shanghai.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        let lateNight = CoachTime.parse("2026-08-06T23:30:00Z")!
+
+        XCTAssertEqual(VocabularyExporter.export([record("v1", basic: "good")], format: .ankiTSV,
+                                                 exportedAt: lateNight, calendar: utc)
+                        .suggestedFileName, "ielts-vocabulary-2026-08-06.txt")
+        XCTAssertEqual(VocabularyExporter.export([record("v1", basic: "good")], format: .ankiTSV,
+                                                 exportedAt: lateNight, calendar: shanghai)
+                        .suggestedFileName, "ielts-vocabulary-2026-08-07.txt")
+    }
+
+    /// 同一个词会被多次复盘推荐，重复导入不该在牌组里堆出十张一样的卡。
+    /// `options` 整段删掉，计划里那两条 AnkiConnect 测试都不会红。
+    func testAnkiConnectNotesRefuseDuplicatesWithinTheDeck() throws {
+        let document = VocabularyExporter.export([record("v1", basic: "good")],
+                                                 format: .ankiConnectJSON,
+                                                 exportedAt: exportedAt, calendar: utc)
+        let note = try XCTUnwrap(
+            try JSONValue.decode(from: document.text)["params"]?["notes"]?.arrayValue?.first)
+        let options = try XCTUnwrap(note["options"], "AnkiConnect 的 options 段不见了")
+        XCTAssertEqual(options["allowDuplicate"], .bool(false))
+        XCTAssertEqual(options["duplicateScope"]?.stringValue, "deck")
+    }
+
+    /// `sanitize` 的替换顺序不能变——先 `\r\n` 再 `\r`、`\n`。
+    /// 顺序反了，Windows 换行会变成两个 `<br>`，卡片背面凭空多出一行空行。
+    /// 计划里的测试只用了 `\n`，换成什么顺序都是绿的。
+    func testWindowsLineEndingsBecomeExactlyOneBreak() {
+        let document = tsv([record("v1", basic: "good", better: "line1\r\nline2",
+                                   collocation: "")])
+        let columns = dataLines(document)[0].components(separatedBy: "\t")
+        XCTAssertEqual(columns[1], "line1<br>line2", "\\r\\n 必须只换出一个 <br>")
+    }
+
+    /// 单独的 `\r`（老 Mac 换行）也必须换成 `<br>`。它原样留在字段里，
+    /// Anki 那边按 `\r` 断行、这个文件按 `\n` 断行，同一张卡在两处显示不一样，
+    /// 而且导入时不会有任何提示。
+    func testLoneCarriageReturnIsAlsoReplaced() {
+        let document = tsv([record("v1", basic: "good", better: "line1\rline2",
+                                   collocation: "")])
+        XCTAssertEqual(dataLines(document)[0].components(separatedBy: "\t")[1], "line1<br>line2",
+                       "单独的 \\r 必须被替换成 <br>")
+    }
 }
