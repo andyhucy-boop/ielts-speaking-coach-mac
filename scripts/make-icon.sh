@@ -14,4 +14,4 @@ iconutil -c icns "$ICONSET" -o "$ICNS"
 # 证明。必须校验过尺寸齐全，才允许打印 ✅。
 "$ROOT/scripts/verify-iconset.sh" "$ICONSET" "$ICNS"
 
-echo "✅ 已生成 $ICNS（10 个尺寸齐全）"
+echo "✅ 已生成 ${ICNS}（10 个尺寸齐全）"

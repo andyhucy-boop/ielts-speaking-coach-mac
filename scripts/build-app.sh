@@ -66,7 +66,7 @@ echo "▶︎ 签名…"
 # 用不带 -v 的 find-identity：它会把未被信任的身份也列出来
 # （显示为 CSSMERR_TP_NOT_TRUSTED），正好绕开「find-identity -v 显示 0 valid」那个坑。
 if ! security find-identity -p codesigning 2>/dev/null | grep -q "\"$SIGN_IDENTITY\""; then
-    echo "❌ 找不到可用的签名身份「$SIGN_IDENTITY」（证书或私钥缺失）。"
+    echo "❌ 找不到可用的签名身份「${SIGN_IDENTITY}」（证书或私钥缺失）。"
     echo "   下一步：按 docs/superpowers/plans/2026-08-05-phase3-gui-shell.md「前置条件」一节重新创建。"
     echo "   注意 PKCS12 导入必须带 -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1，"
     echo "   否则 macOS 读不了新版加密，会出现「证书在、私钥不在」这种半截状态。"

@@ -36,13 +36,13 @@ icon_256x256@2x.png:512
 icon_512x512.png:512
 icon_512x512@2x.png:1024"
 
-[ -d "$ICONSET" ] || fail "找不到 iconset 目录 $ICONSET。" \
+[ -d "$ICONSET" ] || fail "找不到 iconset 目录 ${ICONSET}。" \
     "先跑 ./scripts/make-icon.sh 生成图标，再重试。"
 
 # ---- 第一关：10 个 PNG 都在，且像素尺寸与文件名一致 ----
 while IFS=: read -r name side; do
     path="$ICONSET/$name"
-    [ -f "$path" ] || fail "iconset 里缺少 $name（$ICONSET）。" \
+    [ -f "$path" ] || fail "iconset 里缺少 ${name}（${ICONSET}）。" \
         "检查 scripts/make-icon.swift 末尾的循环是否写全了 10 个文件，然后重跑 ./scripts/make-icon.sh。"
 
     if ! probe=$(sips -g pixelWidth -g pixelHeight "$path" 2>&1); then
@@ -59,7 +59,7 @@ while IFS=: read -r name side; do
 done <<< "$EXPECTED"
 
 # ---- 第二关：.icns 里真的打进了这 10 个表示 ----
-[ -f "$ICNS" ] || fail "找不到 $ICNS。" \
+[ -f "$ICNS" ] || fail "找不到 ${ICNS}。" \
     "先跑 ./scripts/make-icon.sh 生成 .icns，再重试。"
 
 ROUNDTRIP="$(mktemp -d)"
