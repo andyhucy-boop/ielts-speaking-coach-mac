@@ -8,6 +8,12 @@ import Foundation
 public enum CoachTime {
     /// 解析完整的 ISO8601 时间戳。带不带小数秒都认。
     public static func parse(_ text: String) -> Date? {
+        // 这行 trim 目前**不可观测**：实测 macOS 26.5.2 上 ISO8601DateFormatter 自己就会
+        // 跳过前导空白（空格 / \n / \t / NBSP / U+2028 / U+3000 都跳），带不带小数秒都一样，
+        // 所以删掉它全套测试依然全绿——别浪费时间再验一次，也别据此写「测试 trim」的测试。
+        // 保留它是对 Foundation 这个未写进文档的宽容行为的保险：哪天它收紧了，
+        // 带空白的时间戳会变成「没有时间」被静默丢掉，正是本文件要防的失败形态。
+        // 注意 parseDayPrefix 里那行 trim 不一样，那里是可观测的（见该函数注释）。
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
@@ -29,6 +35,8 @@ public enum CoachTime {
     /// 命令行归档时写的是完整 ISO8601 时间戳，`PracticeSession.id` 的文档形状是
     /// `"YYYY-MM-DD-NNN"`。两种都能落在这里。
     public static func parseDayPrefix(_ text: String) -> Date? {
+        // 这里的 trim 是可观测的，别删：下面靠 prefix(10) 截字符串，前导空白会把窗口
+        // 顶歪成 "  2026-08-"，一条正常 session id 就被当成「没有日期」丢掉。
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 10 else { return nil }
 
@@ -36,6 +44,8 @@ public enum CoachTime {
         formatter.locale = Locale(identifier: "en_US_POSIX")   // 不受用户区域设置影响
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
         formatter.dateFormat = "yyyy-MM-dd"
+        // 必须严格：宽松模式会把非法日期顺延成别的日期（实测 2026-13-45 → 2027-02-14，
+        // 2026-02-30 → 2026-03-02），坏 id 被静默归进错误的周/月，算错比算少更难发现。
         formatter.isLenient = false
         return formatter.date(from: String(trimmed.prefix(10)))
     }
