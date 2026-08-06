@@ -20,10 +20,25 @@ final class SessionTimelineTests: XCTestCase {
                     lastSeenAt: "2026-07-10T10:00:00Z")
     }
 
-    private func state(sessions: [PracticeSession], issues: [IssueRecord] = []) -> CoachState {
+    private func word(_ id: String, sessions: [String]) -> VocabularyRecord {
+        VocabularyRecord(id: id, basicWord: "good", betterExpression: "remarkable",
+                         collocation: "a remarkable improvement", priority: "high",
+                         sourceSessionIds: sessions)
+    }
+
+    private func target(_ key: String, session: String) -> RetrainingTarget {
+        RetrainingTarget(targetKey: key, label: "补一个例子", status: "new", evidence: [],
+                         sourceSessionId: session, createdAt: "2026-07-10T10:00:00Z")
+    }
+
+    private func state(sessions: [PracticeSession], issues: [IssueRecord] = [],
+                       vocabulary: [VocabularyRecord] = [],
+                       targets: [RetrainingTarget] = []) -> CoachState {
         var value = CoachState.empty()
         value.sessions = sessions
         value.issues = issues
+        value.vocabulary = vocabulary
+        value.targets = targets
         return value
     }
 
@@ -55,6 +70,35 @@ final class SessionTimelineTests: XCTestCase {
         XCTAssertEqual(timeline.orderedSessionIDs,
                        [sessionID(day: 9), orphan, sessionID(day: 1)])
         XCTAssertEqual(timeline.unmatchedSessionIDs, [orphan])
+    }
+
+    /// **计划外补入（Phase 7 Task 2 实施时）。** 计划给的 9 条测试只喂 `issues`，
+    /// 一条都没喂 `vocabulary` / `targets`——实测把 `build` 里那两行整行删掉，
+    /// 9 条全绿。也就是说「词汇本、重训目标里引用到的场次也要并进时间轴」
+    /// 这条产品行为当时没有任何测试守着。
+    ///
+    /// 它守两件事：
+    /// 1. 三个档案的场次都要并进时间轴。漏掉词汇/目标独有的那几场，
+    ///    「之前那批」就凭空变小，同样的出现次数会被算成「变多了」——
+    ///    用户会以为自己练退步了。这正是计划里突变 B 要守的那条，只是换了数据源。
+    /// 2. `unmatchedSessionIDs` 的顺序固定为 issues → vocabulary → targets。
+    ///    `build` 的注释说这个顺序是刻意的，但原来没有测试能分辨顺序被换掉。
+    func testIncludesSessionsReferencedOnlyByVocabularyOrTargets() {
+        let fromIssue = "2026-07-08T09:00:00Z"
+        let fromWord = "2026-07-07T09:00:00Z"
+        let fromTarget = "2026-07-06T09:00:00Z"
+
+        let timeline = SessionTimeline.build(state: state(
+            sessions: [session(day: 9), session(day: 1)],
+            issues: [issue("i1", sessions: [fromIssue])],
+            vocabulary: [word("v1", sessions: [fromWord])],
+            targets: [target("t1", session: fromTarget)]))
+
+        XCTAssertEqual(timeline.orderedSessionIDs,
+                       [sessionID(day: 9), fromIssue, fromWord, fromTarget, sessionID(day: 1)],
+                       "词汇本与重训目标里引用到的场次也练过，必须并进时间轴")
+        XCTAssertEqual(timeline.unmatchedSessionIDs, [fromIssue, fromWord, fromTarget],
+                       "unmatched 的顺序必须固定为 issues → vocabulary → targets")
     }
 
     func testReportsUndatableIDsAndKeepsThemOutOfTheOrder() {
