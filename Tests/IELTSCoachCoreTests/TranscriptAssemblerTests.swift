@@ -153,9 +153,9 @@ final class TranscriptAssemblerTests: XCTestCase {
     /// 同一次采样里两条都在时，R1 的游标已经走过前一个槽位，
     /// 文本判据在不在都不影响结果（实现者实测确认）。
     ///
-    /// 不断言两条的先后顺序：R4 规定「匹配不上就插在游标当前位置」，
-    /// 这里游标停在 0，所以后读到的那条排在前面。这是 R4 的直接后果，
-    /// 而顺序不是本条测试要守的东西。
+    /// 不断言两条的先后顺序：顺序归 R4 管，由
+    /// `testAMessageThatMatchesNothingIsAppendedAtTheEnd` 那几条守着。
+    /// 本条只守 `canMerge` 的文本判据，两件事分开测，坏了才看得出是哪件坏了。
     func testTwoUnrelatedMessagesFromTheSameSpeakerNeverMergeIntoOneTurn() {
         var assembler = TranscriptAssembler()
         assembler.ingest([examiner("Where do you live?")], at: t1)
@@ -192,9 +192,9 @@ final class TranscriptAssemblerTests: XCTestCase {
     /// 合并的后果正是 `TranscriptSpeaker` 注释里点名的那种最坏情况——
     /// 复训时「回看自己说过的话」显示成考官说的话，且没有任何信号提示。
     ///
-    /// 不断言两条的先后顺序：R4 规定「匹配不上就插在游标当前位置」，
-    /// 这里游标停在 0，所以后来的那条排在前面。这是 R4 的直接后果，
-    /// 而顺序不是本条测试要守的东西，钉死它只会把无关行为焊进测试。
+    /// 不断言两条的先后顺序：顺序归 R4 管，由
+    /// `testAMessageThatMatchesNothingIsAppendedAtTheEnd` 那几条守着。
+    /// 本条只守 `canMerge` 的说话人判断，两件事分开测。
     func testTheSameSentenceFromTheOtherSpeakerNeverMergesIntoAnExistingTurn() {
         var assembler = TranscriptAssembler()
         assembler.ingest([examiner("Do you live in a house or a flat?")], at: t1)
@@ -363,5 +363,94 @@ final class TranscriptAssemblerTests: XCTestCase {
         XCTAssertEqual(assembler.turns.map(\.text),
                        ["Question one?", "Take your time.", "Answer one."],
                        "补读到的那条要回到它本来的位置，不能被追加到最后")
+    }
+
+    /// R4 情形二：这一次采样**一条已有消息都没对上**，读到的是刚冒出来的最新那条。
+    ///
+    /// 这是真实常态而不是边缘情况：ChatGPT 的对话区随内容变长而滚动，
+    /// 早先的消息滚出可视区后 AX 树里就读不到了，一次采样只读到最新一条太正常了。
+    func testAMessageThatMatchesNothingIsAppendedAtTheEnd() {
+        var assembler = TranscriptAssembler()
+        assembler.ingest([examiner("Question one?"), learner("Answer one.")], at: t1)
+        // 对话区滚动了，这一次只读到考官新问的那一句
+        assembler.ingest([examiner("Question two?")], at: t2)
+
+        XCTAssertEqual(assembler.turns.map(\.text),
+                       ["Question one?", "Answer one.", "Question two?"],
+                       "逐字稿的顺序就是这场练习的顺序：新问的那句绝不能跑到最前面")
+    }
+
+    /// R4 情形二续：连着几次都只读到最新那条，顺序仍然是练习本来的顺序。
+    ///
+    /// 一场练习里对话区一直在往下滚，「只读到尾巴」会连着发生很多次。
+    /// 只测一次的话，「每次都插到最前面」会把整份逐字稿倒过来而测不出来。
+    func testConsecutiveTailOnlySamplesKeepAppendingInOrder() {
+        var assembler = TranscriptAssembler()
+        assembler.ingest([examiner("Question one?")], at: t1)
+        assembler.ingest([learner("Answer one.")], at: t2)
+        assembler.ingest([examiner("Question two?")], at: t3)
+
+        XCTAssertEqual(assembler.turns.map(\.text),
+                       ["Question one?", "Answer one.", "Question two?"],
+                       "逐字稿是追加式的：后说的话永远排在先说的话后面")
+    }
+
+    /// R4 情形三：这一次只读到对话中间的一段，中间那段里还夹着一条没见过的消息。
+    ///
+    /// 界面往下滚之后，开头那条已经读不到了；这一次读到的是「中间一段」，
+    /// 新消息要落在这一段内部它本来的位置，既不许跑到最前面，也不许被甩到最后面。
+    func testANewMessageInsideAMidConversationSampleLandsWhereItBelongs() {
+        var assembler = TranscriptAssembler()
+        assembler.ingest([examiner("Question one?"),
+                          learner("Answer one."),
+                          examiner("Question two?")], at: t1)
+        // 开头那条滚出可视区了，这一次读到的是中间一段，里面多出一句没见过的
+        assembler.ingest([learner("Answer one."),
+                          examiner("Take your time."),
+                          examiner("Question two?")], at: t2)
+
+        XCTAssertEqual(assembler.turns.map(\.text),
+                       ["Question one?", "Answer one.", "Take your time.", "Question two?"],
+                       "夹在中间读到的新消息要落在它本来的位置")
+    }
+
+    /// R4 情形四：界面往回滚了，这一次读到的是**更早**的内容。
+    ///
+    /// 真实来路：考官问出第一句时正好赶上一次采样失败（R5 只记账不抛错），
+    /// 等采样恢复，那句已经滚出可视区，逐字稿里只剩学员的回答和后面的问题。
+    /// 学员往回滚去重看题目，这一次采样就读到了那句从没记下来的提问——
+    /// 它必须回到它本来的位置（学员回答**之前**），不能因为「刚读到」就当成最新的追加到末尾。
+    func testScrollingBackRevealsAnEarlierMessageThatGoesBeforeWhatWeAlreadyHave() {
+        var assembler = TranscriptAssembler()
+        // 采样失败的那几秒里考官问的话没记下来，逐字稿是从学员的回答开始的
+        assembler.ingest([learner("Answer one."), examiner("Question two?")], at: t2)
+        // 往回滚，读到了那句一直没记下来的提问
+        assembler.ingest([examiner("Question one?"), learner("Answer one.")], at: t3)
+
+        XCTAssertEqual(assembler.turns.map(\.text),
+                       ["Question one?", "Answer one.", "Question two?"],
+                       "往回滚补读到的更早内容要插在它后面那条之前，不能追加到末尾")
+    }
+
+    /// 背景板里的 unknown **不算**「没能判断是谁说的」。
+    ///
+    /// 真实采样里背景板几乎全是 unknown（考官提示词、侧边栏会话名、按钮说明，
+    /// 它们下面都没有那个用来判别说话人的复制按钮）。这些东西根本不进逐字稿，
+    /// 把它们数进来的后果是「狼来了」：每一场练完都被告知逐字稿可能不完整，
+    /// 用户看几次发现没事就再也不看这句提示了，等真出问题时它已经失效了。
+    func testBaselineNoiseIsNotCountedAsUnattributedTurns() {
+        var assembler = TranscriptAssembler()
+        assembler.seedBaseline([unknown("New chat"),
+                                unknown("Today's question (Part 1, topic: Home):"),
+                                unknown("Send message")])
+        assembler.ingest([unknown("New chat"),
+                          unknown("Today's question (Part 1, topic: Home):"),
+                          unknown("Send message"),
+                          examiner("Do you live in a house or a flat?")], at: t1)
+
+        XCTAssertEqual(assembler.unknownSpeakerCount, 0,
+                       "背景板不进逐字稿，也就谈不上「没能判断是谁说的」")
+        XCTAssertNil(assembler.completenessNote,
+                     "一切正常时不许因为背景板全是 unknown 就报一句假警")
     }
 }

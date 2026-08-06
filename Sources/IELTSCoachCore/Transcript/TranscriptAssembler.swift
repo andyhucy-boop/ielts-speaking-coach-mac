@@ -13,7 +13,7 @@ import Foundation
 /// - R1 同一次采样里的两个片段绝不并进同一个槽位（游标只前进不回头）
 /// - R2 跨采样时同一槽位只保留最长版本
 /// - R3 说话人不同的片段永不合并；unknown 可升级，不可降级
-/// - R4 匹配不上就新开槽位，插在游标当前位置
+/// - R4 匹配不上就新开槽位，插在这一次采样能确定的位置上（游标处；游标没动过时见 `insertionIndex`）
 /// - R5 采样失败只记账、不抛错
 public struct TranscriptAssembler: Sendable {
     private struct Slot {
@@ -25,6 +25,12 @@ public struct TranscriptAssembler: Sendable {
         /// **但必须留在槽位序列里**——正是它们让对齐游标能走到
         /// 「真正的对话从这里开始」的位置。
         var isBaseline: Bool
+    }
+
+    /// 一次采样里归一化之后的一个片段。只在 `ingest` 这一趟里活着。
+    private struct Piece {
+        var speaker: TranscriptSpeaker
+        var text: String
     }
 
     private var slots: [Slot] = []
@@ -51,21 +57,23 @@ public struct TranscriptAssembler: Sendable {
     /// 并入一次采样的结果。`timestamp` 是这次采样发生的时刻，由调用方给出——
     /// 内部不读时钟，否则这段逻辑就没法测了。
     public mutating func ingest(_ fragments: [TranscriptFragment], at timestamp: Date) {
+        // 先归一化、丢掉空白片段，`insertionIndex` 才有一份确定的「这一次还剩哪些片段」可看。
+        let sample = fragments
+            .map { Piece(speaker: $0.speaker, text: Self.normalize($0.text)) }
+            .filter { !$0.text.isEmpty }
+
         // R1：游标只前进不回头。一次采样看到的是**某一瞬间**的界面，
         // 两个节点就是两条消息，哪怕它们的文本一个是另一个的前缀。
         var cursor = 0
-        for fragment in fragments {
-            let text = Self.normalize(fragment.text)
-            guard !text.isEmpty else { continue }
-
-            if let hit = matchIndex(speaker: fragment.speaker, text: text, from: cursor) {
-                merge(at: hit, speaker: fragment.speaker, text: text, timestamp: timestamp)
+        for (offset, piece) in sample.enumerated() {
+            if let hit = matchIndex(speaker: piece.speaker, text: piece.text, from: cursor) {
+                merge(at: hit, speaker: piece.speaker, text: piece.text, timestamp: timestamp)
                 cursor = hit + 1
             } else {
-                // R4：插在游标当前位置，而不是一律追加到末尾。
-                // 采样漏掉过中间那条、下一次又读到时，它要回到它本来的位置。
-                let insertion = min(cursor, slots.count)
-                slots.insert(Slot(speaker: fragment.speaker, text: text,
+                // R4：新开一个槽位，插在这一次采样能确定的位置上。
+                let insertion = insertionIndex(cursor: cursor,
+                                               remaining: sample[(offset + 1)...])
+                slots.insert(Slot(speaker: piece.speaker, text: piece.text,
                                   firstSeenAt: timestamp, isBaseline: false), at: insertion)
                 cursor = insertion + 1
             }
@@ -117,6 +125,31 @@ public struct TranscriptAssembler: Sendable {
     }
 
     // MARK: - 私有
+
+    /// R4：一个匹配不上的片段，新槽位该插在哪儿。
+    ///
+    /// **游标已经走过东西**（`cursor > 0`）：这一次采样里它前面那个片段刚刚定位好，
+    /// 这条紧跟在它后面。「采样漏掉过中间那条、下一次又读到」就是这个情形，
+    /// 它要回到它本来的位置，而不是被追加到末尾。
+    ///
+    /// **游标还停在 0**：这一次一条已有消息都还没对上。此时**绝不能直接插到 0**——
+    /// 那是把消息插到整份逐字稿最前面。逐字稿的顺序就是这场练习的顺序，顺序乱了
+    /// 用户回看时会看到考官的第三个问题排在第一个前面，而且没有任何报错。
+    /// 而这不是边缘情况：ChatGPT 的对话区随内容变长而滚动，早先的消息滚出可视区后
+    /// AX 树里就读不到了，**一次采样只读到最新一条是常态**。分两种：
+    /// - 这一次后面还有片段对得上已有槽位 → 界面往回滚了，读到的是更早的内容；
+    ///   已知的只有「这条排在那个槽位前面」，就插在它正前面。
+    /// - 后面一个都对不上 → 读到的就是刚冒出来的最新内容。逐字稿是追加式的，
+    ///   一场练习里后来的消息永远在后面，所以追加到末尾。
+    private func insertionIndex(cursor: Int, remaining: ArraySlice<Piece>) -> Int {
+        guard cursor == 0 else { return min(cursor, slots.count) }
+        for later in remaining {
+            if let anchor = matchIndex(speaker: later.speaker, text: later.text, from: 0) {
+                return anchor
+            }
+        }
+        return slots.count
+    }
 
     /// 从 `cursor` 开始往后找第一个能合并的槽位。**不许从 0 开始找**（R1）。
     private func matchIndex(speaker: TranscriptSpeaker, text: String, from cursor: Int) -> Int? {
