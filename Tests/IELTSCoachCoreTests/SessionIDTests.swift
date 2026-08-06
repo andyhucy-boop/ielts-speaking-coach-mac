@@ -36,6 +36,28 @@ final class SessionIDTests: XCTestCase {
         XCTAssertEqual(SessionID.next(existing: existing, now: noon, timeZone: utc), "2026-08-06-001")
     }
 
+    func testIgnoresTodaysPrefixWithANonNumericSuffix() {
+        // 上面那条测试的两个 id 都在 `hasPrefix("2026-08-06-")` 就被挡掉了，走不到数字解析，
+        // 所以「解析不出编号也不能崩」这个性质得由本条守着：这里的 id 前缀是今天，
+        // 能穿过前缀判断，真正落到 Int(suffix) 上。
+        //
+        // 这种 id 是会真实出现的：手工编辑过的 state.json，或迁移半途写坏的
+        // `2026-08-06-001-retry`。把 Int(suffix) 的 guard 换成强解包（崩）或
+        // `else { return 0 }`（把已数出的最大编号抹掉），本条都必须变红——两个都实测过。
+        //
+        // 注：换成 `Int(suffix) ?? 0` 本条不会红，这不是漏网，是因为它与现实现等价：
+        // current 从 0 起、只被 max 抬高，所以 max(current, 0) 恒等于 current。
+        let onlyBad = [session("2026-08-06-abc"),      // 后缀根本不是数字
+                       session("2026-08-06-"),          // 后缀为空
+                       session("2026-08-06-001-retry")] // 迁移期间半写坏的形状
+        XCTAssertEqual(SessionID.next(existing: onlyBad, now: noon, timeZone: utc), "2026-08-06-001")
+
+        // 坏 id 也不能把已经数出来的最大编号抹掉——那会撞号，两次练习的复盘写到同一个
+        // reports/<id>.json 上，后一次直接盖掉前一次。
+        let mixed = [session("2026-08-06-003")] + onlyBad
+        XCTAssertEqual(SessionID.next(existing: mixed, now: noon, timeZone: utc), "2026-08-06-004")
+    }
+
     func testUsesTheGivenTimeZoneNotTheMachineOne() {
         // 东八区的凌晨 1 点，在 UTC 还是前一天的 17 点。编号里的日期必须跟着传入的时区走，
         // 否则用户在午夜前后练的两场会被编到看起来矛盾的日期上。
