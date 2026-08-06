@@ -85,6 +85,12 @@ final class IssueTrendAnalyzerTests: XCTestCase {
         let outcome = try result(state(sessionCount: 6,
                                        issues: [issue("i", days: [1, 6])]), "i")
         XCTAssertEqual(outcome.trend, .notEnoughData)
+        // 样本不够时 detail 必须换一句话说。少了这条断言，把 detail 里
+        // 整个 .notEnoughData 分支删掉也能全绿，而用户会看到
+        // 「最近 5 场练习里有 1 场犯了它，再往前 1 场里有 1 场。」——
+        // 拿 1 场当「之前」摆出来，正是上面那条规则要避免的事。
+        XCTAssertEqual(outcome.detail,
+                       "目前一共在 2 场练习里犯过它。练习场次还不够，看不出它在变多还是变少。")
     }
 
     func testNoSessionsAtAllStillProducesAResultInsteadOfCrashing() throws {
@@ -92,6 +98,10 @@ final class IssueTrendAnalyzerTests: XCTestCase {
                                        issues: [issue("i", days: [])]), "i")
         XCTAssertEqual(outcome.trend, .notEnoughData)
         XCTAssertEqual(outcome.recentHits, 0)
+        // 一场都没练时也得说人话。删掉 detail 的 .notEnoughData 分支，
+        // 这里会变成「最近 0 场练习里有 0 场犯了它，再往前 0 场里有 0 场。」
+        XCTAssertEqual(outcome.detail,
+                       "目前一共在 0 场练习里犯过它。练习场次还不够，看不出它在变多还是变少。")
     }
 
     // MARK: - 新问题
@@ -112,6 +122,37 @@ final class IssueTrendAnalyzerTests: XCTestCase {
                                        issues: [issue("i", days: [1, 12])]), "i")
         XCTAssertFalse(outcome.isNew)
         XCTAssertNotEqual(outcome.trend, .fresh)
+        // 下面两条把 earlierHits 钉死在「只数 earlier 窗口内的场次」上。
+        // 这是唯一能区分正确实现与「窗口外的陈年历史也算进之前那批」的数据：
+        // 别的用例里两个窗口刚好覆盖了全部出现，两种算法结果相同。
+        // 少了这条，把 earlierHits 写成 sources.count - recentHits 也能全绿——
+        // 那样一个练了 20 场、场场都犯的老毛病会被算成「最近 5 场 vs 之前 15 场」
+        // 判成「出现变少了」，正好把这个功能要回答的问题反着说。
+        XCTAssertEqual(outcome.recentHits, 1)
+        XCTAssertEqual(outcome.earlierHits, 0, "第 1 天在 earlier 窗口之外，不能算进「之前那批」")
+    }
+
+    // MARK: - windowSize 是公开参数，必须真的改变窗口
+
+    /// `analyze(state:windowSize:)` 的 windowSize 是计划里明列的公开参数。
+    /// 没有这条，把它整个丢掉、两个窗口都写死 defaultWindowSize 也能全绿——
+    /// 那等于对外宣称可配、实际没人验证过它起作用。
+    func testWindowSizeParameterActuallyResizesBothWindows() throws {
+        // 10 场，毛病落在第 5、6、7、10 天。
+        // 窗口 3：最近 3 场（第 8–10 天）里犯 1 场，之前 3 场（第 5–7 天）里犯 3 场 → 在变少。
+        // 默认窗口 5：最近 5 场（第 6–10 天）里犯 3 场，之前 5 场（第 1–5 天）里犯 1 场 → 在变多。
+        // 同一份数据两个窗口给出相反结论，参数一旦被忽略，这条必红。
+        let value = state(sessionCount: 10, issues: [issue("i", days: [5, 6, 7, 10])])
+        let narrow = try XCTUnwrap(IssueTrendAnalyzer.analyze(state: value, windowSize: 3).first)
+        XCTAssertEqual(narrow.recentWindowSize, 3, "最近这批必须只取 3 场")
+        XCTAssertEqual(narrow.earlierWindowSize, 3, "之前那批也必须只取 3 场")
+        XCTAssertEqual(narrow.recentHits, 1)
+        XCTAssertEqual(narrow.earlierHits, 3)
+        XCTAssertEqual(narrow.trend, .decreasing)
+
+        let byDefault = try result(value, "i")
+        XCTAssertEqual(byDefault.recentWindowSize, 5)
+        XCTAssertEqual(byDefault.trend, .increasing, "默认窗口下同一份数据的结论正好相反")
     }
 
     // MARK: - hits 必须从窗口交集算，不能拿 occurrences 顶替
@@ -141,11 +182,27 @@ final class IssueTrendAnalyzerTests: XCTestCase {
         }
     }
 
-    func testDetailQuotesTheActualNumbers() throws {
+    /// detail 必须整句断言，不能只查「数字出现过」。
+    ///
+    /// 这句话是用户核对结论的唯一依据，四个数字各自插在哪个位置就是它的全部内容：
+    /// 只断言「含有 1」「含有 4」的话，把两个 hits 对调（句子变成
+    /// 「最近 5 场里有 4 场犯了它，再往前 5 场里有 1 场」，与旁边「出现变少了」
+    /// 的标签直接打架）照样全绿。
+    func testDetailQuotesTheActualNumbersInTheRightPlaces() throws {
         let outcome = try result(state(sessionCount: 10,
                                        issues: [issue("i", days: [1, 2, 3, 4, 10])]), "i")
-        XCTAssertTrue(outcome.detail.contains("1"))
-        XCTAssertTrue(outcome.detail.contains("4"))
+        XCTAssertEqual(outcome.trend, .decreasing)
+        XCTAssertEqual(outcome.detail, "最近 5 场练习里有 1 场犯了它，再往前 5 场里有 4 场。")
+    }
+
+    /// 上一条里两个窗口都是 5 场，分不出「窗口大小」和「犯了几场」有没有插反。
+    /// 这条用 9 场，让四个数字（5、1、4、3）互不相同，任何一处对调都会变红。
+    func testDetailKeepsWindowSizesAndHitsInTheirOwnSlots() throws {
+        // 9 场：最近 5 场是第 5–9 天（只犯了第 9 天），
+        // 之前只剩 4 场（第 1–4 天，犯了第 1、2、3 天）。
+        let outcome = try result(state(sessionCount: 9,
+                                       issues: [issue("i", days: [1, 2, 3, 9])]), "i")
+        XCTAssertEqual(outcome.detail, "最近 5 场练习里有 1 场犯了它，再往前 4 场里有 3 场。")
     }
 
     func testAnalyzeCoversEveryIssueExactlyOnce() {
