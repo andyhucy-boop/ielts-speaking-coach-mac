@@ -64,6 +64,8 @@ enum SourceGuard {
         case directoryNotFound(label: String, resolved: String)
         case noSwiftFiles(label: String, resolved: String)
         case memberNotFound(name: String, hint: String)
+        case noEnumCases(name: String)
+        case switchNotFound(subject: String)
         case noButtonTitles
         case noViewBody(type: String)
 
@@ -96,6 +98,15 @@ enum SourceGuard {
                     + "下一步：确认源码是不是被挪走了。"
             case .memberNotFound(let name, let hint):
                 return "源码里找不到「\(name)」这段声明，扫描范围失效，靠它的断言全部空转。\(hint)"
+            case .noEnumCases(let name):
+                return "`enum \(name)` 里一个 case 声明都没扫到。状态清单一空，"
+                    + "「每个状态都得有出口」那条断言就变成了恒真——最坏的一种空转。"
+                    + "下一步：确认这个枚举还在、case 的写法没变（例如被改成了 struct 常量）。"
+            case .switchNotFound(let subject):
+                return "这段代码里找不到 `switch \(subject)`（或者它后面没有配对的大括号），"
+                    + "「逐个状态问出口」那一趟一条分支都切不出来，断言等于空转。"
+                    + "下一步：改了这个 switch 的写法就同步改调用处的 subject；"
+                    + "整个 switch 被删掉的话，先想清楚每个状态的按钮现在由谁决定。"
             case .noButtonTitles:
                 return "扫遍 \(uiSourceRelativeRoot) 一颗 `Button(\"…\")` 都没找到。"
                     + "整个界面一颗按钮都没有是不可能的，所以这多半是扫描写法失效了——"
@@ -870,6 +881,302 @@ enum SourceGuard {
             found.append((name, body))
         }
         return found
+    }
+
+    // MARK: - 每个状态都得有一条出口
+
+    /// 取某个 `enum` 里**声明**的 case 名字（按源码顺序）。
+    ///
+    /// ## 为什么要有它
+    ///
+    /// 「每个状态下界面上都得有一颗能点的按钮」这句话，只有在**状态清单不是手写的**
+    /// 时候才守得住。手写清单的通病本项目已经吃过好几次：新加的那一项没人写进来，
+    /// 于是断言看着在守，实际上守的是一份过期的表。
+    ///
+    /// 只认声明：`switch` 里的模式匹配（`case .failed:`）以点开头，不会被当成声明；
+    /// `case .capturingReview, .needsManualCopy:` 同理。
+    ///
+    /// 边界：嵌套类型里声明的 case 也会被算进来（界面模块里没有这种写法）。
+    static func declaredCaseNames(inEnum name: String, of code: String) throws -> [String] {
+        let body = try memberBody(of: "enum \(name)", in: code)
+        var names: [String] = []
+        for line in body.split(separator: "\n", omittingEmptySubsequences: false) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("case ") else { continue }
+            let tail = trimmed.dropFirst("case ".count).trimmingCharacters(in: .whitespaces)
+            // 以点开头的是模式匹配，不是声明。
+            guard let first = tail.first, first != "." else { continue }
+            names += splitTopLevel(tail).compactMap(leadingIdentifier)
+        }
+        guard !names.isEmpty else { throw Failure.noEnumCases(name: name) }
+        return names
+    }
+
+    /// `switch` 的一条分支。
+    struct SwitchBranch: Equatable {
+        /// 标签原文（不含冒号），例如 `case .practicing`、`default`。
+        let label: String
+        /// 这条分支接住的 case 名（不带点）。`default` 分支是空数组。
+        let cases: [String]
+        /// 标签底下那段代码，到下一个标签为止。
+        let body: String
+
+        var isDefault: Bool { cases.isEmpty }
+    }
+
+    /// 把一段代码里 `switch <subject>` 的分支逐条切出来。
+    ///
+    /// **为什么不能只扫全文**：同一个文件里往往有好几份「装饰用」的 switch
+    /// （`PracticeSheet` 的 `stageIcon` / `stageTint` 就是），扫全文的话，
+    /// 把按钮那一段的某个分支整块掏空，别处的同名 case 照样扫得到，测试仍然是绿的。
+    /// 要问「这个状态下有没有按钮」，就得先把**那个状态自己的那一段**切出来。
+    ///
+    /// 边界：模式里带三元表达式（`case x where a ? b : c:`）会切错——界面模块里没有这种写法。
+    static func switchBranches(over subject: String, in code: String) throws -> [SwitchBranch] {
+        guard let head = code.range(of: "switch \(subject)"),
+              let bodyRange = balancedBodyRange(after: head.upperBound, in: code) else {
+            throw Failure.switchNotFound(subject: subject)
+        }
+        let body = String(code[bodyRange])
+
+        var labels: [(start: String.Index, afterColon: String.Index, text: String)] = []
+        var depth = 0
+        var inString = false
+        var escaped = false
+        var index = body.startIndex
+        while index < body.endIndex {
+            let character = body[index]
+            if escaped {
+                escaped = false
+            } else if inString {
+                if character == "\\" { escaped = true } else if character == "\"" { inString = false }
+            } else if character == "\"" {
+                inString = true
+            } else if character == "{" {
+                depth += 1
+            } else if character == "}" {
+                depth -= 1
+            } else if depth == 0, isBranchKeyword(at: index, in: body),
+                      let colon = branchLabelColon(from: index, in: body) {
+                let after = body.index(after: colon)
+                labels.append((index, after, String(body[index..<colon])))
+                index = after
+                continue
+            }
+            index = body.index(after: index)
+        }
+
+        return labels.enumerated().map { offset, label in
+            let end = offset + 1 < labels.count ? labels[offset + 1].start : body.endIndex
+            return SwitchBranch(label: label.text.trimmingCharacters(in: .whitespacesAndNewlines),
+                                cases: caseNames(inLabel: label.text),
+                                body: String(body[label.afterColon..<end]))
+        }
+    }
+
+    /// 一颗**用户一定点得到**的按钮。
+    struct ExitButton: Equatable {
+        /// `Button(` 那对括号里的原文（报错时贴出来，好知道少的是哪一颗）。
+        let label: String
+        /// 按下去真的会发生事情吗。空闭包的按钮是铁律 5 说的静默失败：
+        /// 界面上看着有出口，点了却什么都不发生。
+        let isWired: Bool
+    }
+
+    /// 一段视图代码里**无条件画出来、没有被 `.disabled` 关掉**的按钮。
+    ///
+    /// 三个限定缺一不可，因为「这个状态下有出口吗」问的是**一定点得到**的那一颗：
+    ///
+    /// - 写在 `if let retry = runner.retry { … }` 里的按钮，条件不成立时界面上就没有它；
+    /// - `.disabled(picked == nil)` 那颗看得见、按不动；
+    /// - `Button("取消") { }` 按得动、什么都不发生。
+    ///
+    /// 边界：只看写法，不执行代码。`if true { … }` 这种照样算「有条件」。
+    static func unconditionalButtons(in viewCode: String) -> [ExitButton] {
+        let unconditional = removingConditionalBlocks(from: viewCode)
+        let marker = "Button("
+        var starts: [String.Index] = []
+        var cursor = unconditional.startIndex
+        while let hit = unconditional.range(of: marker, range: cursor..<unconditional.endIndex) {
+            starts.append(hit.lowerBound)
+            cursor = hit.upperBound
+        }
+
+        var found: [ExitButton] = []
+        for (offset, start) in starts.enumerated() {
+            let end = offset + 1 < starts.count ? starts[offset + 1] : unconditional.endIndex
+            let segment = String(unconditional[start..<end])
+            // `.disabled(` 跟在这颗按钮后面 —— 它看得见，但按不动，不算出口。
+            guard !segment.contains(".disabled(") else { continue }
+            let argument = balancedArgument(in: segment as NSString,
+                                            openParenAt: marker.count - 1) ?? ""
+            found.append(ExitButton(label: argument.trimmingCharacters(in: .whitespacesAndNewlines),
+                                    isWired: isWired(argument: argument, segment: segment)))
+        }
+        return found
+    }
+
+    /// 这颗按钮接上动作了吗：`action:` 参数非空，或者尾随闭包里真的写了东西。
+    private static func isWired(argument: String, segment: String) -> Bool {
+        if let action = argument.range(of: "action:"),
+           !argument[action.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+        guard let closure = balancedBody(after: segment.startIndex, in: segment) else { return false }
+        return !closure.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// 去掉所有条件块（`if` / `else` / `guard` / 嵌套 `switch`）连同它们的大括号。
+    ///
+    /// 留下来的就是「一定会画出来」的那部分。`Button("x") { act() }` 的尾随闭包不会被误删——
+    /// 它前面不是这几个关键字。
+    static func removingConditionalBlocks(from code: String) -> String {
+        var result = code
+        var searchFrom = result.startIndex
+        while let keyword = nextConditionalKeyword(in: result, from: searchFrom) {
+            guard let inner = balancedBodyRange(after: keyword.upperBound, in: result) else {
+                searchFrom = keyword.upperBound
+                continue
+            }
+            let blockEnd = result.index(after: inner.upperBound)   // 连收尾的 `}` 一起吃掉
+            result.removeSubrange(keyword.lowerBound..<blockEnd)
+            searchFrom = keyword.lowerBound
+        }
+        return result
+    }
+
+    /// 下一个条件关键字在哪儿。
+    ///
+    /// 不收 `for` / `while`：`practiceBody(for: setup)` 里那个 `for` 是参数标签，
+    /// 认成关键字的话会把后面一整块渲染当成条件块删掉——那样扫描就开始撒谎了。
+    /// 同理这里要求关键字后面不是冒号。
+    private static func nextConditionalKeyword(in code: String,
+                                               from start: String.Index) -> Range<String.Index>? {
+        let pattern = #"(?<![A-Za-z0-9_.])(if|else|guard|switch)\b(?!\s*:)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let text = code as NSString
+        let utf16Start = String(code[..<start]).utf16.count
+        guard utf16Start <= text.length else { return nil }
+        let searchRange = NSRange(location: utf16Start, length: text.length - utf16Start)
+        guard let match = regex.firstMatch(in: code, range: searchRange) else { return nil }
+        return Range(match.range, in: code)
+    }
+
+    /// 这个位置上是不是一条 `case` / `default` 分支标签的开头。
+    ///
+    /// `.defaultAction` 不算（前面紧挨着点号）；`if case .failed = x` 也不算
+    /// （`case` 前面那个词是 `if`）。
+    private static func isBranchKeyword(at index: String.Index, in body: String) -> Bool {
+        guard isTokenStart(at: index, in: body) else { return false }
+        let rest = body[index...]
+        if rest.hasPrefix("default") {
+            let after = body.index(index, offsetBy: "default".count)
+            return after >= body.endIndex || !isIdentifierCharacter(body[after])
+        }
+        guard rest.hasPrefix("case") else { return false }
+        let after = body.index(index, offsetBy: "case".count)
+        guard after < body.endIndex, body[after].isWhitespace else { return false }
+        return !["if", "guard", "while"].contains(precedingWord(before: index, in: body))
+    }
+
+    /// 从分支标签的开头往后找那个收尾的冒号。
+    ///
+    /// 走到大括号还没见到冒号就返回 nil——那说明这不是一条分支标签
+    /// （最典型的是 `if case .failed = runner.stage {`）。
+    private static func branchLabelColon(from start: String.Index, in body: String) -> String.Index? {
+        var depth = 0
+        var inString = false
+        var escaped = false
+        var index = start
+        while index < body.endIndex {
+            let character = body[index]
+            if escaped {
+                escaped = false
+            } else if inString {
+                if character == "\\" { escaped = true } else if character == "\"" { inString = false }
+            } else if character == "\"" {
+                inString = true
+            } else if character == "(" || character == "[" {
+                depth += 1
+            } else if character == ")" || character == "]" {
+                depth -= 1
+            } else if depth == 0 {
+                if character == ":" { return index }
+                if character == "{" || character == "}" { return nil }
+            }
+            index = body.index(after: index)
+        }
+        return nil
+    }
+
+    /// 一条标签接住哪几个 case（`default` 与 `case let …` 都返回空数组）。
+    private static func caseNames(inLabel label: String) -> [String] {
+        let trimmed = label.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("case") else { return [] }
+        return splitTopLevel(String(trimmed.dropFirst("case".count))).compactMap { piece in
+            let text = piece.trimmingCharacters(in: .whitespaces)
+            guard text.hasPrefix(".") else { return nil }
+            return leadingIdentifier(String(text.dropFirst()))
+        }
+    }
+
+    /// 按顶层逗号切开（括号、方括号、字符串里的逗号不算）。
+    private static func splitTopLevel(_ text: String) -> [String] {
+        var pieces: [String] = []
+        var current = ""
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for character in text {
+            if escaped {
+                escaped = false
+            } else if inString {
+                if character == "\\" { escaped = true } else if character == "\"" { inString = false }
+            } else if character == "\"" {
+                inString = true
+            } else if character == "(" || character == "[" {
+                depth += 1
+            } else if character == ")" || character == "]" {
+                depth -= 1
+            } else if character == ",", depth == 0 {
+                pieces.append(current)
+                current = ""
+                continue
+            }
+            current.append(character)
+        }
+        pieces.append(current)
+        return pieces
+    }
+
+    private static func leadingIdentifier(_ text: String) -> String? {
+        let identifier = text.trimmingCharacters(in: .whitespaces).prefix(while: isIdentifierCharacter)
+        return identifier.isEmpty ? nil : String(identifier)
+    }
+
+    private static func isIdentifierCharacter(_ character: Character) -> Bool {
+        character.isLetter || character.isNumber || character == "_"
+    }
+
+    /// 这个位置前面不是标识符的一部分，也不是点号（`.defaultAction` 里的 `default` 不算）。
+    private static func isTokenStart(at index: String.Index, in text: String) -> Bool {
+        guard index > text.startIndex else { return true }
+        let previous = text[text.index(before: index)]
+        return !isIdentifierCharacter(previous) && previous != "."
+    }
+
+    /// 这个位置前面（跳过空白）的那个词。
+    private static func precedingWord(before index: String.Index, in text: String) -> String {
+        var cursor = index
+        while cursor > text.startIndex, text[text.index(before: cursor)].isWhitespace {
+            cursor = text.index(before: cursor)
+        }
+        var word = ""
+        while cursor > text.startIndex, isIdentifierCharacter(text[text.index(before: cursor)]) {
+            cursor = text.index(before: cursor)
+            word.insert(text[cursor], at: word.startIndex)
+        }
+        return word
     }
 
     // MARK: - 文案里指的按钮，界面上真有吗

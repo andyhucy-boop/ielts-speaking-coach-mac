@@ -186,6 +186,73 @@ final class PracticeSheetTests: XCTestCase {
         }
     }
 
+    /// **每一个 `PracticeStage` 下，界面上都得有一颗点得到的按钮。**
+    ///
+    /// 上一条钉的是三个「需要用户动手」的状态，于是漏掉了剩下那八个**自动跑**的状态——
+    /// 它们全落在 `actions` 的 `default:` 分支里，而那颗「取消」此前一个人都没钉。
+    /// 复审实测：把 `default:` 换成 `default: EmptyView()`，**全套测试一条不红**。
+    ///
+    /// 后果是：启动语音那 9 秒（`.newChat` / `.startingVoice` / `.waitingComposer` /
+    /// `.sendingPrompt`，spec 2.3.7 实测约 9 秒）和请 ChatGPT 写复盘那一分钟左右
+    /// （`.endingVoice` / `.requestingReview` / `.capturingReview` / `.archiving`）里，
+    /// 界面上一颗按钮都没有。用户唯一的出路是强退，而那时 ChatGPT 那边的语音通话
+    /// 已经拨出去了，退掉之后既挂不断也取不回复盘（铁律 5：禁止静默失败、禁止无限等待）。
+    /// 这个文件自己的 MARK 就写着「按钮：每个状态都得有一条出口」。
+    ///
+    /// **状态清单是从 `PracticeStage` 的声明里读出来的，不是手写的**：手写清单的通病
+    /// 是新加的那一项没人写进来。往 `PracticeStage` 里加一个 stage 却没给它出口，
+    /// 也会在这里当场变红。
+    ///
+    /// 「点得到」比「有一颗 `Button`」严一档：写在 `if` 里的（条件不成立时根本不画）、
+    /// 挂了 `.disabled(…)` 的（按不动）、闭包是空的（按了什么都不发生）都不算。
+    func testEveryPracticeStageHasAWayOut() throws {
+        let stages = try SourceGuard.declaredCaseNames(
+            inEnum: "PracticeStage", of: try SourceGuard.code("Session/PracticeStage.swift"))
+
+        // 先钉住这一趟真的把状态读全了。清单一空或者只剩几个，
+        // 下面那个 for 就成了空转——「每个状态都有出口」会变成恒真。
+        for required in ["idle", "newChat", "startingVoice", "waitingComposer", "sendingPrompt",
+                         "practicing", "endingVoice", "requestingReview", "capturingReview",
+                         "needsManualCopy", "archiving", "done", "failed"] {
+            XCTAssertTrue(stages.contains(required),
+                          "没从 `PracticeStage` 里读到 `.\(required)`，这条测试对它就没在守。"
+                              + "下一步：状态改名了就同步改这条清单；真的删掉了，"
+                              + "先确认界面上再没有一条路会停在那个状态上。")
+        }
+
+        let actions = try SourceGuard.memberBody(
+            of: "private var actions", in: try SourceGuard.code(Self.sheet))
+        let branches = try SourceGuard.switchBranches(over: "runner.stage", in: actions)
+
+        // 同上：分支要是一条都没切出来、或者全糊成了一条，下面每一句都会失去依据。
+        XCTAssertGreaterThanOrEqual(
+            branches.filter { !$0.isDefault }.count, 3,
+            "按钮那一段的 `switch runner.stage` 只切出了 \(branches.count) 条分支，"
+                + "这多半是切分支的写法失效了——失效之后每个状态都会被算到同一条分支上，"
+                + "断言就恒真了。下一步：确认 `actions` 里还是一个 `switch runner.stage`。")
+
+        for stage in stages {
+            guard let branch = branches.first(where: { $0.cases.contains(stage) })
+                    ?? branches.first(where: \.isDefault) else {
+                XCTFail("`.\(stage)` 在按钮那一段的 `switch` 里既没有自己的分支，也没有 `default` 兜底，"
+                        + "这个状态下界面上一颗按钮都没有，用户只能强退。"
+                        + "下一步：给它一条分支，或者留一个带「取消」的 `default`。")
+                continue
+            }
+            let exits = SourceGuard.unconditionalButtons(in: branch.body)
+            let usable = exits.filter(\.isWired)
+            XCTAssertFalse(
+                usable.isEmpty,
+                "`.\(stage)` 落在 `\(branch.label)` 这条分支上，而这条分支里没有任何一颗"
+                    + "「一定看得见、按得动、按下去真的会发生事情」的按钮"
+                    + "（扫到的按钮：\(exits.isEmpty ? "一颗都没有" : exits.map(\.label).joined(separator: "、"))）。"
+                    + "用户会停在这个状态上，界面上没有任何出路，只能强退——"
+                    + "而这时 ChatGPT 那边的语音通话可能已经开起来了。"
+                    + "下一步：给这条分支至少留一颗无条件、不 disabled、接了动作的按钮"
+                    + "（自动跑的那几步留「取消」就够）。")
+        }
+    }
+
     /// 存档之后那句交代（错题本几条、词汇本几条、原文存哪儿、有没有字段没读进去）必须显示。
     /// 只画一个「✅ 完成」的话，`ArchiveOutcome.skipped` 那种「复盘写得完整、档案纹丝不动」
     /// 的静默失败就永远没人看得见——那是本项目已知最危险的失败形态。

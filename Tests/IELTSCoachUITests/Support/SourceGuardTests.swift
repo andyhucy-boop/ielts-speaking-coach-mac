@@ -537,6 +537,148 @@ final class SourceGuardTests: XCTestCase {
         XCTAssertFalse(SourceGuard.mentions("row", in: "narrow(1)"))
     }
 
+    // MARK: - 每个状态都得有一条出口
+
+    /// 状态清单必须从枚举**声明**里读，而且不能被同一个文件里的 `switch` 模式匹配污染。
+    /// 清单一空、或者混进了别的名字，「每个状态都有出口」那条断言就失去依据。
+    func testDeclaredCaseNamesReadsDeclarationsAndNotSwitchPatterns() throws {
+        let code = """
+            public enum Fake: Equatable {
+                case idle
+                case needsManualCopy(String)
+                case done, failed
+                var order: Int {
+                    switch self {
+                    case .idle: return 0
+                    case .needsManualCopy: return 1
+                    case .done, .failed: return 2
+                    }
+                }
+            }
+            """
+        XCTAssertEqual(try SourceGuard.declaredCaseNames(inEnum: "Fake", of: code),
+                       ["idle", "needsManualCopy", "done", "failed"])
+    }
+
+    /// 真的读得到 `PracticeStage`。人造字符串跑通、真源码读不到，等于没在守。
+    ///
+    /// **不钉死条数**：往 `PracticeStage` 里正经加一个状态不该让这条变红
+    /// （那件事归 `PracticeSheetTests.testEveryPracticeStageHasAWayOut` 管）。
+    /// 这里改成钉「没有重复」——真源码里 `.idle` 在几个 `switch` 里各出现一次，
+    /// 扫描要是把模式匹配也算成声明，重复会立刻暴露。
+    func testDeclaredCaseNamesReadsTheRealPracticeStage() throws {
+        let stages = try SourceGuard.declaredCaseNames(
+            inEnum: "PracticeStage", of: try SourceGuard.code("Session/PracticeStage.swift"))
+        XCTAssertGreaterThanOrEqual(stages.count, 13, "读出来的状态是：\(stages)")
+        XCTAssertEqual(stages.count, Set(stages).count,
+                       "同一个状态被读出了不止一次，说明 `switch` 里的模式匹配也被当成了声明：\(stages)")
+        XCTAssertTrue(stages.contains("startingVoice"), "\(stages)")
+        XCTAssertTrue(stages.contains("failed"), "\(stages)")
+    }
+
+    /// 枚举改了名字却没同步改这里，必须抛错。返回空数组的话断言会恒真。
+    func testDeclaredCaseNamesThrowsInsteadOfComingBackEmpty() {
+        XCTAssertThrowsError(
+            try SourceGuard.declaredCaseNames(inEnum: "Fake", of: "enum Fake { var x: Int { 1 } }")) {
+            XCTAssertTrue("\($0)".contains("空转"), "\($0)")
+        }
+        XCTAssertThrowsError(try SourceGuard.declaredCaseNames(inEnum: "Gone", of: "enum Fake {}"))
+    }
+
+    /// 分支要切在各自的标签上。切错（全糊成一条）的话，
+    /// 「这个状态下有按钮吗」会被别的状态的按钮糊弄过去。
+    func testSwitchBranchesCutEachBranchAtItsOwnLabel() throws {
+        let code = """
+            switch runner.stage {
+            case .practicing:
+                Button("我练完了") { finish() }
+            case .capturingReview, .needsManualCopy(let message):
+                Button("我已经复制好了") { paste(message) }
+            default:
+                Button("取消") { abandon() }
+            }
+            """
+        let branches = try SourceGuard.switchBranches(over: "runner.stage", in: code)
+        XCTAssertEqual(branches.map(\.cases),
+                       [["practicing"], ["capturingReview", "needsManualCopy"], []])
+        XCTAssertTrue(branches[0].body.contains("我练完了"), "\(branches[0].body)")
+        XCTAssertFalse(branches[0].body.contains("我已经复制好了"),
+                       "切到下一条分支上去了：\(branches[0].body)")
+        XCTAssertTrue(branches[2].isDefault && branches[2].body.contains("取消"),
+                      "\(branches[2])")
+    }
+
+    /// 三个会把切分支带偏的写法：`.defaultAction`（不是 `default:` 标签）、
+    /// `if case … = x {`（不是分支标签）、嵌套 `switch` 里的 case（是里面那层的）。
+    func testSwitchBranchesIgnoreLookalikes() throws {
+        let code = """
+            switch stage {
+            case .a:
+                if case .failed = other { Text("x") }
+                switch inner {
+                case .deep: Text("深")
+                }
+                Button("甲") { go() }
+                    .keyboardShortcut(.defaultAction)
+            case .b:
+                Button("乙") { go() }
+            }
+            """
+        let branches = try SourceGuard.switchBranches(over: "stage", in: code)
+        XCTAssertEqual(branches.map(\.cases), [["a"], ["b"]],
+                       "被 `.defaultAction` / `if case` / 嵌套 switch 带偏了：\(branches.map(\.label))")
+        XCTAssertTrue(branches[0].body.contains("甲"), "\(branches[0].body)")
+    }
+
+    /// switch 没了要抛错，不能返回空数组——空数组会让「逐个状态问出口」一条都问不到。
+    func testSwitchBranchesThrowInsteadOfComingBackEmpty() {
+        XCTAssertThrowsError(
+            try SourceGuard.switchBranches(over: "runner.stage", in: "Text(\"没有 switch\")")) {
+            XCTAssertTrue("\($0)".contains("空转"), "\($0)")
+        }
+    }
+
+    /// 「有一颗 Button」和「用户一定点得到」是两件事。
+    /// 藏在 `if` 里的、挂了 `.disabled` 的都不算出口——认它们的话，
+    /// 一个只剩灰按钮的状态照样能骗过守卫。
+    func testUnconditionalButtonsSkipTheConditionalAndTheDisabledOnes() {
+        let code = """
+            Button("关掉") { onClose() }
+                .buttonStyle(.bordered)
+            if let retry = runner.retry {
+                Button("重试") { redo(retry) }
+            }
+            Button("开始练习") { startPicked() }
+                .disabled(picked == nil)
+            """
+        let labels = SourceGuard.unconditionalButtons(in: code).map(\.label)
+        XCTAssertEqual(labels, [#""关掉""#], "认错了出口：\(labels)")
+    }
+
+    /// 空闭包的按钮是铁律 5 说的静默失败：看着有出口，按下去什么都不发生。
+    func testUnconditionalButtonsFlagTheOnesWiredToNothing() {
+        let wired = SourceGuard.unconditionalButtons(in: #"Button("取消") { abandon() }"#)
+        XCTAssertEqual(wired.map(\.isWired), [true], "\(wired)")
+
+        let dead = SourceGuard.unconditionalButtons(in: #"Button("取消") { }"#)
+        XCTAssertEqual(dead.map(\.isWired), [false], "空闭包的按钮被当成了出口：\(dead)")
+
+        // `action:` 那种写法也得认，否则 `Button("完成", action: onClose)` 会被误判成死按钮。
+        let byArgument = SourceGuard.unconditionalButtons(in: #"Button("完成", action: onClose)"#)
+        XCTAssertEqual(byArgument.map(\.isWired), [true], "\(byArgument)")
+    }
+
+    /// 去条件块不许误伤参数标签。`practiceBody(for: setup)` 里那个 `for` 认成关键字的话，
+    /// 后面一整块渲染会被当成条件块删掉——扫描从那一刻起就开始撒谎了。
+    func testRemovingConditionalBlocksLeavesArgumentLabelsAlone() {
+        let code = """
+            practiceBody(for: setup)
+            Button("取消") { abandon() }
+            """
+        XCTAssertTrue(SourceGuard.removingConditionalBlocks(from: code).contains("取消"),
+                      "把无条件那段也删掉了：\(SourceGuard.removingConditionalBlocks(from: code))")
+    }
+
     // MARK: - 文案里指的按钮真的存在吗
 
     /// 按钮清单必须是从真源码里读出来的。读不到（写法失效）就抛错——
