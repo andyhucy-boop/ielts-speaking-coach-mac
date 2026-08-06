@@ -5,11 +5,17 @@
 
 修完一条就从这里删掉。**但只有自己做过突变、亲眼看到红，才允许删。**
 
-**最后一次整体复核：2026-08-06。基线 `swift test` = 522 条 / 0 失败 / 5.2–5.6 秒。**
-（复核当时工作区有 6 个文件的改动，见「零、本轮复核」；除此之外与 `phase2-bridge` HEAD 一致。）
+**最后一次整体复核：2026-08-06（第二轮，见第九节）。基线 `swift test` = 706 条 / 0 失败 / 6.0–6.2 秒。**
 
-> 上一版这里写的是 484 条。484 是更早一次复核的数字，中间几批补测试之后
-> 实测就是 521 条；本轮我自己又加了 1 条，共 522。别再拿 484 当基线。
+第二轮复核时工作区是干净的，与 `phase2-bridge` HEAD（`8ba702c`）一致。
+
+> 下面第零到第八节写于**同一天的第一轮**复核，那时的基线是 522 条 / 5.2–5.6 秒
+> （那一轮的工作区有 6 个文件的改动，见「零、本轮复核」）。
+> 各节里的「522 条 0 失败」按当时的数字原样保留——那是它们实测时看到的，
+> 但**别再拿 522 当今天的基线**。
+>
+> 再往前一版这里写的是 484 条。484 是更早一次复核的数字，中间几批补测试之后
+> 实测就是 521 条；第一轮又加了 1 条，共 522。别再拿 484 当基线。
 
 ---
 
@@ -266,5 +272,112 @@ bash 3.2 会把全角字符的第一个字节吞进变量名，变成 `name\xef`
 ## 八、报数口径
 
 - 本轮基线：**522 条 / 0 失败 / 5.2–5.6 秒**（`LC_CTYPE` 空和 `LC_CTYPE=UTF-8` 两种都跑过）。
+  > **已被第九节取代：2026-08-06 第二轮实测是 706 条 / 0 失败 / 6.0–6.2 秒。**
+  > 本节的 522 与本文开头的 522 都是那一轮的数字，别再拿它当基线。
 - 报数时请注明**工作区状态**与 **locale**。没有 locale 这一项的话，
   「全绿」这个说法本身是不完整的——见第六节。
+
+---
+
+## 九、Phase 4 两条真 bug 的独立复核（2026-08-06 第二轮）
+
+复核方式：**不看修复方自己写的测试是否变绿**——那证明不了任何事。
+而是（1）自己另写一份一次性探针复现两个 bug 的原始场景，
+（2）把修好的产品代码逐条改坏，看探针和既有测试会不会红，
+（3）跑完还原并确认 `git status` 干净。探针文件跑完即删，没有提交。
+
+**基线：`swift test` = 706 条 / 0 失败 / 6.05 秒**（工作区干净，`phase2-bridge` HEAD = `8ba702c`）。
+带上探针时是 710 条——下面每一条「全绿」都核对过 `Executed` 那一行的真实条数，
+不是靠没看到红就当它跑过了。
+
+### 结论：两条都是真 bug，两条都真的修好了
+
+**1. 拼接顺序**（`Sources/IELTSCoachCore/Transcript/TranscriptAssembler.swift:144`）
+
+探针：`ingest([Q1?, A1.])` 之后 `ingest([Q2?])`。
+修复前的实现下顺序是 `["Q2?", "Q1?", "A1."]`——新问的那句跑到了整份逐字稿最前面。
+连着三次每次只读到最新一条时更狠：`["three", "two", "one"]`，整份逐字稿被倒过来。
+现在两条探针都是正序。
+
+| 突变（对 `insertionIndex`） | 既有测试变红 | 我的探针变红 |
+| --- | --- | --- |
+| T1 退回修复前的 `return min(cursor, slots.count)` | 2 条 | 2 条 |
+| T2 空实现 `return 0` | 10 条 | 2 条 |
+| T3 只做一半：游标停在 0 就一律追加末尾，不往这一次采样后面看 | 1 条（`testScrollingBackRevealsAnEarlierMessageThatGoesBeforeWhatWeAlreadyHave`） | 1 条 |
+| T4 一律追加末尾，连游标都不看 | 3 条 | 1 条 |
+
+T1 只咬住 2 条、且正是复现这个 bug 的那 2 条——说明那两条测试盯的是 bug 本身，不是别的。
+T3 与 T4 各自只咬住新逻辑的一支，两支都还活着，没有在修 bug 的过程中被顺手废掉。
+
+**2. 复盘归档累加**（`Sources/IELTSCoachCore/Review/ReviewArchiver.swift:88`
+与 `Sources/IELTSCoachCore/Model/Records.swift:72`）
+
+探针：同一份复盘用同一个 `sessionID` 归档两次，断言整个 state 相等；
+再换一个 `sessionID` 归档，断言这一次要计数。修复前 `occurrences` 2≠1、`lastSeenAt` 被补录时刻覆盖。
+
+**可达性我自己查过，不是纸上谈兵：** `PendingReviewStore.markImported`（同文件 141 行）
+只在归档**做完之后**才改名，改名撞名时抛错，文件就留在待处理列表里；
+而 `Sources/coach/ReimportCommand.swift:114` 从文件名取 `sessionID`、
+`Sources/IELTSCoachUI/Review/PendingReviewViewModel.swift:183` 用 `linkedSessionID`，
+两条路都会拿**同一个** `sessionID` 再归档一次。这条路真的走得到。
+
+| 突变 | 既有测试变红 | 我的探针变红 |
+| --- | --- | --- |
+| A1 退回 bug 现场（无条件 `+= 1` / 无条件覆盖 `lastSeenAt`） | 4 条 | 1 条 |
+| A2 矫枉过正：命中已有记录就什么都不做 | 2 条 | 1 条 |
+| A3 只守 `occurrences`，`lastSeenAt` 仍无条件覆盖 | 2 条 | 1 条 |
+| M1 读盘迁移写成空实现（照抄盘上数字） | 1 条 | 1 条 |
+| M2 读盘迁移过头（无条件 `= sourceSessionIds.count`，空数组也归零） | 1 条 | 1 条 |
+
+A3 是修复方没跑过的一个突变，我补上的：`lastSeenAt` 那一行不是搭便车进守卫的，
+它自己也被独立钉住了。
+
+**顺带复验了「那条假测试」的说法，属实。** A1 突变下
+`PendingReviewViewModelTests.testFollowingTheRetryInstructionDoesNotInflateOccurrences`
+只有第 387 行（直接 `JSONSerialization` 读 `state.json` 原始数字）那句红，
+第 380 行走 `store.load()` 的那句**照样绿**——因为 `IssueRecord.init(from:)` 的读时修复
+在 load 那一步就把虚高的数字盖住了。两道防线必须各自被独立钉住，这句话是实测出来的。
+
+### 交给最后 code-review 的守卫缺口：五条属实，两条不属实
+
+下面每一条都真改了代码、跑了全量、看了 `Executed` 条数、跑完还原。
+
+**属实（改坏之后 706 条全绿，无人看守）：**
+
+1. **收尾重试复用会话编号**
+   `Sources/IELTSCoachUI/Session/PracticeRunner.swift:205`
+   `currentSessionID ?? SessionID.next(…)` → 无条件 `SessionID.next(…)` → **710 条 0 失败**。
+   后果：收尾失败后重试，同一场练习会在「训练记录」里留下两条。
+2. **逐字稿渲染的数据源**
+   `Sources/IELTSCoachUI/History/HistoryView.swift:223`（复审写的 211 是 `transcriptPane` 的函数头，
+   真正的 `ForEach` 在 223）
+   `ForEach(Array(row.session.transcript.enumerated()), …)` → 换成空数组 → **710 条 0 失败**。
+   后果：逐字稿一条都不画，而「这一场没有逐字稿」那段解释走的是 `isEmpty` 那一支，也不会出现——
+   用户看到的是一片空白，没有任何解释。**这正是第二节那类「数据源被换空」，修法同第二节。**
+3. **删除失败的中文说明被丢掉**
+   `Sources/IELTSCoachUI/History/HistoryView.swift:295`
+   `deletionFailure = app.deleteSession(row.session)` → `_ = app.deleteSession(…)` → **710 条 0 失败**。
+   后果：`AppState.deleteSession` 老老实实返回了「哪几个文件没删掉、在哪儿」，
+   界面把它扔了。孤儿文件永远躺在磁盘上，用户一无所知（铁律 5、7）。
+   注意这条**不是** `AppState` 那一层的问题（见下面「不属实」第 1 条），
+   是 `AppState` 与 `HistoryView` 之间那一步没人看。
+4. **命令行的会话编号生成**
+   `Sources/coach/PracticeCommand.swift:118-120`
+   整段 `SessionID.next(…)` 换成写死的 `"2026-01-01-001"` → **710 条 0 失败**。
+5. **命令行把练完的这一场记进 state**
+   `Sources/coach/PracticeCommand.swift:183-192`
+   构造 `PracticeSession` 并 upsert 进 `state.sessions` 那一整块删掉 → **710 条 0 失败**。
+   后果：命令行练完一场，复盘落了盘，「训练记录」里却什么都没有。
+
+**不属实（复审报的这两条是错的，别照着去改）：**
+
+1. **`AppState.deleteSession` 不是无人看守。**
+   把 `Sources/IELTSCoachUI/AppState.swift:180-184` 整个掏空成 `return nil`
+   → **红 2 条**：`AppStateTests.testDeletingASessionTakesItOffThePageAndOffTheDisk`、
+   `AppStateTests.testAReportThatCannotBeDeletedIsSaidOutLoudInsteadOfSwallowed`。
+   这一层是有守卫的，缺的是它下游那一步（属实清单第 3 条）。
+2. **`Sources/IELTSCoachUI/History/SessionDeleter.swift` 不是死代码。**
+   复审说「grep 全 Sources 零命中」，实测有命中：`AppState.swift:180`
+   就是 `SessionDeleter(directory:store:).delete(session)`，
+   而 `AppState.deleteSession` 正是删除按钮唯一的生产路径。
+   **千万别按复审说的把它删掉**——删了删除功能就没了，而且上面那 2 条测试会当场红给你看。
