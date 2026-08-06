@@ -24,6 +24,15 @@ struct CoachApp: App {
     var body: some Scene {
         Window("IELTS Speaking Coach", id: "coach-main") { RootView() }
             .defaultSize(width: 1100, height: 720)
+
+        // macOS 的设置窗口（⌘,）。录音开关放这里，不塞进侧边栏——
+        // 侧边栏那十项是产品设计稿定死的（ROADMAP 第 1 节），加第十一项会破坏它，
+        // 而 ⌘, 打开设置本来就是 Mac 的惯例。
+        //
+        // 这一页不共享 `AppState`：它自己开一份 `StateStore` 读写 state.json 的 settings，
+        // 主窗口那边在开练前会重读一次磁盘（`AppState.makePracticeRunner()`），
+        // 所以刚拨的开关下一场就算数。**不要因为这里多了一个场景就去掉那次 reload。**
+        Settings { RecordingSettingsScene() }
     }
 }
 
