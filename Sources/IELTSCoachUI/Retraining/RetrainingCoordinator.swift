@@ -61,7 +61,18 @@ public final class RetrainingCoordinator {
         linkedSessionID = nil
 
         do {
-            try mutate { _ = RetrainingLedger.setStatus(.selected, of: target.id, in: &$0) }
+            // `setStatus` 返回 false 表示盘上根本没有这个目标——**这个 Bool 不能丢**。
+            // 界面手里这份 targets 与盘上那份可以不一致：`store.mutate` 在锁内重新从磁盘
+            // 读 state，而 `coach practice` CLI 写的是同一个文件，目标的来源 session
+            // 也允许被单条删除。丢掉它，用户就会看到练习照常开始、台账里却什么都没发生。
+            var marked = false
+            try mutate { marked = RetrainingLedger.setStatus(.selected, of: target.id, in: &$0) }
+            if !marked {
+                report("没能把这个目标标记成「正在复训」：训练数据里已经找不到它了，"
+                           + "多半是它来源的那一场练习已被删除，或另一个进程改过训练数据。",
+                       fallbackNextStep: "下一步：这一场可以照常练；练完回到复训中心刷新一遍，"
+                           + "若这个目标已经不在列表里，就从最近一次复盘里重新挑一个目标继续。")
+            }
         } catch {
             // 标记失败不阻断练习——练习本身比台账重要，但必须说出来。
             report("没能把这个目标标记成「正在复训」：\(error.localizedDescription)",

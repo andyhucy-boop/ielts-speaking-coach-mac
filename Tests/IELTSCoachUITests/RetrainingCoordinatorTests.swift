@@ -155,6 +155,27 @@ final class RetrainingCoordinatorTests: XCTestCase {
                        "别人的挂钩不许被覆盖")
     }
 
+    /// 界面上那份 targets 与盘上那份可以不一致：`store.mutate` 在锁内**重新从磁盘读 state**，
+    /// 而 `coach practice` CLI 写的是同一个文件，源 session 也允许被单条删除。
+    /// 这时 `setStatus` 返回 false——把这个 Bool 丢掉，用户会看到练习照常开始、
+    /// 台账里却什么都没发生，且没有任何线索（铁律 7）。
+    func testStartReportsWhenTheTargetIsGoneFromTheState() async {
+        // 界面上还捏着这个目标，盘上已经没有了。
+        let state = CoachState.empty()
+        let launcher = FakeLauncher()
+        let (coordinator, box) = make(state: state, launcher: launcher)
+
+        await coordinator.start(target: target(), question: question("q1"),
+                                originalQuestionID: "q1")
+
+        XCTAssertEqual(launcher.startedSetups.count, 1, "标记不上也照样开练")
+        let failure = coordinator.failure ?? ""
+        XCTAssertTrue(failure.contains("正在复训"),
+                      "标记没生效必须说出来，否则台账是空的而界面一切正常：\(failure)")
+        XCTAssertTrue(failure.contains("下一步"), "失败信息必须说清下一步做什么：\(failure)")
+        XCTAssertTrue(box.state.targets.isEmpty, "凭空造一个目标出来更糟")
+    }
+
     func testStartFailureDoesNotPretendTheRetrainingHappened() async {
         var state = CoachState.empty()
         state.targets = [target()]
@@ -206,6 +227,27 @@ final class RetrainingCoordinatorTests: XCTestCase {
         let failure = coordinator.failure ?? ""
         XCTAssertTrue(failure.contains("磁盘满了"), "系统说的原因要转述出来，否则没法排查")
         XCTAssertTrue(failure.contains("下一步"), "失败信息必须说清下一步做什么")
+    }
+
+    /// 一次收尾里可以有两件事都没走通：收尾抛错 + 台账写盘失败。
+    /// 两句必须都留着——只留最后一句会把「复盘若还在 ChatGPT 窗口里，先自己复制一份留着」
+    /// 直接吞掉，而那是这条路上唯一能把复盘救回来的动作。
+    func testTwoFailuresInOneWrapUpAreBothKeptNotOverwritten() async {
+        let launcher = FakeLauncher()
+        launcher.finishedSessionID = "s9"
+        launcher.finishError = BareBoom()
+        let coordinator = makeUnwritable(launcher: launcher)
+
+        await coordinator.finish(target: target(), originalQuestionID: "q1")
+
+        let failure = coordinator.failure ?? ""
+        XCTAssertTrue(failure.contains("先自己复制一份留着"),
+                      "先发生的那句被后一句盖掉了，用户就再也不知道复盘还能救回来：\(failure)")
+        XCTAssertTrue(failure.contains("写复训进度时出错"),
+                      "后发生的写盘失败同样得说出来：\(failure)")
+        XCTAssertEqual(failure.split(separator: "\n").count, 2,
+                       "两件事就该是两句，按发生顺序换行拼在一起：\(failure)")
+        XCTAssertNil(coordinator.linkedSessionID)
     }
 
     /// 标记目标失败**不阻断练习**——练习本身比台账重要——但必须说出来。
