@@ -22,10 +22,23 @@ public struct SystemMicrophoneAuthorizer: MicrophoneAuthorizing {
     }
 
     public func requestAccess() async -> MicrophonePermissionState {
-        let current = currentStatus()
-        guard current == .notDetermined else { return current }
-        let granted = await AVCaptureDevice.requestAccess(for: .audio)
-        return granted ? .granted : .denied
+        await Self.resolveAccessRequest(current: currentStatus()) {
+            await AVCaptureDevice.requestAccess(for: .audio)
+        }
+    }
+
+    /// 「要不要弹窗」的判断跟「真的去弹窗」拆开，是为了让前者能被测到：
+    /// 直接测 `requestAccess()` 要么依赖跑测试这台机器授过什么权（今天绿明天红），
+    /// 要么真的弹出系统对话框把测试挂死。
+    ///
+    /// 判断本身**不在这里重写一遍**，一律问 `MicrophonePermissionState.canPrompt`——
+    /// 规则只留一份，改错了才会有测试变红。
+    static func resolveAccessRequest(
+        current: MicrophonePermissionState,
+        prompt: () async -> Bool
+    ) async -> MicrophonePermissionState {
+        guard current.canPrompt else { return current }
+        return await prompt() ? .granted : .denied
     }
 
     /// 映射单独拆成静态函数是为了能测：AVAuthorizationStatus 的四个值可以直接写出来，
