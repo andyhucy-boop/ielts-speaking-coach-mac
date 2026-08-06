@@ -5,11 +5,13 @@ import SwiftUI
 
 public struct RootView: View {
     @State private var app: AppState
-    @State private var selection: SidebarItem? = .today
     /// 从「训练记录」点「看这次的复盘」带过来的那一场。
     ///
-    /// 放在这里而不是让两页自己商量：导航状态一直归 `RootView` 管，
-    /// 而「跳过去之后选中哪一场」正是导航的一部分。不带这个的话，
+    /// **选中哪一页归 `app.navigation` 管，这一个仍留在这里**：它是「复盘报告」这一页
+    /// 内部的一次性参数，不是全局导航状态；而选中页之所以搬进 `AppState`，
+    /// 是因为今日训练页要跳到复训中心，回调传不到那儿（见 `NavigationState` 的说明）。
+    ///
+    /// 不带这个的话，
     /// 用户点某一场的复盘，跳过去看到的是最近那一场——内容看着完全正常，
     /// 但是别人家的，比一片空白更难被发现。
     ///
@@ -80,10 +82,13 @@ public struct RootView: View {
         }
     }
 
-    /// 侧边栏的选中项。**不能直接把 `$selection` 交出去**：写进来的那一头还要顺手
+    /// 侧边栏的选中项。**不能直接把导航状态交出去**：写进来的那一头还要顺手
     /// 把「从训练记录带过来的那一场」作废掉（见 `go(to:)`）。
+    ///
+    /// 对外仍是 `SidebarItem?`，因为 `List(selection:)` 只收可选值——用户按 ⌘ 点掉选中时
+    /// 它会写回 nil。而 `NavigationState.selection` 是非可选的，理由见 `go(to:)`。
     private var sidebarSelection: Binding<SidebarItem?> {
-        Binding(get: { selection }, set: { go(to: $0) })
+        Binding(get: { app.navigation.selection }, set: { go(to: $0) })
     }
 
     /// 换一页。**凡是用户自己发起的切页都要走这里**——侧边栏，以及各页面里那些
@@ -92,15 +97,17 @@ public struct RootView: View {
     /// 唯一的例外是「训练记录 › 看这次的复盘」那条跳转：它要带着那一场过去，
     /// 所以自己写 `requestedReviewSessionID` 与 `selection`，见 `detail` 里的 `onOpenReview`。
     private func go(to item: SidebarItem?) {
-        // 先算再改：这个判断要拿「还没换页时的 selection」作依据。
+        // 先算再改：这个判断要拿「还没换页时的选中项」作依据。
         requestedReviewSessionID = RootRouter.carriedReviewSession(
-            requestedReviewSessionID, navigatingFrom: selection, to: item)
-        selection = item
+            requestedReviewSessionID, navigatingFrom: app.navigation.selection, to: item)
+        // 用户按 ⌘ 点掉选中时列表会写回 nil。**那一下不换页**：
+        // 导航状态不收 nil，否则每个读它的地方都得再判一次「没选中时算哪一页」，
+        // 而那正是从前 `selection ?? .today` 在做的事——把它收在这一处。
+        if let item { app.navigation.selection = item }
     }
 
-    /// 侧边栏没选中任何一项时（比如用户按了 ⌘ 点掉选中）落回今日训练，
-    /// 而不是给一块空白。
-    private var current: SidebarItem { selection ?? .today }
+    /// 当前这一页。选中项归 `app.navigation` 管，这一页只是读它。
+    private var current: SidebarItem { app.navigation.selection }
 
     @ViewBuilder private var detail: some View {
         if let loadError = app.loadError {
@@ -128,8 +135,9 @@ public struct RootView: View {
                                        onOpenReview: { session in
                                            // 这一条不走 `go(to:)`：它就是要带着这一场过去。
                                            requestedReviewSessionID = session.id
-                                           selection = .reviewReports
+                                           app.navigation.selection = .reviewReports
                                        })
+            case .retraining: RetrainingCenterView(app: app, onGo: { go(to: $0) })
             default: PlaceholderView(item: current, onGo: { go(to: $0) })
             }
         }

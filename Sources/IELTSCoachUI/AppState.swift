@@ -29,6 +29,14 @@ public final class AppState {
     public private(set) var loadError: String?
     public var permissionSkipped = false
 
+    /// 侧边栏选中项与跨页跳转意图。
+    ///
+    /// **放在这里而不是 `RootView` 的 `@State` 里**：跨页跳转的发起方不止侧边栏——
+    /// 今日训练页上「复训一个旧问题」那张卡片要跳到复训中心，而回调传不到那儿。
+    /// 两份选中状态一定会走岔：导航状态变了、屏幕照另一份渲染，
+    /// 用户点下去一个像素都不动，会以为按钮坏了。
+    public let navigation = NavigationState()
+
     private let directory: DataDirectory
     private let store: StateStore
     private let preflight: @Sendable () -> BridgeReadiness
@@ -257,6 +265,73 @@ public final class AppState {
                               transcript: settings.transcriptEnabled ? makeTranscriptSampler() : nil,
                               recording: makeRecording(RecordingStore(directory: directory),
                                                        settings))
+    }
+
+    /// 造一台复训编排器：把 `launcher` 那一场挂到**本 AppState 这个数据目录**的复训台账上。
+    ///
+    /// 放在这里而不是让视图自己 new 一个，理由和 `makePracticeRunner` 一样：`store` 是私有的，
+    /// 而它私有是有道理的——App 与命令行必须写同一个目录。台账要是写进另一个 state.json，
+    /// 用户练完回到复训中心会看到进度纹丝不动，而且不会有任何报错。
+    ///
+    /// 每开一场复训造一台新的：它带着「这一场挂上了没有」（`linkedSessionID`）与
+    /// 「哪一步没走通」（`failure`）的状态，复用同一台会让上一场的提示留在这一场的屏幕上。
+    ///
+    /// **`mutate` 走 `store.mutate` 而不是改内存里那份 `state`**：`store.mutate` 在锁内
+    /// 重新从磁盘读一遍再写回去，而 `coach practice` 写的是同一个文件。只改内存的话，
+    /// 命令行那边同期写进去的东西会被整份盖掉。
+    public func makeRetrainingCoordinator(
+        launcher: any PracticeSessionLauncher) -> RetrainingCoordinator {
+        RetrainingCoordinator(launcher: launcher,
+                              mutate: { [store] body in try store.mutate { body(&$0) } })
+    }
+
+    /// 改一个复训目标的状态（选中 / 退休 / 重新放回待复训）。
+    ///
+    /// - Returns: nil 表示改成了；非 nil 是**必须显示给用户看**的中文说明。
+    ///   静默返回成功，用户会看到列表纹丝不动却没有任何解释（铁律 7）。
+    @discardableResult
+    public func setRetrainingStatus(_ status: RetrainingStatus, of targetID: String) -> String? {
+        do {
+            var changed = false
+            try store.mutate { changed = RetrainingLedger.setStatus(status, of: targetID, in: &$0) }
+            // 改完必须重读：不重读的话这一页显示的还是改之前那份，
+            // 用户会再点一次，而这一次改的是一个已经改过的目标。
+            reload()
+            guard changed else {
+                return "训练数据里已经找不到这个复训目标（\(targetID)），所以它的状态没有改动。"
+                    + "下一步：多半是它来源的那一场练习记录已被删除，或另一个进程改过训练数据；"
+                    + "回到「今日训练」再进来一次，看它还在不在列表里。"
+            }
+            return nil
+        } catch {
+            return "没能保存这个复训目标的状态：\(error.localizedDescription) "
+                + "下一步：确认数据目录可写（默认在「资源库 › Application Support › "
+                + "IELTS Speaking Coach」），然后重试；在此之前它仍按原来的状态显示。"
+        }
+    }
+
+    /// 读出某次练习的**复盘原文**（不拆分区），给复训第一步装配证据用。
+    ///
+    /// 与 `loadReview(for:)` 的区别只在返回什么：那一个交给复盘报告页，已经拆好了分区；
+    /// 这一个交给 `RetrainingEvidenceBuilder` 与 `RetrainingOutcome.judge`，它们要的是原始 JSON。
+    ///
+    /// **读不到就返回 nil，不要编一份空的顶上。** 这不是静默失败：拿到 nil 的
+    /// `RetrainingEvidenceBuilder` 会给出一句中文说明（「复盘报告读不到，屏幕上只剩……
+    /// 下一步：到「复盘报告」页确认那份报告还在不在」），那才是用户需要的东西；
+    /// 而 `RetrainingOutcome.judge` 拿到 nil 会判成 `.noReport`（「不知道」），
+    /// **不会**把读不到当成好消息。
+    ///
+    /// 解析走 `ReviewParser` 而不是裸 `JSONValue.decode`：ChatGPT 的复盘常带 ``` 围栏与前后废话，
+    /// 归档时用的就是 `ReviewParser`。两边用不同的解析器，会出现「复盘报告页显示得好好的，
+    /// 复训第一步却说读不到」。
+    public func loadReviewJSON(for session: PracticeSession) -> JSONValue? {
+        guard !session.reportPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        let url = ReviewReportLoader.reportURL(for: session, in: directory)
+        guard let raw = try? String(contentsOf: url, encoding: .utf8),
+              let value = try? ReviewParser.parse(raw) else { return nil }
+        return value
     }
 
     /// 造一份「重新导入待处理的复盘」的视图模型：**与本 AppState 同一个数据目录**。

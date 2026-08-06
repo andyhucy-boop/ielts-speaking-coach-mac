@@ -66,6 +66,27 @@ struct TodayView: View {
         }
     }
 
+    /// 点这条路线上那颗按钮之后干什么。
+    ///
+    /// **「复训一个旧问题」不在这一页开练**：复训要先挑目标、回看证据、撤掉提示，
+    /// 之后才开口（Phase 6 的三步流程）。在这里直接弹练习 sheet 的话，那一场既不带单点目标、
+    /// 也不会挂进复训台账——用户以为自己在复训，其实只是又练了一道题，而且看不出任何异样。
+    private func act(_ route: PracticeRoute) {
+        guard route != .retrain else {
+            // 不预先选目标：复训中心按 `RetrainingPolicy.rank` 排的第一条就是最该练的那个，
+            // 这一页再挑一次只会给出第二套说法。
+            app.navigation.openRetrainingCenter(preselecting: nil)
+            return
+        }
+        startPractice(route)
+    }
+
+    /// 这条路线的按钮上写什么。**「复训一个旧问题」不能也叫「开始练习」**：
+    /// 点下去是换一页，不是开练，写「开始练习」就是骗人。
+    private func actionTitle(_ route: PracticeRoute) -> String {
+        route == .retrain ? "去复训中心" : "开始练习"
+    }
+
     /// 开一场新的练习。**每一场都新造一台驱动器**：它带着「这一场是哪道题」的状态，
     /// 复用同一台会让上一场的残留影响下一场。
     private func startPractice(_ route: PracticeRoute) {
@@ -186,8 +207,8 @@ struct TodayView: View {
     private func primaryCard(_ route: PracticeRoute) -> some View {
         PrimaryActionCard(title: route.title,
                           subtitle: route.subtitle,
-                          actionTitle: "开始练习",
-                          action: { startPractice(route) }) {
+                          actionTitle: actionTitle(route),
+                          action: { act(route) }) {
             routeDetail(route)
         }
     }
@@ -205,7 +226,7 @@ struct TodayView: View {
                     routeDetail(route)
                 }
                 Spacer(minLength: Spacing.sm)
-                Button("开始练习") { startPractice(route) }
+                Button(actionTitle(route)) { act(route) }
                     .buttonStyle(.bordered)
             }
         }

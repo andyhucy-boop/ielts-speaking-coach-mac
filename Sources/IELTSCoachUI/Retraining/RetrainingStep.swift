@@ -33,19 +33,16 @@ public enum RetrainingStep: String, CaseIterable, Identifiable, Equatable, Senda
 
     /// 每一句都要同时说清「发生了什么」和「下一步做什么」（铁律 6）。
     ///
-    /// **第一步这句为什么不写「点『重答这道题』」：** 计划 Task 5 原文是那么写的，
-    /// 但那颗按钮要到 Task 10 的 `RetrainingFlowView` 才存在，而
-    /// `RenderReachabilitySweepTests.testEveryButtonNamedInUICopyActuallyExists`
+    /// **第一步这句原来不敢写「点『重答这道题』」**：那颗按钮当时还不存在（要等 Task 10 的
+    /// `RetrainingFlowView`），而 `RenderReachabilitySweepTests.testEveryButtonNamedInUICopyActuallyExists`
     /// 会当场拦下——指着一颗界面上没有的按钮，比不写「下一步」还糟，用户会一直找它。
-    /// 所以这里改成指第二步本身（进度条上看得见的东西）。
-    /// **Task 10 把那颗按钮做出来之后，请把这句改回「下一步：点「重答这道题」…」**，
-    /// 那时守卫会放行，文案也更具体。第二、三步指的两颗按钮（开始练习 / 我练完了）
-    /// 是 Phase 3 就有的，照原样保留。
+    /// Task 10 把 `Button("重答这道题")` 做出来了，所以这句改回了更具体的说法。
+    /// 第二、三步指的两颗按钮（开始练习 / 我练完了）是 Phase 3 就有的，照原样保留。
     public var explanation: String {
         switch self {
         case .evidence:
             return "先看清上次到底说了什么，以及复盘给的高分版是什么样。"
-                + "下一步：进入第二步「重答原题」，证据和高分版会被收走，只留下题目和这次的目标。"
+                + "下一步：点「重答这道题」进入第二步，证据和高分版会被收走，只留下题目和这次的目标。"
         case .rehearsal:
             return "提示已经撤掉了——照着高分版念一遍不叫复训。"
                 + "下一步：点「开始练习」，对着 ChatGPT 把这道题重新答一遍，答的时候记着这一次的目标。"
