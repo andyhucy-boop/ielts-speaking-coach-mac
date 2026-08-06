@@ -47,6 +47,46 @@ final class QuestionBankImportResultSheetTests: XCTestCase {
                 + "下一步：用 `ForEach` 把每一条都画出来。")
     }
 
+    /// 上一条只问到「有一个 `ForEach`、`feedback.warnings` 出现过两次」，
+    /// **管不到那个 `ForEach` 里到底画的是什么**。已实测的两条溜法：
+    ///
+    /// - 把 `Label(warning, …)` 换成一句泛泛的话（`Text("文件里有几行有问题")`）→ 全绿。
+    ///   那时弹窗上会出现 N 行一模一样的废话，而「第 7 行缺 id」这句唯一有用的线索没了。
+    /// - `feedback.warnings.prefix(1)` 只画第一条 → 全绿。
+    ///   一份坏掉的 CSV 可能有几十行毛病，用户照着改好第一行、再导入，又只看到下一条，
+    ///   得来回几十趟——而且他不知道后面还有，那是静默截断（铁律 5）。
+    ///
+    /// 所以这里切进 `ForEach` 的闭包体里问：那一行画的是不是循环变量本身。
+    func testEachWarningRowPrintsThatWarningInsteadOfAGenericSentence() throws {
+        let body = try SourceGuard.memberBody(of: "var body",
+                                              in: try SourceGuard.code(Self.sheet))
+
+        // 「只画前几条」这一支先查：它一并会把下面那个 `ForEach(` 的锚点改掉
+        // （`warnings.prefix(1).enumerated()`），先切再查的话报出来的会是一句
+        // 「找不到这段声明」，看的人得自己反推是被截断了。
+        XCTAssertFalse(
+            body.contains(".prefix(") || body.contains(".dropFirst(")
+                || body.contains(".dropLast(") || body.contains("feedback.warnings.first"),
+            "警告只画了一部分，剩下的被静默截掉了（铁律 5）：用户不知道后面还有，"
+                + "照着看得见的那条改完再导入，又冒出下一条，一份有几十行毛病的 CSV 要来回几十趟。"
+                + "下一步：全部画出来——它们本来就在一个 `ScrollView` 里，挤不下能翻，不必截断。"
+                + "实际取到的 body 是：\n\(body)")
+
+        let row = try SourceGuard.memberBody(
+            of: "ForEach(Array(feedback.warnings.enumerated())", in: body)
+
+        // 至少两次：一次是闭包参数 `{ _, warning in`，一次是真的把它画出来。
+        // 只出现一次 = 参数收下了却没用，画出来的是一句和这条警告无关的话。
+        XCTAssertGreaterThanOrEqual(
+            SourceGuard.occurrences(of: "warning", in: row), 2,
+            "警告那一行没有把这条警告本身画出来（`warning` 在闭包里只出现了一次，"
+                + "也就是收下了参数却没用）。用户看到的会是 N 行一模一样的泛泛之词，"
+                + "而「跳过第 7 行：缺少 id。下一步：给这道题一个唯一编号。」这句唯一能让他"
+                + "修好文件的话不见了。"
+                + "下一步：把 `Label(warning, systemImage: \"exclamationmark.triangle\")` 放回去。"
+                + "实际取到的那一行是：\n\(row)")
+    }
+
     /// 弹窗那句总结（导入了几题、共几条）也得在，否则用户不知道这一趟到底成没成。
     func testTheSummaryLineIsShownToo() throws {
         SourceGuard.assertRenders(
