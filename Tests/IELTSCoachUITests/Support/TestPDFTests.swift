@@ -25,6 +25,39 @@ final class TestPDFTests: XCTestCase {
         XCTAssertEqual(TestPDF.meaningfulLines(of: document.string ?? ""), lines)
     }
 
+    /// 多页样本必须**真的是多页**，而且第二页的文字要跟第一页分得开。
+    ///
+    /// 这条是「只读第一页」那组守卫的地基：`QuestionBankPDFImportTests` 靠把断言要比的
+    /// 内容放到第二页来抓那个突变。要是这里画出来的其实只有一页（或者第二页是空的），
+    /// 那几条守卫会退回成「只问有没有文字出来」，而且没有任何迹象。
+    ///
+    /// 所以两头都断言：整份文档读得到两页的全部文字，而**单看第一页读不到第二页那行**——
+    /// 后半句才是样本真的能区分「读全」和「只读第一页」的证据。
+    func testItCanDrawMoreThanOnePageAndTheSecondPageIsReadBackToo() throws {
+        let firstPage = ["Part1 必 考 题", "1-Study and work"]
+        let secondPage = ["Do you work or are you a student?", "第二页最后一行"]
+        let document = try XCTUnwrap(
+            PDFDocument(data: try TestPDF.data(pages: [firstPage, secondPage])))
+
+        XCTAssertEqual(document.pageCount, 2, "样本没画成两页，「只读第一页」那组守卫就失去依据")
+        XCTAssertEqual(TestPDF.meaningfulLines(of: document.string ?? ""), firstPage + secondPage,
+                       "整份文档读回来的文字跟画进去的对不上：\(document.string ?? "")")
+
+        let onlyFirst = TestPDF.meaningfulLines(of: document.page(at: 0)?.string ?? "")
+        XCTAssertEqual(onlyFirst, firstPage,
+                       "第一页单独读出来的不是第一页那几行：\(onlyFirst)")
+        XCTAssertFalse(onlyFirst.contains(where: secondPage.contains),
+                       "第二页的文字跑到第一页上了，样本区分不了「读全」和「只读第一页」")
+    }
+
+    /// `data(lines:)` 仍然是一页——它是 `data(pages:)` 的单页写法，
+    /// 不能因为改成转调就悄悄变成多页（扫描件那条对照样本要求「真有一页」）。
+    func testTheSinglePageHelperStillDrawsExactlyOnePage() throws {
+        let document = try XCTUnwrap(PDFDocument(data: try TestPDF.data(lines: ["a", "b"])))
+        XCTAssertEqual(document.pageCount, 1)
+        XCTAssertEqual(TestPDF.meaningfulLines(of: document.string ?? ""), ["a", "b"])
+    }
+
     func testTheImageOnlyPageHasAPageButNoText() throws {
         let document = try XCTUnwrap(PDFDocument(data: try TestPDF.imageOnlyPageData()))
         XCTAssertEqual(document.pageCount, 1, "扫描件样本得真有一页，否则测的是「空文件」而不是扫描件")

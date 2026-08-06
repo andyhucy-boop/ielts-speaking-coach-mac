@@ -8,21 +8,33 @@ import XCTest
 /// 这一组守的是「选中一份 PDF 之后到底发生了什么」这条路上最容易断的三处。
 final class QuestionBankPDFImportTests: XCTestCase {
 
-    /// 照抄真实 PDF 抽出来的片段（含一处折行的 cue card 题干）。
-    private static let pdfPlainText = """
-        Part 1 T opics
-        Part1 必 考 题
-        1-Study and work
-        Do you work or are you a student?
-        Part2 & 3 保 留 题
-        人物
-        1-Describe one of your friends who learned a skill from someone
-        (not a teacher)
-        You should say
-        Who he/she is
-        Part3
-        Is it necessary to continue learning after finishing formal education?
-        """
+    /// 照抄真实 PDF 抽出来的片段（含一处折行的 cue card 题干），**分成两页**。
+    ///
+    /// 页边界刻意切在 cue card 的提示点与它的 `Part3` 追问之间：
+    /// 用户那份题库有 81 页，而「取文字那一步只读第一页」是一个能悄悄坏掉的形状——
+    /// 实测把 `QuestionBankFileReader.pdfPlainText` 里的 `PDFDocument(url: url)?.string`
+    /// 改成 `PDFDocument(url: url)?.page(at: 0)?.string`，在补这一版之前全量测试一条不红，
+    /// 而用户会得到一份「导入成功、没有警告、只有第一页那几道题」的题库（铁律 5）。
+    /// 切在这儿，只读第一页时第 3 条 prompt 当场消失，下面逐条比 prompt 的断言立刻红。
+    private static let pdfPages: [[String]] = [
+        ["Part 1 T opics",
+         "Part1 必 考 题",
+         "1-Study and work",
+         "Do you work or are you a student?",
+         "Part2 & 3 保 留 题",
+         "人物",
+         "1-Describe one of your friends who learned a skill from someone",
+         "(not a teacher)",
+         "You should say",
+         "Who he/she is"],
+        ["Part3",
+         "Is it necessary to continue learning after finishing formal education?"]
+    ]
+
+    /// 同一份内容的纯文本形态（注入假闭包的那几条用它）。
+    /// **从 `pdfPages` 拼出来，不另抄一份**：两处各写各的话，改了一处忘了另一处，
+    /// 「真 PDF 那条路」和「假闭包那条路」比的就不再是同一份样本了。
+    private static let pdfPlainText = pdfPages.flatMap { $0 }.joined(separator: "\n")
 
     // MARK: - 分派
 
@@ -169,24 +181,40 @@ final class QuestionBankPDFImportTests: XCTestCase {
     // 三处任何一处坏掉，用户选任何一份真实的文字版 PDF 都会被告知「这多半是扫描件」，
     // 然后照着提示去做一次根本不需要的文字识别。
     //
-    // 下面这几条用 `TestPDF` 现场画一份含已知文字的真 PDF 来堵这三个口子。
+    // ⚠️ 补上之后还漏了第四种，因为**样本只有一页**：
+    //
+    //   4. `pdfPlainText` 改成 `PDFDocument(url: url)?.page(at: 0)?.string`（只读第一页）。
+    //
+    // 只有一页的样本里「读第一页」和「读全文」是同一件事，所以那三条守卫问的都是
+    // 「有没有文字出来」，没人问「是不是全都出来了」。对用户那份 81 页题库，
+    // 后果比上面三种更难发现：导入成功、没有任何警告、只进来第一页那几道题（铁律 5）。
+    //
+    // 下面这几条用 `TestPDF` 现场画一份含已知文字的真 PDF 来堵这四个口子，
+    // 并且**把断言要比的内容跨到第二页去**。
     // **不用仓库根目录那份真实的 81 页 PDF**：它在 .gitignore 里、不在版本控制中，
     // 换台机器就没有了，依赖它等于让这些守卫在别处悄悄失效。
 
     /// 最底下那一行：`PDFDocument(url:)?.string`。
     ///
     /// 一正一反两半都要有——只测正的话，把这个函数写成 `return "Part1 必 考 题"` 也能全绿。
-    func testPDFKitReallyPullsTheTextOutOfARealPDF() throws {
-        let lines = ["Part 1 T opics", "Part1 必 考 题", "1-Study and work",
-                     "Do you work or are you a student?"]
-        let url = try makeTemporaryFile(named: "季度题库.pdf", bytes: try TestPDF.data(lines: lines))
+    ///
+    /// **样本是两页的**，而且第二页那两行也写进了断言：只问「有没有文字出来」的话，
+    /// 把这一行改成 `?.page(at: 0)?.string` 照样绿，而用户那份 81 页题库会只进来第一页。
+    func testPDFKitReallyPullsTheTextOutOfEveryPageOfARealPDF() throws {
+        let firstPage = ["Part 1 T opics", "Part1 必 考 题", "1-Study and work",
+                         "Do you work or are you a student?"]
+        let secondPage = ["2-Accommodation", "Do you live in a house or a flat?"]
+        let url = try makeTemporaryFile(
+            named: "季度题库.pdf", bytes: try TestPDF.data(pages: [firstPage, secondPage]))
 
         let text = try XCTUnwrap(
             QuestionBankFileReader.pdfPlainText(at: url),
             "PDFKit 没从一份真 PDF 里取出任何文字。这一行是全项目唯一碰 PDFKit 的地方，"
                 + "它一断，用户选任何 PDF 都会被误判成扫描件。")
-        XCTAssertEqual(TestPDF.meaningfulLines(of: text), lines,
-                       "取出来的文字跟画进去的对不上：\(text)")
+        XCTAssertEqual(TestPDF.meaningfulLines(of: text), firstPage + secondPage,
+                       "取出来的文字跟画进去的对不上。少了第二页那几行的话，"
+                           + "这一行只读了第一页——用户那份 81 页题库会静默丢掉 80 页的题："
+                           + "\(text)")
     }
 
     /// 反的那一半：不是 PDF 的文件必须取不出文字（`nil`），而不是回一段写死的东西。
@@ -201,15 +229,19 @@ final class QuestionBankPDFImportTests: XCTestCase {
     ///
     /// 这里**刻意不传** `pdfText`，走的就是产品代码里的那个默认值。
     /// 默认值一旦被换成 `{ _ in nil }`，这条会红在「扫描件」那句话上。
+    ///
+    /// 样本同样是两页的，第二页那两行也在断言里（理由见上一条）。
     func testTextUsesPDFKitByDefaultSoARealPDFIsNotMistakenForAScan() throws {
-        let lines = ["Part 1 T opics", "Part1 必 考 题", "1-Study and work",
-                     "Do you work or are you a student?"]
-        let url = try makeTemporaryFile(named: "季度题库.pdf", bytes: try TestPDF.data(lines: lines))
+        let firstPage = ["Part 1 T opics", "Part1 必 考 题", "1-Study and work",
+                         "Do you work or are you a student?"]
+        let secondPage = ["2-Accommodation", "Do you live in a house or a flat?"]
+        let url = try makeTemporaryFile(
+            named: "季度题库.pdf", bytes: try TestPDF.data(pages: [firstPage, secondPage]))
 
         let text = try QuestionBankFileReader.text(at: url, format: .pdf)
 
-        XCTAssertEqual(TestPDF.meaningfulLines(of: text), lines,
-                       "不传 pdfText 时没有走 PDFKit（或者取到的文字不对）：\(text)")
+        XCTAssertEqual(TestPDF.meaningfulLines(of: text), firstPage + secondPage,
+                       "不传 pdfText 时没有走 PDFKit，或者只取了第一页的文字：\(text)")
     }
 
     /// 最外面那一层的默认参数：界面调的就是 `importFile(at:)` 这一个入口（不传 `pdfText`）。
@@ -217,19 +249,23 @@ final class QuestionBankPDFImportTests: XCTestCase {
     /// 这条是从用户的角度看的那一整条路：一份真 PDF 进去，题目出来。
     /// 断言逐条比 prompt，与上面那条注入假文字的测试期望完全一致——
     /// 差别只在于文字这次是真的从 PDF 里抽出来的。
-    func testImportFileUsesPDFKitByDefaultSoAChosenPDFYieldsQuestions() throws {
+    ///
+    /// **样本是两页的，第 3 道题只在第二页上。** 取文字那一步一旦只读第一页
+    /// （`?.page(at: 0)?.string`），这条会红在少了一条 prompt 上——
+    /// 而用户看到的会是「导入成功，3 道题变 2 道」，一句警告都没有。
+    func testImportFileUsesPDFKitByDefaultSoEveryPageOfAChosenPDFYieldsQuestions() throws {
         let url = try makeTemporaryFile(
-            named: "季度题库.pdf",
-            bytes: try TestPDF.data(lines: Self.pdfPlainText.split(separator: "\n").map(String.init)))
+            named: "季度题库.pdf", bytes: try TestPDF.data(pages: Self.pdfPages))
 
         let result = try QuestionBankImport.importFile(at: url)
 
         XCTAssertEqual(result.questions.map(\.prompt), [
             "Do you work or are you a student?",
             "Describe one of your friends who learned a skill from someone (not a teacher)",
+            // ↓ 这一条只画在第二页上：少了它就说明取文字那一步只读了第一页。
             "Is it necessary to continue learning after finishing formal education?"
-        ], "选中一份真 PDF 之后没有导出题目。取文字那一步没走 PDFKit，"
-            + "或者三步没有串起来——用户会看到「这多半是扫描件」，而文件明明是文字版。")
+        ], "选中一份真 PDF 之后没有导出全部题目。取文字那一步没走 PDFKit、只读了第一页，"
+            + "或者三步没有串起来——用户会看到「这多半是扫描件」，或者一份静默少了题的题库。")
         XCTAssertEqual(result.questions.map(\.part), [1, 2, 3])
         XCTAssertEqual(result.source.title, "季度题库")
     }

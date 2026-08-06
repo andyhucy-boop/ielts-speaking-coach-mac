@@ -17,6 +17,13 @@ import Foundation
 /// 三处任何一处坏掉，用户选任何一份真实 PDF 都会被告知「这多半是扫描件」，
 /// 而那份 PDF 明明是文字版——用户照着提示去做文字识别，白忙一场。
 ///
+/// 补上之后还漏了第四种，因为这里**只会画一页**：
+///
+/// 4. `pdfPlainText` 改成 `PDFDocument(url:)?.page(at: 0)?.string`（只读第一页）。
+///
+/// 只有一页的样本里「读第一页」与「读全文」是同一件事，所以那几条守卫问的都是
+/// 「有没有文字出来」，没人问「是不是全都出来了」。见 `data(pages:)`。
+///
 /// ## 为什么不用仓库里那份真实 PDF
 ///
 /// 仓库根目录确实有用户那份 81 页的题库 PDF，但它在 `.gitignore` 里、不在版本控制中：
@@ -28,9 +35,10 @@ import Foundation
 ///
 /// ## 边界
 ///
-/// 它画的是最规整的一页文字，代表不了真实题库那种双栏、带页眉页脚的排版；
+/// 它画的是最规整的几页文字，代表不了真实题库那种双栏、带页眉页脚的排版；
 /// 那部分归人工拿真实 PDF 验收（导入后的题数、题干长相）。
-/// 它能守住的是「取文字这条路还通不通」——那正是已经被证明能悄悄坏掉的部分。
+/// 它能守住的是「取文字这条路还通不通」「每一页的文字是不是都出来了」——
+/// 那正是已经被证明能悄悄坏掉的两处。
 enum TestPDF {
 
     enum Failure: Error, CustomStringConvertible {
@@ -49,11 +57,37 @@ enum TestPDF {
         }
     }
 
-    /// 每行画一行文字，返回一份真 PDF 的字节。
+    /// 单页：每行画一行文字，返回一份真 PDF 的字节。
+    ///
+    /// **只画一页的样本守不住「是不是全都出来了」。** 见 `data(pages:)` 的说明——
+    /// 需要多页的地方一律用那一个。
+    static func data(lines: [String], fontSize: CGFloat = 14) throws -> Data {
+        try data(pages: [lines], fontSize: fontSize)
+    }
+
+    /// 多页：每个内层数组画成一页，返回一份真 PDF 的字节。
+    ///
+    /// ## 为什么必须能画多页
+    ///
+    /// 之前这里只有 `data(lines:)`，从头到尾只 `beginPDFPage` 一次，
+    /// 于是四条「真的碰 PDFKit」的守卫问的都是「有没有文字出来」，
+    /// **没人问「是不是全都出来了」**。实测：把 `QuestionBankFileReader.pdfPlainText` 的
+    /// `PDFDocument(url: url)?.string` 改成 `PDFDocument(url: url)?.page(at: 0)?.string`
+    /// （只读第一页），全量测试一条都不红。
+    ///
+    /// 而用户那份题库是 **81 页**。只读第一页的后果是静默丢题：导入成功、没有任何警告、
+    /// 只进来第一页那几道，用户要翻到「训练题库」页数题才可能发现（铁律 5）。
+    ///
+    /// 所以拿它画样本时，**把断言要比的内容跨到第二页去**——只读第一页时那几行会当场消失。
+    ///
+    /// ## 页与页之间怎么接
+    ///
+    /// PDFKit 的 `PDFDocument.string` 把各页的文字用 `\n` 接起来（实测），
+    /// 所以 `meaningfulLines(of:)` 切出来的就是各页行的拼接，跟画进去的顺序一致。
     ///
     /// 字体用 Helvetica，中文靠 CoreText 的字体回退（题库里 Part 2 的话题标签、
     /// 「Part1 必 考 题」这类分区标题都是中文，抽不出中文的话这组测试就名不副实了）。
-    static func data(lines: [String], fontSize: CGFloat = 14) throws -> Data {
+    static func data(pages: [[String]], fontSize: CGFloat = 14) throws -> Data {
         let data = NSMutableData()
         guard let consumer = CGDataConsumer(data: data as CFMutableData) else {
             throw Failure.cannotCreateConsumer
@@ -63,16 +97,18 @@ enum TestPDF {
             throw Failure.cannotCreateContext
         }
         let font = CTFontCreateWithName("Helvetica" as CFString, fontSize, nil)
-        context.beginPDFPage(nil)
-        var baseline = mediaBox.height - 72
-        for line in lines {
-            let attributed = NSAttributedString(string: line, attributes: [.font: font])
-            let typeset = CTLineCreateWithAttributedString(attributed)
-            context.textPosition = CGPoint(x: 54, y: baseline)
-            CTLineDraw(typeset, context)
-            baseline -= fontSize * 1.6
+        for page in pages {
+            context.beginPDFPage(nil)
+            var baseline = mediaBox.height - 72
+            for line in page {
+                let attributed = NSAttributedString(string: line, attributes: [.font: font])
+                let typeset = CTLineCreateWithAttributedString(attributed)
+                context.textPosition = CGPoint(x: 54, y: baseline)
+                CTLineDraw(typeset, context)
+                baseline -= fontSize * 1.6
+            }
+            context.endPDFPage()
         }
-        context.endPDFPage()
         context.closePDF()
         return data as Data
     }
