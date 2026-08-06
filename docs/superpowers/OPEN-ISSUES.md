@@ -5,9 +5,13 @@
 
 修完一条就从这里删掉。**但只有自己做过突变、亲眼看到红，才允许删。**
 
-**最后一次整体复核：2026-08-06（第二轮，见第九节）。基线 `swift test` = 706 条 / 0 失败 / 6.0–6.2 秒。**
+**最后一次整体复核：2026-08-07（Phase 5 录音，见第十节）。基线 `swift test` = 846 条 / 0 失败 / 7.4–7.7 秒。**
 
-第二轮复核时工作区是干净的，与 `phase2-bridge` HEAD（`8ba702c`）一致。
+复核时工作区是干净的，与 `phase2-bridge` HEAD（`664808f`）一致。
+
+> 上一次是 2026-08-06 第二轮（第九节），当时的基线是 706 条 / 6.0–6.2 秒，
+> 工作区与 `8ba702c` 一致。各节里的旧条数按当时实测原样保留，
+> **但今天的基线是 846**，别再拿 706 去对。
 
 > 下面第零到第八节写于**同一天的第一轮**复核，那时的基线是 522 条 / 5.2–5.6 秒
 > （那一轮的工作区有 6 个文件的改动，见「零、本轮复核」）。
@@ -381,3 +385,107 @@ A3 是修复方没跑过的一个突变，我补上的：`lastSeenAt` 那一行�
    就是 `SessionDeleter(directory:store:).delete(session)`，
    而 `AppState.deleteSession` 正是删除按钮唯一的生产路径。
    **千万别按复审说的把它删掉**——删了删除功能就没了，而且上面那 2 条测试会当场红给你看。
+
+---
+
+## 十、Phase 5 录音复核（2026-08-07，独立复核方写）
+
+**基线：`swift test` = 846 条 / 0 失败 / 7.4–7.7 秒**，工作区干净，
+与 `phase2-bridge` HEAD（`664808f`）一致。
+
+这一节记的是 Phase 5 三条真 bug 修完之后**仍然没人看守**的地方。
+体例同第九节：每一条都真改了代码、真跑了全量、真看了 `Executed` 条数、跑完还原。
+**修完一条就删掉，但只有自己做过突变、亲眼看到红，才允许删。**
+
+> 先说结论：三条真 bug 的修复本身**复核通过**。
+> 设备切换竞态用一条从零重写的探针独立复现过（把修复还原成修前写法，探针 5 条断言红、
+> 项目自己那条 `testRestartDoesNotClaimRecoveryWhenTheFileWasClosedDuringTheRestart` 3 条断言红）；
+> `RecordingSettingsView` 的 `get:` 改 `{ true }`、`RecordingSettingsScene` 改 `EmptyView()`、
+> 删 `Text(viewModel.consentText)`、删 `.onAppear { viewModel.refresh() }`
+> ——四个突变逐个跑，每个都有对应的测试变红；
+> `grep -rn "开启录音" Sources/` 现在只命中解释这次修复的注释，没有一句活着的文案。
+
+### 属实的守卫缺口（改坏之后 846 条全绿，无人看守）
+
+1. **`RecordingStore.delete(relativePath:)` 的路径穿越防护零测试**
+   `Sources/IELTSCoachCore/Recording/RecordingStore.swift:121-122`
+   把 `let url = try url(forRelativePath: relativePath)` 换成绕开校验的直接拼接
+   （`directory.recordingsDirectory.appending(path: relativePath.replacingOccurrences(of: "recordings/", with: ""))`）
+   → **846 条 0 失败**。
+   现有两条穿越测试（`RecordingStoreTests.swift:78`、`:86`）**只调 `url(forRelativePath:)`**，
+   没有一条调 `delete`；`delete` 那两条（`:110`、`:119`）走的都是老实路径。
+   后果：`state.json` 里的 `recordingPath` 被改坏（或将来有别的写入方），
+   删除按钮就能删到 `recordings/` 外面去，而这是**用户按一下就没了的东西**。
+   修法：把 `:78`/`:86` 那张恶意路径表**同时**喂给 `delete`，断言抛 `unsafePath` 且目标文件还在。
+
+2. **`RecordingUsage.summaryText` 的占用大小零约束**
+   `Sources/IELTSCoachCore/Recording/RecordingStore.swift:29`
+   `"录音 \(count) 个，共占用 \(Self.humanReadable(bytes: bytes))。"` → `"录音 \(count) 个。"`
+   → **846 条 0 失败**。
+   后果：「录音占了多少地方」整页只剩个数，用户没法判断该不该清理——
+   而这一页存在的全部理由就是那个大小。`humanReadable` 自己那几条测试还绿着，
+   但**没有一条测试问过 `summaryText` 里到底有没有把它印出来**。
+
+3. **幽灵控件扫描只扫 `Sources/IELTSCoachUI/`，Audio 与 Core 的文案在圈外**
+   `Tests/IELTSCoachUITests/Support/SourceGuard.swift:154`
+   （`uiSourceRelativeRoot = "Sources/IELTSCoachUI"`，`swiftFiles()` 默认就走它）
+   把 `Sources/IELTSCoachAudio/RecordingSession.swift:245` 那句
+   `下一步：点「我练完了」…` 改成 `下一步：点「立刻停止录音」…`
+   （一颗全 App 都不存在的控件）→ **846 条 0 失败**。
+   对照实验：同样的幽灵名字塞进 `Sources/IELTSCoachUI/Session/PracticeStage.swift`
+   会被 `RenderReachabilitySweepTests.testEveryButtonNamedInUICopyActuallyExists` 当场逮住。
+   **这条最值得先修**：本轮新写的那段中文警告（写入端已死时那条）就落在圈外，
+   它点名的「我练完了」眼下是靠人工 grep 验的；
+   `AVAudioEngineCapture.swift:49` 同样在圈外。
+   哪天有人把 `PracticeSheet.swift:328` 那颗按钮改个名，
+   这两句话会**一声不响地**变成指着空气。
+   修法：`literalClickTargets` 那一轮改扫整个 `Sources/`
+   （`swiftFiles(in:describedAs:)` 已经支持任意目录，第 251 行的注释里就写着这个用法），
+   控件清单仍从 `Sources/IELTSCoachUI/` 里取。
+   顺带说明：`MicrophonePermissionState.swift`（Core）虽然也在圈外，
+   但它有 `RecordingSettingsViewTests` 的定点守卫——把那两句 `「保存我的回答录音」`
+   改成 `「打开麦克风录音」`，**红 3 条**。定点守卫有牙，缺的是那一圈普扫。
+
+4. **`ReviewParser` 仍然点名一颗谁也没有的「补生成复盘报告」，命令行照单全收**
+   `Sources/IELTSCoachCore/Review/ReviewParser.swift:50-51`
+   图形界面那三条路（`PracticeRunner`、`ReviewReportLoader`、`PendingReviewViewModel`）
+   都已经用 `diagnosisOnly(_:)` 把这句「下一步」砍掉了，砍得对。
+   但 `Sources/coach/PracticeCommand.swift:133` 与
+   `Sources/coach/ReimportCommand.swift:78` 是 `print(error.localizedDescription)` 原样打出来的，
+   于是终端用户连着读到两句「下一步」，第一句是
+   `下一步：点「补生成复盘报告」让 ChatGPT 重新输出一次。`
+   **而这个东西根本不存在**：`coach` 只有 `doctor` / `questions` / `practice` / `reimport`
+   四个子命令（`Sources/coach/main.swift:19-25`），
+   `grep -rn "补生成" Sources/` 除了这两行文案自己只剩注释；
+   终端里也没有任何东西可「点」。
+   要紧的是：`PracticeRunner.swift:591`、`ReviewReportLoader.swift:81`、
+   `PendingReviewViewModel.swift:158` 三处注释都白纸黑字写着
+   「在命令行那边是对的」「命令行那边照它做是对的，改了反而把两边一起弄坏」——
+   **这个前提是假的**，而正是这句假前提让三轮修复都绕着它走。
+   这已经是本项目同一类缺陷的第三次（前两次：「补生成复盘报告」在界面、「开启录音」）。
+   修法：改 Core 那两句文案本身（两个出口都错，不存在「退让哪一侧」的问题），
+   顺手把三处注释里的假前提删掉。
+
+### 顺带查出来、不属于守卫缺口的一条真缺陷
+
+5. **第一条缓冲区就写盘失败时，警告自相矛盾：说文件保住了，又说文件删掉了**
+   复现（探针跑过，已删）：`writer.secondsToReport = 0`（`AACSegmentWriter.finish()`
+   在一帧都没落地时返回的就是 0，见 `AACSegmentWriter.swift:100`），
+   `start()` → `failOnWrite = true` → `deliver(一个缓冲区)` → `finish()`。
+   用户读到的是这一整段：
+
+   > 录音在中途写不下去了：…
+   > **已经录到的部分完整保存在 recordings/xxx.m4a**，练习本身不受影响。下一步：确认磁盘还有空间，然后重新练一次。
+   > 这次一秒录音都没录到，**已经把空文件删掉了**。下一步：…
+
+   第一句给了一个具体路径让用户去找，第二句说那个文件已经删了；
+   `outcome.relativePath` 同时是空字符串，界面上一条录音都不会出现。
+   用户照着第一句去数据目录里翻，翻不到。
+   触发条件很实在：磁盘一开始就是满的。
+   起点：`RecordingSession.swift:173-176`（`append` 的 catch 无条件说「完整保存在」，
+   没问过到底有没有录到东西）与 `:145` 的 `disposeOfTheEmptyFile()` 撞在一起。
+   `handleConfigurationChange` 的 catch 分支（`:258-262`）是同一句话，同一个坑。
+   **本轮新加的那条文案没有掉进来**：写入端已死那条分支的上游守卫
+   （`:194` 的 `guard !stopped, writer != nil`）会先拦掉，实测走不到。
+   现有 `testWriteFailureStopsRecordingButKeepsWhatWasWritten` 用的是默认的 12 秒，
+   所以从来没碰过 0 秒这一支。
