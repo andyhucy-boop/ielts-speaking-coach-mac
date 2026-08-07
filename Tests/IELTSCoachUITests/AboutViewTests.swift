@@ -494,6 +494,59 @@ final class AboutViewTests: XCTestCase {
                           + "而这段时间这一页一个字都不说，用户会以为按钮坏了。")
     }
 
+    /// 按钮点完之后那一句反馈，必须把 `notice.text` 原样画出来。
+    ///
+    /// **模型层算得对不等于用户看得见**：`testCopyingDiagnosticsWritesTheReportAndSaysItIsCopied`
+    /// 与 `testRevealingSaysSoWhenTheDirectoryCannotBeOpenedInsteadOfPretending`
+    /// 断言的都是 `model.notice.text`，管不到这一句有没有上屏。
+    /// 实测把 `Label(notice.text, …)` 换成 `Label("操作完成", …)`（`noticeLine` 仍可达、
+    /// 仍被 `body` 调用），全套测试照样绿——而那时「复制诊断信息」成功后用户看到的是
+    /// 一句无意义的「操作完成」，「在访达中显示」失败时那段带路径、带「下一步」的说明
+    /// （铁律 7）一个字都不上屏。
+    func testTheActionFeedbackIsPaintedWordForWordAndNotReplacedByACannedLine() throws {
+        let code = try SourceGuard.code(Self.view)
+        let notice = try SourceGuard.memberBody(of: "private func noticeLine", in: code)
+
+        XCTAssertTrue(
+            notice.contains("notice.text"),
+            "这一句反馈不再画 `notice.text` 了：\(notice.flattened)。"
+                + "模型层把话算好了却不上屏，等于静默失败（铁律 7），而且不会有任何编译错误——"
+                + "「已复制」变成一句写死的空话，「在访达中显示」失败时那段带路径、"
+                + "带「下一步」的说明整段消失。下一步：把 `notice.text` 画回去。")
+
+        XCTAssertTrue(
+            try aboutViewBody().contains("noticeLine"),
+            "`noticeLine` 只是声明着，没有被摆进 `AboutView.body`——"
+                + "那三颗按钮点下去将一句反馈都没有，用户分不清「成功了」和「点了没反应」。")
+    }
+
+    /// 检查结果原文必须逐条画出来。
+    ///
+    /// `AboutViewModel.permissionHint(.unknown)` 的原话是「下一步：点「重新检查」看原始消息」，
+    /// 这一块就是那句话指的地方。已有的
+    /// `testTheRawPreflightMessagesAreKeptBecauseTheHintPromisesThem` 只管到
+    /// `model` 有没有把消息留住；实测把整段 `ForEach` 换成一句写死的话，全套测试照样绿，
+    /// 而那条「下一步」就指向空气了。
+    func testTheRawCheckMessagesAreActuallyPaintedOneByOne() throws {
+        let code = try SourceGuard.code(Self.view)
+        let output = try SourceGuard.memberBody(of: "private var checkOutputCard", in: code)
+
+        XCTAssertTrue(
+            output.contains("model.permissionMessages"),
+            "「检查结果原文」那一块不再读 `model.permissionMessages` 了：\(output.flattened)。"
+                + "而「\(PermissionState.unknown)」那一行的下一步写的是"
+                + "「点「重新检查」看原始消息」——原文不画出来，那句话就指向空气。")
+        XCTAssertTrue(
+            output.contains("Text(message)"),
+            "遍历到了消息却没把每一条画成一行文字：\(output.flattened)。"
+                + "下一步：逐条 `Text(message)` 画出来，别用一句概括替掉原文。")
+
+        XCTAssertTrue(
+            try aboutViewBody().contains("checkOutputCard"),
+            "`checkOutputCard` 只是声明着，没有被摆进 `AboutView.body`，"
+                + "查出来的原始消息一个字都不会上屏。")
+    }
+
     /// 读盘失败那一块：错误全文 + 数据目录路径 + 一颗能点的「重试」。
     func testTheLoadErrorBlockShowsTheWholeMessageThePathAndAWayOut() throws {
         let code = try SourceGuard.code(Self.view)
