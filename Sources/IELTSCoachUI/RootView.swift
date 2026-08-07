@@ -48,27 +48,64 @@ public struct RootView: View {
     init(app: AppState) { _app = State(initialValue: app) }
 
     public var body: some View {
-        // 外面这层 ZStack 不是为了排版：`.task` 必须挂在一个身份稳定的容器上。
-        // 直接挂在下面的分支上，切屏会被当成新视图重新触发检查。
-        // （`Group` 不行——它会把修饰符透传给每个子视图。）
-        ZStack {
-            switch RootRouter.screen(isCheckingPermission: app.isCheckingPermission,
-                                     permission: app.permission,
-                                     permissionSkipped: app.permissionSkipped) {
-            case .checkingEnvironment:
-                checkingEnvironment
-            case .permissionGate:
-                PermissionGateView(state: app.permission,
-                                   messages: app.permissionMessages,
-                                   recheckAttempts: app.recheckAttempts,
-                                   onRecheck: { Task { await app.recheckPermission() } },
-                                   onSkip: { app.permissionSkipped = true })
-            case .workspace:
-                workspace
+        // 横幅摆在最外面、三屏之上：它要能在「正在检查运行环境…」和授权引导页上照样显示。
+        // 摆进 `workspace` 的话，用户卡在授权引导页时 handler 跑了、消息也存下了，
+        // 屏幕上却一个字都没有——静默失败换了个地方发生（铁律 7）。
+        //
+        // 用 `VStack` 把它顶在上面而不是 `.overlay`：这句话是要读的，
+        // 浮在上面会盖住下面那一屏的第一行内容。
+        //
+        // 横幅不在时那个 `if let` 是一个空视图，SwiftUI 不给它算 spacing，
+        // 所以这一档间距只在真有横幅时出现。
+        VStack(spacing: Spacing.md) {
+            if let notice = deepLinkNotice { deepLinkBanner(notice) }
+            // 这层 ZStack 不是为了排版：`.task` 必须挂在一个身份稳定的容器上。
+            // 直接挂在下面的分支上，切屏会被当成新视图重新触发检查。
+            // （`Group` 不行——它会把修饰符透传给每个子视图。）
+            ZStack {
+                switch RootRouter.screen(isCheckingPermission: app.isCheckingPermission,
+                                         permission: app.permission,
+                                         permissionSkipped: app.permissionSkipped) {
+                case .checkingEnvironment:
+                    checkingEnvironment
+                case .permissionGate:
+                    PermissionGateView(state: app.permission,
+                                       messages: app.permissionMessages,
+                                       recheckAttempts: app.recheckAttempts,
+                                       onRecheck: { Task { await app.recheckPermission() } },
+                                       onSkip: { app.permissionSkipped = true })
+                case .workspace:
+                    workspace
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(minWidth: 900, minHeight: 600)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: deepLinkNotice)
         .task { await app.startInitialPermissionCheckIfNeeded() }
+        // **必须挂在这一层，不能挂在 `workspace` 上。** `workspace` 是
+        // `RootRouter.screen` 的一条分支：`AppState.isCheckingPermission` 初值是 `true`，
+        // 启动那一瞬间在屏幕上的是「正在检查运行环境…」（最长约十秒），`workspace` 不在视图树里。
+        // 而 App 没在跑时，Codex 调 `open_dashboard` 会先把 App 拉起来，链接正好投在这十秒中间——
+        // `.onOpenURL` 不是队列，投递时没有 handler 就直接丢了：窗口跳到前台、页面纹丝不动、
+        // 一句报错都没有（铁律 7）。环境检查没过、用户长期停在授权引导页时更是每一条都蒸发。
+        // `DeepLinkTests` 里那条「不许挂回 workspace」的断言守着这件事。
+        .onOpenURL { url in
+            switch DeepLinkResolver.resolve(url) {
+            case .open(let item):
+                // **走 `go(to:)`，不直接写 `app.navigation.selection`。**
+                // 计划里写的是后者，那是它成文时的形态；现在切页还要顺手作废
+                // 「从训练记录带过来的那一场」（见 `go(to:)` 与 `RootRouter.carriedReviewSession`）。
+                // 绕过它的话，深链接连着切两次页（复盘报告 → 训练记录 → 复盘报告）之后，
+                // 用户看到的会是几天前那一场旧复盘——内容看着完全正常，但是别人家的。
+                go(to: item)
+                deepLinkNotice = nil
+            case .rejected(let message):
+                // 不能什么都不做——用户点了链接、窗口跳出来却毫无反应，
+                // 只会以为程序坏了（禁止静默失败）。
+                deepLinkNotice = message
+            }
+        }
     }
 
     /// 检查最长可能花十秒（要等 ChatGPT 的无障碍树醒过来）。这段时间里界面必须一直在说话，
@@ -94,11 +131,7 @@ public struct RootView: View {
             }
             .navigationSplitViewColumnWidth(200)
         } detail: {
-            VStack(alignment: .leading, spacing: Spacing.md) {
-                if let notice = deepLinkNotice { deepLinkBanner(notice) }
-                detail
-            }
-                .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: deepLinkNotice)
+            detail
                 .toolbar {
                     ToolbarItem {
                         Button { showingWeeklyGoal = true } label: {
@@ -116,27 +149,12 @@ public struct RootView: View {
                     WeeklyGoalSheet(app: app, isPresented: $showingWeeklyGoal)
                 }
         }
-        // 挂在 `NavigationSplitView` 这一层，不是 detail 内部：detail 会随着选中页
-        // 换视图，挂在里面等于每换一页就重挂一次，收链接这件事没道理跟着页面走。
-        .onOpenURL { url in
-            switch DeepLinkResolver.resolve(url) {
-            case .open(let item):
-                // **走 `go(to:)`，不直接写 `app.navigation.selection`。**
-                // 计划里写的是后者，那是它成文时的形态；现在切页还要顺手作废
-                // 「从训练记录带过来的那一场」（见 `go(to:)` 与 `RootRouter.carriedReviewSession`）。
-                // 绕过它的话，深链接连着切两次页（复盘报告 → 训练记录 → 复盘报告）之后，
-                // 用户看到的会是几天前那一场旧复盘——内容看着完全正常，但是别人家的。
-                go(to: item)
-                deepLinkNotice = nil
-            case .rejected(let message):
-                // 不能什么都不做——用户点了链接、窗口跳出来却毫无反应，
-                // 只会以为程序坏了（禁止静默失败）。
-                deepLinkNotice = message
-            }
-        }
     }
 
-    /// 打不开的链接给一条横幅，把那句话原原本本摆在内容区顶上。
+    /// 打不开的链接给一条横幅，把那句话原原本本摆在窗口顶上。
+    ///
+    /// **由 `body` 直接摆出来，不在 `workspace` 里面**：环境检查那十秒、以及权限没过时的
+    /// 授权引导页，`workspace` 整个不在视图树上，摆在里面的话那期间收到的坏链接一句提示都看不到。
     ///
     /// 不截断（`fixedSize`）：这句话的后半截才是「下一步做什么」，截掉就只剩抱怨。
     private func deepLinkBanner(_ message: String) -> some View {
@@ -162,6 +180,8 @@ public struct RootView: View {
         .overlay(RoundedRectangle(cornerRadius: Radius.card)
             .strokeBorder(Palette.warning, lineWidth: BorderWidth.hairline))
         .padding(.horizontal, Spacing.xl)
+        // 只补上边：下边那一档由 `body` 里那个 `VStack(spacing: Spacing.md)` 给，
+        // 两处都写就会变成 32pt 的空当。
         .padding(.top, Spacing.md)
     }
 

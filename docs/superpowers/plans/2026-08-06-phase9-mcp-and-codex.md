@@ -4146,6 +4146,21 @@ extension SidebarItem {
 
 在 `NavigationSplitView` 那一层（不是 detail 内部）挂上：
 
+> **⚠️ 2026-08-07 复审更正：这句话说少了半句，照字面做会翻车。**
+> 「不要挂在 detail 里」是对的，但 `NavigationSplitView` 所在的那个 `workspace`
+> **本身就是 `RootRouter.screen` 的一条分支**：`AppState.isCheckingPermission` 初值是 `true`，
+> 启动那一瞬间屏幕上是「正在检查运行环境…」（最长约十秒），`workspace` 整个不在视图树里。
+> 而 App 没在跑时，`open_dashboard` 是先 `NSWorkspace.open` 把 App 拉起来再投链接——
+> 正好投在这十秒中间，那时 `.onOpenURL` 还没注册，**而它不是队列，没有 handler 就直接丢**：
+> 窗口跳到前台、页面纹丝不动、一句报错都没有（铁律 7）。环境检查没过时用户长期停在
+> 授权引导页，那期间每一条链接都这么蒸发。
+>
+> **正确的层级是最外层那个身份稳定的容器（和 `.task` 同一层）**，那正是同一个文件里
+> 「`.task` 必须挂在身份稳定的容器上」那条注释说的地方——`.onOpenURL` 是同一类东西。
+> **横幅也要一起挪上去**：留在 `workspace` 里的话，用户停在授权引导页时 handler 跑了、
+> 消息也存下了，屏幕上一个字都没有。`DeepLinkTests` 里
+> `testTheAppReceivesDeepLinksOnEveryScreenNotOnlyInsideTheWorkspace` 钉着这两件事。
+
 ```swift
         .onOpenURL { url in
             switch DeepLinkResolver.resolve(url) {
