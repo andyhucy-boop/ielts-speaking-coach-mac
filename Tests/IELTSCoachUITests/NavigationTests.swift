@@ -18,13 +18,13 @@ final class NavigationTests: XCTestCase {
         // 断言集合相等而不是「至少包含」——多标一项会让用户点进一个空页面，
         // 而空页面会让人以为程序坏了。
         // Phase 4 把「训练记录」加了进来，Phase 6 把「复训中心」加了进来，
-        // Phase 7 Task 6 把「问题档案」加了进来，Task 7 把「我的词汇」加了进来。
-        // 后续阶段各自往里加自己的那一项，不要把别人加的删掉：
-        // Phase 8 加 .plan，Phase 10 加 .upgrade 与 .feedback。
+        // Phase 7 Task 6 把「问题档案」加了进来，Task 7 把「我的词汇」加了进来，
+        // Phase 8 Task 9 把「学习计划」加了进来。
+        // 后续阶段各自往里加自己的那一项，不要把别人加的删掉：Phase 10 加 .upgrade 与 .feedback。
         let implemented = SidebarItem.allCases.filter(\.isImplemented)
         XCTAssertEqual(Set(implemented),
                        [.today, .questionBank, .reviewReports, .history, .retraining, .issues,
-                        .vocabulary])
+                        .vocabulary, .plan])
     }
 
     /// 问题档案页已经做出来了，侧边栏必须点得进去。
@@ -38,6 +38,11 @@ final class NavigationTests: XCTestCase {
     /// 同上，钉住「我的词汇」这一页。
     func testVocabularyPageIsUnlocked() {
         XCTAssertTrue(SidebarItem.vocabulary.isImplemented, "我的词汇页已实现，必须在侧边栏可点")
+    }
+
+    /// 同上，钉住「学习计划」这一页（Phase 8 Task 9）。
+    func testPlanPageIsUnlocked() {
+        XCTAssertTrue(SidebarItem.plan.isImplemented, "学习计划页已实现，必须在侧边栏可点")
     }
 
     func testHistoryHasAMeaningfulTitleAndIcon() {
@@ -68,9 +73,10 @@ final class NavigationTests: XCTestCase {
     func testEveryUnimplementedPageSaysWhatWillBeThereAndWhatToDoNow() {
         let unimplemented = SidebarItem.allCases.filter { !$0.isImplemented }
         // Phase 4 交付「训练记录」之后从 7 降到 6，Phase 6 交付「复训中心」之后降到 5，
-        // Phase 7 Task 6 交付「问题档案」之后降到 4，Task 7 交付「我的词汇」之后降到 3。
+        // Phase 7 Task 6 交付「问题档案」之后降到 4，Task 7 交付「我的词汇」之后降到 3，
+        // Phase 8 Task 9 交付「学习计划」之后降到 2。
         // **这个数字只许降，不许升**——升上去意味着有人把一页已经做出来的又标回了「还没做」。
-        XCTAssertEqual(unimplemented.count, 3)
+        XCTAssertEqual(unimplemented.count, 2)
         for item in unimplemented {
             XCTAssertFalse(item.placeholderDescription.isEmpty,
                            "「\(item.title)」的占位页会是一片空白，用户会以为程序坏了")

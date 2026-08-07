@@ -751,6 +751,86 @@ final class AppStateTests: XCTestCase {
                           + "录音会永远是空的，而所有拿假录音器写的测试都照样全绿。")
     }
 
+    // MARK: - 学习计划页要能写训练数据（Phase 8 Task 9）
+
+    /// **这条钉的是「改了、真的存下来了、页面上也跟着变了」三件事。**
+    ///
+    /// Phase 8 的计划把 `mutate` 判成「无法在单元测试里构造，交给人工验收」，
+    /// 依据是「`AppState.init` 会调 `recheckPermission()` → `AXDriver.preflight()`，
+    /// 而 preflight 会真的启动 ChatGPT」。**这个依据对现在的代码已经不成立**：
+    /// 环境检查早就搬出了 `init`（`testCreatingAppStateDoesNotRunTheEnvironmentCheck` 钉着这件事），
+    /// 而且 `preflight` 是注入进来的。所以这条路径不但测得了，还必须测——
+    /// 它是学习计划页写盘的唯一出口，改坏了用户会以为计划存下来了，重开 App 才发现没有。
+    func testMutateWritesThroughToDiskAndRefreshesWhatThePageReads() throws {
+        let app = AppState(directory: directory, preflight: { .init(ok: true, messages: []) })
+        XCTAssertNil(app.state.plan, "前提就没成立：还没生成计划时 plan 就已经有值了")
+
+        let failure = app.mutate {
+            $0.plan = TrainingPlan(
+                lengthDays: 7, createdAt: "2026-08-07T00:00:00Z",
+                days: [PlanDay(id: 1, questionIds: ["q1"], completedQuestionIds: [])],
+                focusPart: .part2)
+        }
+
+        XCTAssertNil(failure, "写成功了却返回了一段给用户看的说明：" + (failure ?? ""))
+        // 咬的是 `reload()`：不重读的话计划页显示的还是改之前那份，
+        // 用户会以为「生成计划」这颗按钮坏了，再点一次。
+        XCTAssertEqual(app.state.plan?.lengthDays, 7,
+                       "改完没重读，页面上显示的还是改之前那份训练数据")
+        XCTAssertEqual(app.state.plan?.focusPart, .part2)
+        // **这一段是这条测试的牙齿。** 只改内存不落盘的话上面三条照样全绿，
+        // 而用户关掉 App 再打开，辛苦排的计划就没了（与题库导入那条同一个手法）。
+        let onDisk = try StateStore(directory: directory).load()
+        XCTAssertEqual(onDisk.plan?.days.first?.questionIds, ["q1"],
+                       "计划只改了内存没写进 state.json——关掉 App 再打开它就没了")
+        XCTAssertEqual(onDisk.plan?.focusPart, .part2)
+    }
+
+    /// 写盘失败必须说清「发生了什么 + 下一步做什么」，而且必须是中文（铁律 6、7）。
+    ///
+    /// **不能直接把 `error.localizedDescription` 摆给用户**：目录被占、权限不足这类失败
+    /// 抛出来的是系统 NSError，它只说发生了什么，不说下一步，措辞也未必是中文——
+    /// 这正是 `describeLoadFailure` 当初存在的理由，写盘这一侧同样需要。
+    func testMutateSaysWhatFailedAndWhatToDoNextInsteadOfPretendingItSaved() throws {
+        // 数据目录该在的位置被一个同名文件占了，`store.mutate` 必然抛错。
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "ielts-ui-blocked-\(UUID().uuidString)")
+        try Data("这是个文件，不是目录".utf8).write(to: root)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let blocked = DataDirectory(root: root)
+        let app = AppState(directory: blocked, preflight: { .init(ok: true, messages: []) })
+
+        let message = try XCTUnwrap(
+            app.mutate { $0.plan = nil },
+            "写盘失败却返回了 nil。调用方据此认为改动生效了，用户看到的是一句「已生成」，"
+                + "下次打开才发现什么都没变——静默失败里最伤人的一种（铁律 7）。")
+
+        XCTAssertTrue(message.contains("下一步"), "只说失败不说下一步不算合格：" + message)
+        XCTAssertTrue(message.contains(blocked.stateFile.path),
+                      "没指名是哪个文件出了事，用户无从下手：" + message)
+        XCTAssertTrue(message.contains("可写"),
+                      "没告诉用户该去确认什么，「下一步」等于没写：" + message)
+    }
+
+    /// 错误自带中文的「下一步」时**原样交出去，不许再包一层**。
+    ///
+    /// `CoachError` 的每一条消息都是照「发生了什么 + 下一步做什么」写的；
+    /// 外面再套一句「这次改动没能保存：…下一步：确认数据目录可写」，用户会读到两个互相矛盾的
+    /// 「下一步」，而真正该做的那一步被埋在中间。
+    func testMutatePassesThroughAnErrorThatAlreadyCarriesItsOwnChineseNextStep() throws {
+        let app = AppState(directory: directory, preflight: { .init(ok: true, messages: []) })
+        let reason = "题库里没有 Part 2（个人陈述）的题目，生成不了计划。"
+            + "下一步：换一个重点 Part，或到「训练题库」页导入含该 Part 的题目。"
+
+        let message = try XCTUnwrap(app.mutate { _ in throw CoachError.planImpossible(reason) })
+
+        XCTAssertEqual(message, reason,
+                       "错误自带的中文说明被改写了。它是照「发生了什么 + 下一步」写好的，"
+                           + "外面再包一层会让用户读到两个「下一步」。")
+        XCTAssertNil(try StateStore(directory: directory).load().plan,
+                     "改动抛错了却还是写了盘——半截改动落进 state.json 比不改更糟")
+    }
+
     // MARK: - 上面几条用的装置
 
     /// 注入假 Bridge、假采样器与假录音器的 `AppState`。

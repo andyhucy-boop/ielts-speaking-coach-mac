@@ -173,6 +173,48 @@ public final class AppState {
         isCheckingPermission = false
     }
 
+    /// 改训练数据。成功返回 nil；失败返回中文说明（发生了什么 + 下一步）。
+    ///
+    /// **调用方必须把返回的消息显示出来。** 写盘失败却什么都不说，
+    /// 用户会以为改动生效了，下次打开才发现全没了——那正是禁止静默失败要防的事（铁律 7）。
+    /// 刻意不加 `@discardableResult`：忽略返回值时编译器会警告。
+    ///
+    /// 学习计划页的每一次写盘都走这里：生成 / 重新生成 / 删除计划、三项练习偏好。
+    /// 让视图自己开 `StateStore` 的话，App 与命令行就会有两处解析数据目录的地方，
+    /// 而多一处就多一处走岔的机会（与 `applyImport`、`makePracticeRunner` 同一个理由）。
+    ///
+    /// **走 `store.mutate` 而不是改内存里那份 `state`**：`store.mutate` 在锁内重新从磁盘
+    /// 读一遍再写回去，而 `coach practice` 写的是同一个文件。只改内存的话，
+    /// 命令行那边同期写进去的东西会被整份盖掉。
+    public func mutate(_ body: (inout CoachState) throws -> Void) -> String? {
+        do {
+            try store.mutate { try body(&$0) }
+            // 改完必须重读：不重读的话页面显示的还是改之前那份，
+            // 用户会以为按钮没反应，再点一次。
+            reload()
+            return nil
+        } catch {
+            return Self.describeMutationFailure(error, stateFile: directory.stateFile)
+        }
+    }
+
+    /// 把写盘失败翻译成用户能照做的一句话。
+    ///
+    /// **不能直接用 `error.localizedDescription`**，理由与 `describeLoadFailure` 完全相同：
+    /// `CoachError` 自带中文的「下一步」，但目录被占、权限不足之类的失败抛出来的是系统
+    /// NSError，它只说发生了什么，不说下一步做什么，措辞也未必是中文（铁律 6）。
+    ///
+    /// 错误自带「下一步」时**原样交出去**：再包一层的话，用户会读到两个互相矛盾的
+    /// 「下一步」，而真正该做的那一步被埋在中间。
+    static func describeMutationFailure(_ error: any Error, stateFile: URL) -> String {
+        let detail = error.localizedDescription
+        if detail.contains("下一步") { return detail }
+        return "这次改动没能保存：\(detail)（文件：\(stateFile.path)）。"
+            + "下一步：确认这个文件所在的目录存在且可写"
+            + "（默认在「资源库 › Application Support › IELTS Speaking Coach」），然后再试一次；"
+            + "在此之前训练数据保持原样，练习记录与复盘都没有受影响。"
+    }
+
     /// 把一次题库导入并进现有题库、落盘，然后刷新内存里的状态。
     ///
     /// 放在这里而不是让视图自己去开 `StateStore`：`store` 与 `directory` 都是私有的，

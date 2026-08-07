@@ -160,6 +160,7 @@ public struct RootView: View {
                                            requestedReviewSessionID = session.id
                                            app.navigation.selection = .reviewReports
                                        })
+            case .plan: PlanView(app: app)
             case .retraining: RetrainingCenterView(app: app, onGo: { go(to: $0) })
             case .issues: IssueArchiveView(app: app, onGo: { go(to: $0) })
             case .vocabulary: VocabularyView(app: app, onGo: { go(to: $0) })
