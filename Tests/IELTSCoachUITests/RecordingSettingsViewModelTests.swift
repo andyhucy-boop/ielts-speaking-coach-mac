@@ -240,4 +240,26 @@ final class RecordingSettingsViewModelTests: XCTestCase {
 
         XCTAssertNil(viewModel.orphanNotice)
     }
+
+    // MARK: - 跨窗口同步（Phase 10 Task 15 追加）
+
+    /// 录音开关持有自己的 `StateStore`，写完盘之后 `AppState` 并不知道。
+    /// `onChange` 就是那根线。
+    ///
+    /// `preflight` 注入假实现：绝不让测试碰真的 ChatGPT（铁律 5）。
+    /// 计划这里写的是 `checksPermissionOnLaunch: false`，但 `AppState.init` 今天
+    /// 根本不做环境检查（Phase 8 已把它搬到异步的 `startInitialPermissionCheckIfNeeded()`），
+    /// 那个参数没有东西可关——理由详见 `CoachSettingsViewModelTests.makeAppState()`。
+    func testTurningRecordingOnTellsTheMainWindowToRefresh() async throws {
+        let app = AppState(directory: directory, preflight: { .init(ok: true, messages: []) })
+        let viewModel = RecordingSettingsViewModel(
+            store: store, recordings: recordings,
+            authorizer: FakeMicrophoneAuthorizer(current: .granted),
+            onChange: { app.reload() })
+
+        await viewModel.setEnabled(true)
+
+        XCTAssertTrue(app.state.settings.recordingEnabled,
+                      "在设置窗口开了录音，主窗口拿到的 AppState 还是旧的")
+    }
 }

@@ -41,14 +41,23 @@ public final class RecordingSettingsViewModel {
     private let recordings: RecordingStore
     private let authorizer: any MicrophoneAuthorizing
     private let now: () -> Date
+    /// 写完盘之后通知外面。**这一格持有自己的 `StateStore`**，写盘不经过 `AppState`，
+    /// 所以设置窗口要传 `{ app.reload() }`，否则主窗口手上那份 `state` 还是旧的：
+    /// 设置窗口里开关明明开着，主窗口那边照旧当成关的。
+    ///
+    /// **做成回调而不是让这个视图模型去依赖 `AppState`**：一旦依赖，Phase 5 那十几条
+    /// 测试就得先造一个会去启动 ChatGPT 的对象才能跑（铁律 5）。
+    private let onChange: () -> Void
 
     public init(store: StateStore, recordings: RecordingStore,
                 authorizer: any MicrophoneAuthorizing,
-                now: @escaping () -> Date = Date.init) {
+                now: @escaping () -> Date = Date.init,
+                onChange: @escaping () -> Void = {}) {
         self.store = store
         self.recordings = recordings
         self.authorizer = authorizer
         self.now = now
+        self.onChange = onChange
         refresh()
     }
 
@@ -139,6 +148,7 @@ public final class RecordingSettingsViewModel {
         do {
             try store.mutate { state in state.settings = transform(state.settings) }
             refresh()
+            onChange()      // 这一格持有自己的 StateStore，写完盘要让主窗口那个 AppState 重读
             return true
         } catch {
             notice = "设置没能保存：\(error.localizedDescription)"
