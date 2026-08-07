@@ -529,13 +529,17 @@ git commit -m "feat(core): 深链接路由、会话编号与 JSONValue 数值取
 - Consumes: `CoachState`、`Question`、`PracticeSession`、`IssueRecord`、`RetrainingTarget`、`TrainingPlan`、`PlanDay`、`RetrainingPolicy.rank(targets:issues:)`
 - Produces:
   - `public struct PlanProgress: Equatable, Sendable`，字段 `lengthDays: Int`、`completedDays: Int`、`currentDay: Int?`、`todayQuestionIds: [String]`
-  - `public struct DashboardSummary: Equatable, Sendable`，字段 `questionTotal`、`questionPracticed`、`sessionTotal`、`weekDone`、`weekGoal`、`issueTotal`、`vocabularyTotal`（均 `Int`）、`topIssues: [IssueRecord]`、`nextTargets: [RetrainingTarget]`、`plan: PlanProgress?`
+  - `public struct DashboardSummary: Equatable, Sendable`，字段 `questionTotal`、`questionPracticed`、`sessionTotal`、`weekDone`、`weekGoal`、`undatedSessionCount`、`issueTotal`、`vocabularyTotal`（均 `Int`）、`topIssues: [IssueRecord]`、`nextTargets: [RetrainingTarget]`、`plan: PlanProgress?`，以及计算属性 `warnings: [String]`（2026-08-07 复审补入，见下）
   - `DashboardSummary.build(state: CoachState, now: Date, weeklyGoal: Int? = nil, topIssueLimit: Int = 5, targetLimit: Int = 3) -> DashboardSummary` —— `weeklyGoal` 传 nil 时取 `state.settings.weeklyGoal`（Phase 7 Task 1 加的字段）
   - `public enum IssueRanking`：`static func top(_ issues: [IssueRecord], limit: Int) -> [IssueRecord]`
 
 **为什么这段逻辑放 Core 而不是 MCP：** 「不要在 MCP 层重新实现业务逻辑」是本阶段的硬要求。`get_dashboard_data` 需要的聚合（本周练了几次、计划走到第几天、哪些错题最频繁）是**产品逻辑**，Phase 7 的首页统计要用同一套。放 Core，MCP 只做「调一次 + 编码成 JSON」。
 
-**已知的重叠：** Phase 3 的 `TodayViewModel.weekProgress` 里有一份相同的「本周训练次数」算法。本阶段**不动它**（改 UI 会把两个阶段的验收搅在一起）。留给 Phase 7 收口，届时 `TodayViewModel` 改成调 `DashboardSummary` 即可。这里写下来，是为了下次读到两份实现的人知道这不是遗漏。
+**~~已知的重叠：~~（2026-08-07 复审更正，原文已过时，勿照做）** 原文写的是：「Phase 3 的 `TodayViewModel.weekProgress` 里有一份相同的『本周训练次数』算法，本阶段不动它，留给 Phase 7 收口」。**写计划时的这个前提在动手时已经不成立**——Phase 7 已经交付，算法早就收进了 Core 的 `TrainingStats.compute`（`Sources/IELTSCoachCore/Stats/TrainingStats.swift`），`TodayViewModel.weekProgress` 现在只剩一行 `(stats.weeklyDone, stats.weeklyGoal)` 的转发。所以「重叠」不在 UI 与 Core 之间，而会发生在 **Core 内部的两个函数之间**，且两者语义不同：`TrainingStats` 在 `startedAt` 缺失时会退回 `CoachTime.parseDayPrefix(session.id)`（`SessionTimeline` 同样如此），只认 `startedAt` 的写法会把 Phase 4 之前的记录整条漏掉。
+
+**因此本任务的做法是：`DashboardSummary.build` 不自己算本周次数，直接 `TrainingStats.compute(state:now:)` 取 `weeklyDone` 与 `undatedSessionCount`。** Core 里「本周训练次数」只许有一份实现；要改口径就改 `TrainingStats.compute` 那一处。第一版实现照抄了上面这段过时说明、自己写了一份只认 `startedAt` 的 `weekDone`，结果是同一份 state.json，App 首页显示「本周 1/5」、Codex 里 `get_dashboard_data` 回 0/5，两边都不报错（复审记录：`XCTAssertEqual failed: ("0") is not equal to ("1")`）。
+
+**同时补一个诊断字段 `undatedSessionCount` 与 `warnings`：** 首页四格靠 `TrainingStats.undatedSessionCount` 说出「另有 N 场练习读不出时间，没能算进本周」（`TodayViewModel.weekTile`）。MCP 这边如果只吐一个算少了的数字而不给任何提示，就是铁律 7 的静默失败。`warnings` 里的每条都要同时说清「发生了什么」和「下一步做什么」（铁律 6）。
 
 - [ ] **Step 1: 写失败的测试**
 
@@ -696,6 +700,15 @@ final class DashboardSummaryTests: XCTestCase {
 }
 ```
 
+**2026-08-07 复审补入的四条测试**（正文见 `Tests/IELTSCoachCoreTests/DashboardSummaryTests.swift` 的「本周次数必须与首页四格是同一个数」一节）：
+
+| 测试 | 守的是什么 |
+|---|---|
+| `testWeekDoneFallsBackToTheDateInTheSessionIDLikeTheHomeScreenDoes` | `startedAt` 为空、时间只剩在 id 里的记录必须算进本周 |
+| `testWeekDoneAgreesWithTheHomeScreenStatOnTheSameState` | 同一份 state 下 `summary.weekDone == TrainingStats.weeklyDone`，谁改一处漏一处就红 |
+| `testUndatedSessionsAreCountedAndExplainedInsteadOfSilentlyDropped` | 算不进去的场次必须有计数、且 `warnings` 里带「下一步」 |
+| `testNoWarningWhenEverySessionHasATime` | 没问题时不许报警（否则警告失去意义） |
+
 - [ ] **Step 2: 运行，确认失败**
 
 Run: `swift test --filter DashboardSummaryTests`
@@ -751,6 +764,9 @@ public struct DashboardSummary: Equatable, Sendable {
     public let sessionTotal: Int
     public let weekDone: Int
     public let weekGoal: Int
+    /// 诊断字段：startedAt 与 id 都读不出时间、因此进不了任何一周的场次。
+    /// 非 0 时调用方必须把 `warnings` 说给用户听（铁律 7）。
+    public let undatedSessionCount: Int
     public let issueTotal: Int
     public let vocabularyTotal: Int
     public let topIssues: [IssueRecord]
@@ -758,12 +774,20 @@ public struct DashboardSummary: Equatable, Sendable {
     public let plan: PlanProgress?
 
     public init(questionTotal: Int, questionPracticed: Int, sessionTotal: Int, weekDone: Int,
-                weekGoal: Int, issueTotal: Int, vocabularyTotal: Int, topIssues: [IssueRecord],
-                nextTargets: [RetrainingTarget], plan: PlanProgress?) {
+                weekGoal: Int, undatedSessionCount: Int, issueTotal: Int, vocabularyTotal: Int,
+                topIssues: [IssueRecord], nextTargets: [RetrainingTarget], plan: PlanProgress?) {
         self.questionTotal = questionTotal; self.questionPracticed = questionPracticed
         self.sessionTotal = sessionTotal; self.weekDone = weekDone; self.weekGoal = weekGoal
+        self.undatedSessionCount = undatedSessionCount
         self.issueTotal = issueTotal; self.vocabularyTotal = vocabularyTotal
         self.topIssues = topIssues; self.nextTargets = nextTargets; self.plan = plan
+    }
+
+    /// 「这些数字为什么可能偏小」的中文说明。界面与 MCP 都必须原样显示出来。
+    /// 完整文案见 Sources/IELTSCoachCore/Review/DashboardSummary.swift。
+    public var warnings: [String] {
+        guard undatedSessionCount > 0 else { return [] }
+        return ["有 \(undatedSessionCount) 场练习读不出练习时间……下一步：……"]
     }
 
     /// - Parameter weeklyGoal: 传 nil 就用用户在设置里定的那个数
@@ -773,18 +797,12 @@ public struct DashboardSummary: Equatable, Sendable {
     public static func build(state: CoachState, now: Date, weeklyGoal: Int? = nil,
                              topIssueLimit: Int = 5, targetLimit: Int = 3) -> DashboardSummary {
         let goal = weeklyGoal ?? state.settings.weeklyGoal
-        let calendar = Calendar(identifier: .iso8601)
-        let week = calendar.dateInterval(of: .weekOfYear, for: now)
-        // 用 CoachTime.parse 而不是裸的 ISO8601DateFormatter（Phase 7 Task 1）：
-        // 后者解析不了带小数秒的时间戳，那类记录会被静默当成「没有时间」而不计入本周——
-        // 数字算少了却不报错，正是本项目最忌讳的失败形态。
-        //
-        // 解析不出时间的会话不计入本周，但仍计入总数——
-        // 旧数据或手工改过的数据不该让这个数字变成 0 或者崩掉。
-        let weekDone = state.sessions.filter { session in
-            guard let week, let started = CoachTime.parse(session.startedAt) else { return false }
-            return week.contains(started)
-        }.count
+        // 「本周练了几次」不在这里重算，直接取首页四格用的那一份。
+        // 自己再写一遍就会与 TrainingStats 的口径分叉（它在 startedAt 缺失时会退回
+        // 从 session id 的日期前缀取时间），同一份 state.json 首页与 Codex 两个数。
+        // 解析不出时间的场次不计入本周，但仍计入 sessionTotal，并从
+        // stats.undatedSessionCount 带出来报给用户——算少了必须出声（铁律 7）。
+        let stats = TrainingStats.compute(state: state, now: now)
 
         let planProgress = state.plan.map { plan -> PlanProgress in
             let firstIncomplete = plan.days.first { !$0.isComplete && !$0.questionIds.isEmpty }
@@ -798,8 +816,9 @@ public struct DashboardSummary: Equatable, Sendable {
             questionTotal: state.questions.count,
             questionPracticed: state.questions.filter { $0.status == "practiced" }.count,
             sessionTotal: state.sessions.count,
-            weekDone: weekDone,
+            weekDone: stats.weeklyDone,
             weekGoal: goal,
+            undatedSessionCount: stats.undatedSessionCount,
             issueTotal: state.issues.count,
             vocabularyTotal: state.vocabulary.count,
             topIssues: IssueRanking.top(state.issues, limit: topIssueLimit),
@@ -821,9 +840,12 @@ Expected: PASS（11 个测试）
 |---|---|
 | `firstIncomplete` 的条件里去掉 `!$0.isComplete`（永远取第一天） | `testPlanProgressPointsAtTheFirstIncompleteDay` |
 | `IssueRanking.top` 里的 `occurrences > ` 改成 `occurrences < ` | `testTopIssuesAreOrderedByOccurrencesAndTruncated` |
-| `weekDone` 那段的 `week.contains(started)` 改成 `true` | `testWeekProgressCountsOnlyThisWeek` |
+| `TrainingStats.compute` 里的 `week.contains(started)` 恒为真（本周次数现在从那里来） | `testWeekProgressCountsOnlyThisWeek` |
+| `TrainingStats.compute` 里去掉 `?? CoachTime.parseDayPrefix(session.id)` 兜底 | `testWeekDoneFallsBackToTheDateInTheSessionIDLikeTheHomeScreenDoes` |
+| `undatedSessionCount: stats.undatedSessionCount` 改成 `0` | `testUndatedSessionsAreCountedAndExplainedInsteadOfSilentlyDropped` |
+| `warnings` 恒返回 `[]` / 去掉文案里的「下一步」 | 同上 |
 
-改回后确认全绿，三次输出写进报告。
+改回后确认全绿，每次输出写进报告。
 
 - [ ] **Step 6: 提交**
 
@@ -3217,6 +3239,8 @@ git commit -m "feat(mcp): save_session_review（先落盘再解析，归档 0 �
 
 **`get_dashboard_data` 里没有一行统计逻辑**——全在 Task 2 的 `DashboardSummary` 里。这个 tool 只做「调一次 + 编码成 JSON + 写一句下一步」。**如果实现时发现要在这里算什么，说明该算的东西没放进 Core。**
 
+**2026-08-07 复审补入（Task 2 改动带来的连带要求）：** `DashboardSummary` 多了 `undatedSessionCount` 与 `warnings`。`weekDone` 在有「读不出时间」的场次时会比用户实际练的次数少，App 首页会在四格里把这件事说出来（`TodayViewModel.weekTile`）。**这里必须同样说出来**：`Payload` 加一个 `undatedSessionCount: Int` 字段，`note` 末尾拼上 `summary.warnings.joined()`。只吐一个算少了的数字而不提一个字，就是铁律 7 的静默失败。下面的 `Payload` 与 `note` 代码块已按此写，测试也要补一条：造一条 `startedAt` 为空、id 也不带日期的 session，断言 `payload["undatedSessionCount"]?.intValue == 1` 且 `note` 里出现「读不出」与「下一步」。
+
 **`transcriptTurns` 现在恒为 0**：逐字稿是 Phase 4 的事，`PracticeSession.transcript` 目前不会被填。字段先留着并如实返回 0，好过将来加字段改协议。
 
 - [ ] **Step 1: 写失败的测试**
@@ -3568,6 +3592,8 @@ enum GetDashboardDataTool {
         let sessionTotal: Int
         let weekDone: Int
         let weekGoal: Int
+        /// 读不出练习时间、因此没算进 weekDone 的场次数。非 0 时 note 里必须解释。
+        let undatedSessionCount: Int
         let issueTotal: Int
         let vocabularyTotal: Int
         let plan: PlanBrief?
@@ -3597,7 +3623,7 @@ enum GetDashboardDataTool {
                 state.questions.first { $0.id == id }
             }.map { QuestionBrief(id: $0.id, part: $0.part, topic: $0.topic, prompt: $0.prompt) }
 
-            let note: String
+            var note: String
             if summary.questionTotal == 0 {
                 note = "题库还是空的，现在还没法开练。下一步：在 App 的「训练题库」页导入题库文件，"
                     + "或在终端运行 coach questions import <文件>。"
@@ -3607,6 +3633,8 @@ enum GetDashboardDataTool {
                 note = "下一步：用 set_training_selection 选定 todayQuestions 里的一道题，"
                     + "再用 get_training_context 取考官提示词。"
             }
+            // 本周次数可能算少了。少了就必须说，且要说下一步怎么补（铁律 6、7）。
+            note += summary.warnings.joined()
 
             return try ToolJSON.text(Payload(
                 learnerName: state.learner.displayName,
@@ -3616,6 +3644,7 @@ enum GetDashboardDataTool {
                 sessionTotal: summary.sessionTotal,
                 weekDone: summary.weekDone,
                 weekGoal: summary.weekGoal,
+                undatedSessionCount: summary.undatedSessionCount,
                 issueTotal: summary.issueTotal,
                 vocabularyTotal: summary.vocabularyTotal,
                 plan: summary.plan.map { PlanBrief(lengthDays: $0.lengthDays,

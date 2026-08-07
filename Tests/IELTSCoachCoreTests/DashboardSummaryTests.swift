@@ -72,6 +72,71 @@ final class DashboardSummaryTests: XCTestCase {
         XCTAssertEqual(summary.sessionTotal, 1)
     }
 
+    // MARK: - 本周次数必须与首页四格是同一个数（2026-08-07 复审补入）
+
+    /// Phase 4 之前的数据、或写入时漏了 `startedAt` 的记录，时间只剩在 id 的日期前缀里
+    /// （`SessionTimelineTests.testFallsBackToDatePrefixOfTheIDWhenStartedAtIsEmpty` 里
+    /// 说的就是这种真实数据）。`TrainingStats`（首页四格）会退回从 id 取时间，
+    /// 这里也必须退回：否则同一份 state.json，App 首页显示「本周 1/5」、
+    /// Codex 里问 `get_dashboard_data` 回 0/5，两边都不报错，用户无从判断谁是真的。
+    func testWeekDoneFallsBackToTheDateInTheSessionIDLikeTheHomeScreenDoes() {
+        var state = CoachState.empty()
+        state.sessions = [session("2026-08-05-001", startedAt: "")]
+        let summary = DashboardSummary.build(state: state, now: date("2026-08-05T12:00:00Z"))
+        XCTAssertEqual(summary.weekDone, 1, "startedAt 空但 id 带日期的记录必须算进本周")
+        XCTAssertEqual(summary.undatedSessionCount, 0, "它的时间读得出来，不该算成「读不出时间」")
+    }
+
+    /// 直接把两个数放在一起比。谁改了其中一处而没改另一处，这条就红。
+    func testWeekDoneAgreesWithTheHomeScreenStatOnTheSameState() {
+        // 各条日期离周界都超过 14 小时，任何时区下都不会漂到隔壁周。
+        var state = CoachState.empty()
+        state.sessions = [
+            session("2026-08-05-001", startedAt: ""),                     // 时间只在 id 里
+            session("2026-08-04-001", startedAt: "2026-08-04T12:00:00Z"), // 本周
+            session("2026-07-20-001", startedAt: "2026-07-20T12:00:00Z"), // 上上周
+            session("sync-1754123456", startedAt: "")                     // 两处都读不出时间
+        ]
+        let now = date("2026-08-05T12:00:00Z")
+        let stats = TrainingStats.compute(state: state, now: now)
+        let summary = DashboardSummary.build(state: state, now: now)
+
+        XCTAssertEqual(summary.weekDone, stats.weeklyDone,
+                       "App 首页与 MCP 的 get_dashboard_data 必须是同一个数")
+        XCTAssertEqual(summary.weekDone, 2)
+        XCTAssertEqual(summary.undatedSessionCount, stats.undatedSessionCount)
+        XCTAssertEqual(summary.undatedSessionCount, 1)
+        XCTAssertEqual(summary.sessionTotal, 4, "读不出时间也还是练过的一场")
+    }
+
+    /// 数字算少了却一个字都不报，正是本项目最忌讳的失败形态（铁律 7）。
+    /// 首页四格会说「另有 N 场练习读不出时间，没能算进本周」，
+    /// MCP 这边必须有同一句话可说，否则用户在 Codex 里看到的少一次也不知道。
+    func testUndatedSessionsAreCountedAndExplainedInsteadOfSilentlyDropped() throws {
+        var state = CoachState.empty()
+        state.sessions = [session("weird", startedAt: "上周三下午"),
+                          session("2026-08-05-002", startedAt: "2026-08-05T12:00:00Z")]
+        let summary = DashboardSummary.build(state: state, now: date("2026-08-05T12:00:00Z"))
+        XCTAssertEqual(summary.weekDone, 1)
+        XCTAssertEqual(summary.sessionTotal, 2)
+        XCTAssertEqual(summary.undatedSessionCount, 1)
+
+        let warning = try XCTUnwrap(summary.warnings.first, "有算不进去的场次就必须有话说")
+        XCTAssertTrue(warning.contains("1 场"), "要说清楚是几场，光说「有数据读不出来」没法核对：\(warning)")
+        XCTAssertTrue(warning.contains("下一步"),
+                      "只说发生了什么、不说下一步做什么，等于没说（铁律 6）：\(warning)")
+    }
+
+    func testNoWarningWhenEverySessionHasATime() {
+        var state = CoachState.empty()
+        state.sessions = [session("2026-08-05-001", startedAt: "2026-08-05T12:00:00Z"),
+                          session("2026-08-04-001", startedAt: "")]
+        let summary = DashboardSummary.build(state: state, now: date("2026-08-05T12:00:00Z"))
+        XCTAssertEqual(summary.undatedSessionCount, 0)
+        XCTAssertTrue(summary.warnings.isEmpty,
+                      "没有出问题就别报警——次次都喊，真出问题时没人会看：\(summary.warnings)")
+    }
+
     func testPlanProgressPointsAtTheFirstIncompleteDay() throws {
         var state = CoachState.empty()
         let questions = (1...14).map { question("q\($0)") }
