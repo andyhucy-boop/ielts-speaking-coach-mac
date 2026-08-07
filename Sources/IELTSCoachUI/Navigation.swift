@@ -43,9 +43,10 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Sendable {
     /// 而不是空白——空白会让用户以为坏了。
     public var isImplemented: Bool {
         switch self {
-        // Phase 4 加了 .history，Phase 6 加了 .retraining，Phase 7 Task 6 加了 .issues。
-        // 后续阶段各自往这里加自己的那一项，不要删别人的。
-        case .today, .questionBank, .reviewReports, .history, .retraining, .issues: return true
+        // Phase 4 加了 .history，Phase 6 加了 .retraining，Phase 7 Task 6 加了 .issues、
+        // Task 7 加了 .vocabulary。后续阶段各自往这里加自己的那一项，不要删别人的。
+        case .today, .questionBank, .reviewReports, .history, .retraining, .issues,
+             .vocabulary: return true
         default: return false
         }
     }
@@ -64,15 +65,12 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Sendable {
     /// 已实现的页面不需要占位说明，返回空串。
     public var placeholderDescription: String {
         switch self {
-        case .today, .questionBank, .reviewReports, .history, .retraining, .issues: return ""
+        case .today, .questionBank, .reviewReports, .history, .retraining, .issues,
+             .vocabulary: return ""
         case .plan:
             return "将来在这里选 7/14/30 天周期、定重点 Part，并看每日拆分。"
                 + "下一步：计划页做出来之前，先到「今日训练」照常练；练过的都会留着，"
                 + "将来排计划时直接接上。"
-        case .vocabulary:
-            return "将来在这里看积累的词汇，并导出到 Anki。"
-                + "下一步：先到「复盘报告」看每次练习给出的词汇升级建议；"
-                + "想现在就背，可以自己先抄下来。"
         case .upgrade:
             return "将来在这里看新版本与更新说明。"
                 + "下一步：这一页没做完不影响任何功能，直接到「今日训练」继续练即可。"
@@ -93,9 +91,9 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Sendable {
     /// 已实现的页面返回 nil——那儿不该冒出一个劝用户走开的按钮。
     public var placeholderFallback: SidebarItem? {
         switch self {
-        case .today, .questionBank, .reviewReports, .history, .retraining, .issues: return nil
+        case .today, .questionBank, .reviewReports, .history, .retraining, .issues,
+             .vocabulary: return nil
         case .plan, .upgrade, .feedback: return .today
-        case .vocabulary: return .reviewReports
         }
     }
 

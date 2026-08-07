@@ -139,6 +139,7 @@ public struct RootView: View {
                                        })
             case .retraining: RetrainingCenterView(app: app, onGo: { go(to: $0) })
             case .issues: IssueArchiveView(app: app, onGo: { go(to: $0) })
+            case .vocabulary: VocabularyView(app: app, onGo: { go(to: $0) })
             default: PlaceholderView(item: current, onGo: { go(to: $0) })
             }
         }
