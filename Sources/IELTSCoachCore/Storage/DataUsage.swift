@@ -23,8 +23,13 @@ public struct DataUsageReport: Equatable, Sendable {
     }
 
     /// 复用 Phase 5 的格式化，不另写一份 —— 两份会给出两个不同的数字。
+    ///
+    /// 空状态也要给下一步：这句话会显示在设置的「数据与隐私」和问题反馈的诊断信息里，
+    /// 只说「还没有任何数据」会让人以为是读失败了，或者不知道怎么才能让这里长出东西。
     public var summaryText: String {
-        guard fileCount > 0 else { return "还没有任何数据（0 字节）。" }
+        guard fileCount > 0 else {
+            return "还没有任何数据（0 字节）。下一步：回主界面练一场，复盘和录音就会存到这里。"
+        }
         return "共 \(RecordingUsage.humanReadable(bytes: totalBytes))、\(fileCount) 个文件"
             + "（录音 \(RecordingUsage.humanReadable(bytes: recordingBytes))、"
             + "复盘 \(RecordingUsage.humanReadable(bytes: reportBytes))）。"
