@@ -171,9 +171,16 @@ final class DesignTokenSweepTests: XCTestCase {
     /// 单行豁免（`// 设计令牌豁免：<理由>`）是留给「确有正当理由用字面值」那一处的口子。
     /// 口子一开就得有人数着，否则它会从「一处特例」长成「哪儿红就往哪儿贴」。
     ///
-    /// **现在全模块是 0 处。** 要新增就得同时改这个数字——那是一次显式的、
+    /// **现在全模块是 1 处**，记在案的就是它：
+    ///
+    /// - `DesignSystem/ContrastMath.swift` 里 `components(_:)` 那一行的 `NSColor(color)`。
+    ///   颜色规则是冲着「视图里绕开令牌自己调色」来的，而这个文件不画界面——
+    ///   它是量对比度的尺子。要读出一个 SwiftUI `Color` 在 sRGB 下的四个分量，
+    ///   除了先转成 `NSColor` 没有别的路；这一处不转，整套「≥ 4.5:1」的守卫就没有输入。
+    ///
+    /// 要再新增就得同时改这个数字——那是一次显式的、
     /// 会被复审看见的动作，而不是随手加一行注释就把守卫关掉。
-    static let exemptionCeiling = 0
+    static let exemptionCeiling = 1
 
     func testLineLevelExemptionsAreCountedAndAlwaysGiveAReason() throws {
         var all: [(path: String, exemption: SourceGuard.Exemption)] = []

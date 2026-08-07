@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 import SwiftUI
 import XCTest
@@ -6,194 +5,17 @@ import XCTest
 @testable import IELTSCoachUI
 
 /// 设计规范（`docs/superpowers/DESIGN-SYSTEM.md`）里唯一能自动验证的部分：
-/// **对比度**和**间距刻度**。其余（留白是否舒服、卡片好不好看）只能人工验收（Task 11）。
+/// **间距刻度**与**字体表**。其余（留白是否舒服、卡片好不好看）只能人工验收（Task 11）。
 ///
-/// 对比度值得测，是因为它恰恰是「说不上哪儿不对」的那类问题：
-/// 灰上加灰不会让人指出「这里只有 2.8:1」，只会让人觉得界面有点糊、有点廉价。
+/// **对比度不在这里了。** Phase 3 的那几条对比度测试
+/// （`testAlphaIsCompositedInsteadOfIgnored`、`testPrimaryTextMeetsAA`、
+/// `testSecondaryTextAlsoMeetsAA`、`testTextOnAccentMeetsAA`、`testSidebarTextMeetsAA`、
+/// `testSemanticColorsAreReadableAsText`、`testEveryColorTokenIsClassifiedAndTextTokensMeetAA`）
+/// 已经**逐条**并进 `AppearanceContrastTests`：那份矩阵对浅色跑的是同样的配对，
+/// 外加深色那一半，用的也是会合成 alpha 的算法（`ContrastMath`），
+/// 「每个令牌都必须被显式归类」那条完整性守卫也一起搬了过去、并扩到两套外观。
+/// **这是收紧，不是放松。**
 final class DesignSystemTests: XCTestCase {
-
-    // MARK: - 量对比度的尺子
-
-    /// WCAG 相对亮度。**不看 alpha**——调用方负责先合成。
-    private func luminance(red: Double, green: Double, blue: Double) -> Double {
-        func channel(_ c: Double) -> Double {
-            c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
-        }
-        return 0.2126 * channel(red) + 0.7152 * channel(green) + 0.0722 * channel(blue)
-    }
-
-    private func components(_ color: Color) -> (r: Double, g: Double, b: Double, a: Double) {
-        // 取不出分量时返回全 NaN。**不要改成「取不出就当黑色」**——那会让对比度
-        // 变得非常好看，而 NaN 会让任何 XCTAssertGreaterThanOrEqual 当场失败，这正是想要的。
-        guard let ns = NSColor(color).usingColorSpace(.sRGB) else {
-            return (.nan, .nan, .nan, .nan)
-        }
-        return (Double(ns.redComponent), Double(ns.greenComponent),
-                Double(ns.blueComponent), Double(ns.alphaComponent))
-    }
-
-    /// 前景压在背景上之后的对比度。背景必须是不透明令牌。
-    ///
-    /// **这三行合成就是这个函数存在的意义。** 删掉它们，
-    /// 所有半透明令牌（textSecondary、sidebarText、cardBorder）都会「永远达标」，
-    /// 下面几条断言全部退化成空转。
-    private func contrast(_ foreground: Color, on background: Color) -> Double {
-        let fg = components(foreground)
-        let bg = components(background)
-        let r = fg.r * fg.a + bg.r * (1 - fg.a)
-        let g = fg.g * fg.a + bg.g * (1 - fg.a)
-        let b = fg.b * fg.a + bg.b * (1 - fg.a)
-        let front = luminance(red: r, green: g, blue: b)
-        let back = luminance(red: bg.r, green: bg.g, blue: bg.b)
-        return (max(front, back) + 0.05) / (min(front, back) + 0.05)
-    }
-
-    // MARK: - 先守住尺子本身
-
-    /// 半透明前景必须被合成，而不是被当成不透明色。
-    /// 56% 黑压在白底上观感等同 #747474，约 4.94:1；忽略 alpha 会算成 21:1。
-    ///
-    /// 这条守的是下面所有断言的有效性：尺子量不准的话，
-    /// 「textSecondary 必须 ≥ 4.5:1」会变成一条永远绿的空转测试，而且没人会去看它。
-    func testAlphaIsCompositedInsteadOfIgnored() {
-        let ratio = contrast(Color.black.opacity(0.56), on: .white)
-        XCTAssertEqual(ratio, 4.94, accuracy: 0.2)
-        XCTAssertLessThan(ratio, 6.0, "把半透明前景当成不透明色算了")
-        // 两个已知值，钉住这把尺子的刻度本身（不透明色不受合成影响）
-        XCTAssertEqual(contrast(.black, on: .white), 21, accuracy: 0.01)
-        XCTAssertEqual(contrast(.white, on: .white), 1, accuracy: 0.01)
-    }
-
-    // MARK: - 对比度底线（DESIGN-SYSTEM 第 2 节，不可协商）
-
-    func testPrimaryTextMeetsAA() {
-        XCTAssertGreaterThanOrEqual(contrast(Palette.textPrimary, on: Palette.canvas), 4.5)
-        XCTAssertGreaterThanOrEqual(contrast(Palette.textPrimary, on: Palette.card), 4.5)
-    }
-
-    func testSecondaryTextAlsoMeetsAA() {
-        // 次要文字仍然是要读的，不能降到 3:1。
-        // 灰上加灰是让界面显廉价的头号原因。
-        XCTAssertGreaterThanOrEqual(contrast(Palette.textSecondary, on: Palette.card), 4.5)
-        XCTAssertGreaterThanOrEqual(contrast(Palette.textSecondary, on: Palette.canvas), 4.5)
-    }
-
-    func testTextOnAccentMeetsAA() {
-        XCTAssertGreaterThanOrEqual(contrast(Palette.textOnAccent, on: Palette.accent), 4.5)
-    }
-
-    func testSidebarTextMeetsAA() {
-        XCTAssertGreaterThanOrEqual(contrast(Palette.sidebarText, on: Palette.sidebarBackground), 4.5)
-        XCTAssertGreaterThanOrEqual(
-            contrast(Palette.sidebarTextSelected, on: Palette.sidebarBackground), 4.5)
-    }
-
-    /// 语义色也要读得清。Phase 8 会用 `Palette.warning` 显示一段中文正文，
-    /// 那是正文不是装饰——设计稿的原值只有 2.72:1，进不了这条线。
-    func testSemanticColorsAreReadableAsText() {
-        for (name, color) in [("success", Palette.success),
-                              ("warning", Palette.warning),
-                              ("danger", Palette.danger)] {
-            XCTAssertGreaterThanOrEqual(contrast(color, on: Palette.card), 4.5, "\(name) 对卡片")
-            XCTAssertGreaterThanOrEqual(contrast(color, on: Palette.canvas), 4.5, "\(name) 对内容区底色")
-        }
-    }
-
-    // MARK: - 颜色表的完整性
-
-    /// 每个颜色令牌 → 它本身。**这份映射存在的唯一理由是 Swift 取不到 enum 静态成员的名字**，
-    /// 而下面那条测试要按名字把「源码里声明了什么」和「测试里检查了什么」对起来。
-    ///
-    /// 它自己会被对着 `Palette.swift` 校验（少一个、多一个、改了名都红），
-    /// 所以它不是又一份会悄悄过期的手写清单。
-    private static let colorTokens: [String: Color] = [
-        "accent": Palette.accent,
-        "sidebarBackground": Palette.sidebarBackground,
-        "sidebarText": Palette.sidebarText,
-        "sidebarTextSelected": Palette.sidebarTextSelected,
-        "canvas": Palette.canvas,
-        "card": Palette.card,
-        "cardBorder": Palette.cardBorder,
-        "textPrimary": Palette.textPrimary,
-        "textSecondary": Palette.textSecondary,
-        "textOnAccent": Palette.textOnAccent,
-        "success": Palette.success,
-        "warning": Palette.warning,
-        "danger": Palette.danger
-    ]
-
-    /// 会被当成文字画出来的令牌 → 它会压在哪些底色上。每一对都得过 4.5:1。
-    ///
-    /// `accent` 也在这里：`PrimaryActionCard` 的按钮就是白底紫字（`Components.swift`），
-    /// 所以它既是底色也是文字色。
-    private static let textTokensOnBackgrounds: [String: [String]] = [
-        "textPrimary": ["canvas", "card"],
-        "textSecondary": ["canvas", "card"],
-        "textOnAccent": ["accent"],
-        "sidebarText": ["sidebarBackground"],
-        "sidebarTextSelected": ["sidebarBackground"],
-        "success": ["canvas", "card"],
-        "warning": ["canvas", "card"],
-        "danger": ["canvas", "card"],
-        "accent": ["card"]
-    ]
-
-    /// 从不当文字用的令牌。列在这里是一次显式的判断，不是「忘了检查」——
-    /// `cardBorder` 是 8% 黑的发丝边框（第 4 节），按文字标准量它必然不达标，
-    /// 但它本来就不是给人读的。
-    private static let nonTextTokens: Set<String> = [
-        "canvas", "card", "sidebarBackground", "cardBorder"
-    ]
-
-    /// **上面那些对比度断言是一份手写清单，这条守的是它的完整性。**
-    ///
-    /// 实测：往 `Palette` 里加一个 `subtle = Color.black.opacity(0.28)`（约 2.3:1）
-    /// 并在 `EmptyStateView` 上用它 —— 全套 429 条一条不红。铁律 6 只要求「视图走令牌」，
-    /// 而这个新令牌确实是令牌，于是扫描放行；对比度那几条又只认名字写死的那几个。
-    /// 「灰上加灰」就这么从正门走进来了。
-    ///
-    /// 所以：`Palette.swift` 里声明的每一个令牌，都必须在这里被显式归类，
-    /// 归成文字色的就当场量对比度。新增一个令牌 → 名单对不上 → 红，逼人做这个判断。
-    func testEveryColorTokenIsClassifiedAndTextTokensMeetAA() throws {
-        let declared = Set(try SourceGuard.declaredTokenNames(
-            inEnum: "Palette", of: try SourceGuard.code("DesignSystem/Palette.swift")))
-        XCTAssertGreaterThanOrEqual(declared.count, 13,
-                                    "只解析到 \(declared.count) 个颜色令牌，疑似空转")
-
-        XCTAssertEqual(
-            declared, Set(Self.colorTokens.keys),
-            "`Palette.swift` 里声明的令牌和这个测试文件里的映射对不上（多出来或少掉的那个"
-                + "现在没有任何对比度断言管得着）。下一步：同步 `colorTokens`。")
-        XCTAssertEqual(
-            declared, Set(Self.textTokensOnBackgrounds.keys).union(Self.nonTextTokens),
-            "有令牌既没被归成文字色、也没被归成非文字色。下一步：想清楚它会不会被人读——"
-                + "会读就写进 `textTokensOnBackgrounds` 并指明压在哪个底色上，"
-                + "不会读就写进 `nonTextTokens`。不许因为「不好过」就归到后者（铁律 8）。")
-        XCTAssertTrue(
-            Set(Self.textTokensOnBackgrounds.keys).isDisjoint(with: Self.nonTextTokens),
-            "同一个令牌既归了文字色又归了非文字色，归类失去意义")
-
-        var pairs = 0
-        for (name, backgrounds) in Self.textTokensOnBackgrounds {
-            guard let foreground = Self.colorTokens[name] else {
-                XCTFail("`\(name)` 不在 colorTokens 里，量不了对比度")
-                continue
-            }
-            for background in backgrounds {
-                guard let base = Self.colorTokens[background] else {
-                    XCTFail("`\(name)` 声称压在 `\(background)` 上，但那不是个颜色令牌")
-                    continue
-                }
-                pairs += 1
-                XCTAssertGreaterThanOrEqual(
-                    contrast(foreground, on: base), 4.5,
-                    "`\(name)` 压在 `\(background)` 上只有 "
-                        + String(format: "%.2f", contrast(foreground, on: base))
-                        + ":1，低于第 2 节那条不可协商的 4.5:1。")
-            }
-        }
-        XCTAssertGreaterThanOrEqual(pairs, 13, "只量了 \(pairs) 对，这条测试很可能在空转")
-    }
 
     // MARK: - 间距刻度（DESIGN-SYSTEM 第 3 节）
 
@@ -201,6 +23,12 @@ final class DesignSystemTests: XCTestCase {
         for value in [Spacing.xs, Spacing.sm, Spacing.md, Spacing.lg, Spacing.xl, Spacing.section] {
             XCTAssertEqual(value.truncatingRemainder(dividingBy: 4), 0, "\(value) 不是 4 的倍数")
         }
+    }
+
+    func testRadiusScaleIsOrdered() {
+        // 控件比卡片更圆或一样圆，会让按钮看起来像卡片。
+        XCTAssertLessThan(Radius.control, Radius.card)
+        XCTAssertGreaterThan(Radius.pill, Radius.card)
     }
 
     /// 逐个钉住取值。**上面那条「是 4 的倍数」远远不够**：实测把 `Spacing.lg` 从 24 改成 8、

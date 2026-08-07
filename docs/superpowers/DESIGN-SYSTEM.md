@@ -53,30 +53,58 @@
 
 从设计稿提取。**全部定义为语义令牌**，视图里只能引用令牌名。
 
+**两套静态取值 + 一组随系统外观解析的动态令牌**（Phase 10 Task 12）。视图只引用
+`Palette.accent` 那一组动态令牌，一行都不用管当前是浅色还是深色；测试只认
+`Palette.light` / `Palette.dark` 这两套静态值——动态颜色会按「跑测试那一刻的系统外观」
+解析，拿它去算对比度的话，「深色的对比度测试」在浅色机器上永远是绿的。
+
 ```swift
+public enum Appearance: String, CaseIterable, Sendable { case light, dark }
+
+public struct PaletteTokens: Equatable, Sendable {
+    public let accent, sidebarBackground, sidebarText, sidebarTextSelected: Color
+    public let canvas, card, cardBorder: Color
+    public let textPrimary, textSecondary, textOnAccent: Color
+    public let success, warning, danger: Color
+}
+
 public enum Palette {
-    // 品牌主色。设计稿里的紫色，用于主按钮、选中态、强调数字
-    public static let accent = Color(red: 0.361, green: 0.318, blue: 0.910)      // #5C51E8
+    /// 浅色。取值来自设计稿，只有 success 与 warning 按对比度底线调深过。
+    public static let light = PaletteTokens(
+        accent: Color(red: 0.361, green: 0.318, blue: 0.910),            // #5C51E8
+        sidebarBackground: Color(red: 0.133, green: 0.118, blue: 0.239), // #221E3D
+        sidebarText: Color.white.opacity(0.72),                          // 对侧边栏底 8.82:1
+        sidebarTextSelected: .white,                                     // 15.89:1
+        canvas: Color(red: 0.957, green: 0.957, blue: 0.969),            // #F4F4F7
+        card: .white,
+        cardBorder: Color.black.opacity(0.08),
+        textPrimary: Color(red: 0.07, green: 0.07, blue: 0.09),          // 对卡片 18.69:1
+        textSecondary: Color.black.opacity(0.56),                        // 对卡片 4.94:1
+        textOnAccent: .white,                                            // 对主色 5.52:1
+        success: Color(red: 0.09, green: 0.50, blue: 0.27),              // 5.02:1 / 4.58:1
+        warning: Color(red: 0.60, green: 0.39, blue: 0.02),              // 5.05:1 / 4.60:1
+        danger: Color(red: 0.80, green: 0.20, blue: 0.20))               // 5.14:1 / 4.68:1
 
-    // 侧边栏。设计稿里的深色导航条
-    public static let sidebarBackground = Color(red: 0.133, green: 0.118, blue: 0.239)  // #221E3D
-    public static let sidebarText = Color.white.opacity(0.72)
-    public static let sidebarTextSelected = Color.white
+    /// 深色。**每一个值都是降饱和的色调变体，不是反色。**
+    public static let dark = PaletteTokens(
+        accent: Color(red: 0.651, green: 0.631, blue: 0.878),            // 对卡片 6.92:1
+        sidebarBackground: Color(red: 0.106, green: 0.094, blue: 0.188),
+        sidebarText: Color.white.opacity(0.78),                          // 对侧边栏底 10.80:1
+        sidebarTextSelected: .white,                                     // 17.22:1
+        canvas: Color(red: 0.078, green: 0.078, blue: 0.102),
+        card: Color(red: 0.118, green: 0.118, blue: 0.149),              // 比底色亮，卡片才不是个洞
+        cardBorder: Color.white.opacity(0.14),
+        textPrimary: Color(red: 0.929, green: 0.929, blue: 0.949),       // 对卡片 14.16:1
+        textSecondary: Color.white.opacity(0.70),                        // 对卡片 8.68:1
+        textOnAccent: Color(red: 0.078, green: 0.078, blue: 0.102),      // 对主色 7.68:1
+        success: Color(red: 0.42, green: 0.79, blue: 0.56),              // 8.20:1 / 9.11:1
+        warning: Color(red: 0.95, green: 0.74, blue: 0.35),              // 9.59:1 / 10.65:1
+        danger: Color(red: 0.98, green: 0.53, blue: 0.51))               // 6.97:1 / 7.75:1
 
-    // 内容区
-    public static let canvas = Color(red: 0.957, green: 0.957, blue: 0.969)      // #F4F4F7
-    public static let card = Color.white
-    public static let cardBorder = Color.black.opacity(0.08)
+    public static func tokens(for appearance: Appearance) -> PaletteTokens { … }
 
-    // 文字
-    public static let textPrimary = Color(red: 0.07, green: 0.07, blue: 0.09)    // #121217
-    public static let textSecondary = Color.black.opacity(0.56)
-    public static let textOnAccent = Color.white
-
-    // 语义。**取值已按实测对比度调深过，见下方说明**
-    public static let success = Color(red: 0.09, green: 0.50, blue: 0.27)   // 约 5.02:1 / 4.58:1
-    public static let warning = Color(red: 0.60, green: 0.39, blue: 0.02)   // 约 5.05:1 / 4.60:1
-    public static let danger = Color(red: 0.80, green: 0.20, blue: 0.20)    // 约 5.14:1 / 4.68:1
+    // 视图用这一组：名字与类型跟以前完全一样，只是会跟着系统外观自己解析。
+    public static let accent = dynamic(\.accent)   // …以下 13 个同理
 }
 ```
 
@@ -84,6 +112,11 @@ public enum Palette {
 都进不了下面那条「不可协商」的 4.5:1。这两个颜色不是装饰——它们要承载中文正文
 （例如「本周已完成」「这份 PDF 可能是扫描件」），读不清就是缺陷。所以调深到刚过线，
 色相保持不变。**看着比设计稿沉一点是刻意的，不是调色失误。**
+
+**深色下这两个色反而调亮并降了饱和**（success `(0.42, 0.79, 0.56)`、warning
+`(0.95, 0.74, 0.35)`）：同一个色相在近黑底色上要往亮的一侧走才读得清。
+深色主色也因此翻了一次面——主色调亮到 `#A6A1E0` 之后，压在它上面的文字必须是近黑，
+白字只有 2.7:1。一个令牌不可能同时满足「主色当文字用」和「白字压在主色上」。
 
 > ### ⚠️ 上面 `success` 与 `warning` 两个取值不达标（2026-08-06 跨阶段复审记，**待用户确认后改写本节**）
 >
@@ -102,13 +135,15 @@ public enum Palette {
 
 ### 深色模式
 
-**Phase 3 只做浅色，但所有颜色必须走令牌**，这样加深色模式时只改这一个文件，不用翻遍所有视图。
+**Phase 10 Task 12 已实现**：两套静态取值（`Palette.light` / `Palette.dark`）+ 跟随系统外观的动态令牌，
+**不提供手动切换**（理由见 Phase 10 Task 13）。视图侧一行都不用改——`Palette.accent` 那一组名字与类型
+都没变，只是改成由 AppKit 的动态颜色在绘制时按当前外观解析。
 
-**不要用反色实现深色模式**——深色下要用降饱和的色调变体，并单独验证对比度。
+Phase 3 那条「所有颜色必须走令牌」的规矩，回报就在这里：深色模式只改了 `Palette.swift` 一个文件。
 
-> **归属更正（2026-08-06）：** 本节原写「Phase 7 加深色模式」。Phase 7 明确没做，8/9 也没接。
-> 跨阶段决策 7 已把深色模式收口到 **Phase 10 Task 12 / 13**：两套静态取值（`Palette.light` / `Palette.dark`）
-> + 跟随系统外观的动态令牌，**不提供手动切换**（理由见 Phase 10 Task 13）。
+**不要用反色实现深色模式**——深色下要用降饱和的色调变体，并单独验证对比度。上面那两套取值就是照这条做的：
+深色主色是调亮并降饱和的同色相变体（`#A6A1E0`），不是 `1 − 浅色主色`；
+`AppearanceContrastTests.testTheDarkPaletteIsNotJustTheLightOneInverted` 逐通道拦着这条。
 
 ### 对比度底线（不可协商）
 
@@ -120,9 +155,11 @@ public enum Palette {
 
 **`textSecondary` 用 56% 黑而不是常见的 40%**，就是为了守住 4.5:1。灰上加灰是让界面显廉价的头号原因。
 
-**算对比度时必须先按 alpha 把前景合成到背景上，再算亮度。** `Color.black.opacity(0.56)` 的三个分量是**纯黑**，透明度全在 alpha 上——直接拿分量算会得到 21:1，而它在屏幕上只有 4.94:1。忽略 alpha 的对比度测试对每一个半透明令牌都是空转的，包括上面这条「56% 而不是 40%」本身。
+**算对比度时必须先按 alpha 把前景合成到背景上，再算亮度。** `Color.black.opacity(0.56)` 的三个分量是**纯黑**，透明度全在 alpha 上——直接拿分量算会得到 21:1，而它在屏幕上只有 4.94:1。忽略 alpha 的对比度测试对每一个半透明令牌都是空转的，包括上面这条「56% 而不是 40%」本身。这套算法收在 `Sources/IELTSCoachUI/DesignSystem/ContrastMath.swift`，一处实现、两套外观共用。
 
-这三条底线现在由 `Tests/IELTSCoachUITests/DesignSystemTests.swift`（Phase 3，浅色）与 `Tests/IELTSCoachUITests/AppearanceContrastTests.swift`（Phase 10，两套外观的完整矩阵）逐对验证，不再靠目测。
+**已实测：** 把 `ContrastMath.ratio` 里那三行合成删掉，再把 `textSecondary` 从 56% 调到 40%，整条矩阵照样全绿（40% 黑的分量同样是纯黑，还是算成 21:1）；把合成加回来，同一个 40% 当场报出「light 的「次要文字 vs 卡片」只有 2.85:1」。
+
+这三条底线现在由 `Tests/IELTSCoachUITests/AppearanceContrastTests.swift`（两套外观 × 15 组配对的完整矩阵）逐对验证，不再靠目测。Phase 3 留在 `DesignSystemTests.swift` 里的那几条浅色对比度断言已经并进这份矩阵——矩阵对浅色跑的是同样的配对，外加深色那一半，「每个令牌都必须被显式归类」那条完整性守卫也一起搬了过去。
 
 ---
 

@@ -125,7 +125,8 @@ final class SourceGuardTests: XCTestCase {
     func testSwiftFilesFindsTheDesignSystemSources() throws {
         let files = try SourceGuard.swiftFiles(under: "DesignSystem")
         XCTAssertEqual(files.map(\.lastPathComponent),
-                       ["Components.swift", "Metrics.swift", "Palette.swift", "Typography.swift"])
+                       ["Components.swift", "ContrastMath.swift", "Metrics.swift",
+                        "Palette.swift", "Typography.swift"])
         // 换算回相对路径：全模块扫描的报错信息和豁免名单都按这个形式对齐，
         // 换算错了，豁免名单会一条都对不上（于是豁免失效或者全都豁免）。
         XCTAssertEqual(try SourceGuard.relativePath(of: files[0]),
