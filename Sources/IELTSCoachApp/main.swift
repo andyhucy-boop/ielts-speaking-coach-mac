@@ -24,6 +24,15 @@ struct CoachApp: App {
     var body: some Scene {
         Window("IELTS Speaking Coach", id: "coach-main") { RootView() }
             .defaultSize(width: 1100, height: 720)
+            .commands {
+                // 把苹果菜单里的「关于 …」换成本应用自己的那一页。
+                // 不换的话，点开的是系统默认的小面板：版本、签名、数据目录、
+                // 可搬迁检查一样都看不到，而这几样正是把 .app 拷给别人之后要用到的。
+                //
+                // **关于页放苹果菜单是 Mac 应用的标准位置，不要为它在侧边栏加第十一项**——
+                // 侧边栏那十项是产品设计稿定死的（Phase 3 的 `testSidebarHasAllTenItems` 守着）。
+                CommandGroup(replacing: .appInfo) { AboutMenuButton() }
+            }
 
         // macOS 的设置窗口（⌘,）。录音开关放这里，不塞进侧边栏——
         // 侧边栏那十项是产品设计稿定死的（ROADMAP 第 1 节），加第十一项会破坏它，
@@ -33,6 +42,16 @@ struct CoachApp: App {
         // 主窗口那边在开练前会重读一次磁盘（`AppState.makePracticeRunner()`），
         // 所以刚拨的开关下一场就算数。**不要因为这里多了一个场景就去掉那次 reload。**
         Settings { RecordingSettingsScene() }
+
+        // 关于窗口。**它同样不共享主窗口的 `AppState`**（拿不到，也不该拿）：
+        // 这是一页只读的信息，自己读一次 `state.json` 就够了，
+        // 换成到处传 `AppState` 反而会把主窗口的生命周期和一个偶尔打开的小窗绑死。
+        //
+        // `id` 走 `AboutWindow.id`，与 `AboutMenuButton` 里那句 `openWindow(id:)` 同一个来源：
+        // 写死成两处字符串的话，改错一个字母就是「菜单点了没反应」，
+        // 而 `openWindow` 找不到窗口时只在控制台抱怨一句，界面上一点动静都没有。
+        Window("关于 IELTS Speaking Coach", id: AboutWindow.id) { AboutView() }
+            .windowResizability(.contentSize)
     }
 }
 
