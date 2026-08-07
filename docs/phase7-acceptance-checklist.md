@@ -128,6 +128,22 @@ pending-reviews/sync-1785940167.txt   ← 一份没导回来的复盘
 
 所以第 11 节用真实数据打开时，四格会是 `0/5`、`0`、`0`、`0`，问题档案页与词汇页都是空状态。
 
+**⚠️ 但问题档案页不会只有空状态——顶上必然多出一张橙色警告卡，那不是缺陷。**
+上面那条 `targets` 的 `sourceSessionId` 是 `"2026-08-05T14:30:44Z"`，而 `sessions` 是空的。
+`SessionTimeline.build` 把「档案里引用到、时间也解析得出来、但 `state.sessions` 里没有对应记录」
+的场次算成 `unmatched`；`IssueArchiveView` 的警告区排在列表**之前**，且**与列表空不空无关**。
+所以空状态**上面**还会顶着一条（实跑确认过 `warnings.count == 1`，原文逐字如下）：
+
+> 有 1 次练习只在档案里留了记录，训练记录页看不到它们（多半是早期用命令行练的）——
+> 「问题档案」「我的词汇」「复训中心」这三处都可能引用到它们。它们仍按时间算进趋势，
+> 所以趋势本身是对的。下一步：如果你想核对，打开数据目录里的 state.json 搜这几个 id：
+> 2026-08-05T14:30:44Z，看它们挂在 issues、vocabulary 还是 targets 下面；对得上就不用管这条提示。
+
+它说的**正是那条 target**：你 2026-08-05 那次是用命令行练的，复盘写进了 `targets`，
+却没在 `state.sessions` 里留下记录。**这正是 Task 6 要它出现的场合，不要记成缺陷。**
+（顺带：只有 `IssueArchiveView` 读 `dataWarnings`，所以首页和我的词汇页**看不到**这条警告。
+词汇页干干净净只有空状态，也是对的。）
+
 **这不是 Phase 4 没接上。** 计划 Step 8 写的是「若 Phase 4 还没在写 `state.sessions`，三格是 0」——
 那句话已经过时了：`TodayViewModel.practiceRecordingIsWired` 现在是 `true`，
 `PracticeRunner` 会把每场练习写进 `state.sessions`。**三格是 0 的真正原因是你还没在界面里练过一场。**
@@ -163,22 +179,28 @@ pending-reviews/sync-1785940167.txt   ← 一份没导回来的复盘
       ```
       应当打印「✅ 演示数据已写入 /tmp/ielts-demo」。
 
-- [ ] **给演示数据补两道题**（第 2 节第一条，**不做这一步第 5、6、9 节全部走不下去**）：
-      ```bash
-      python3 - <<'PY'
-      import json
-      p = "/tmp/ielts-demo/state.json"
-      d = json.load(open(p))
-      d["questions"] = [
-          {"id": "demo-p1-home", "part": 1, "topic": "Home",
-           "prompt": "What do you like most about your home?"},
-          {"id": "demo-p2-book", "part": 2, "topic": "Books",
-           "prompt": "Describe a book you enjoyed reading."},
-      ]
-      json.dump(d, open(p, "w"), ensure_ascii=False, indent=2)
-      print("题库补好了，现在有", len(d["questions"]), "道题")
-      PY
-      ```
+- [ ] **给演示数据补两道题**（第 2 节第一条，**不做这一步第 5、6、9 节全部走不下去**）。
+
+**下面这段必须顶格粘贴，一个前导空格都不能带。** 它是 heredoc：非 `<<-` 形式的结束符 `PY`
+只有顶格才算数，而 Python 收到的每一行都会原样带着前导空格。实测把带缩进的版本存成脚本，
+zsh 与 bash 都报 `IndentationError: unexpected indent`。本文件里其余的代码块可以连着缩进一起抄
+（单行 shell 命令不在乎前导空格），**只有这一段和第 10 节那段 `python3 -c` 不行**。
+
+```bash
+python3 - <<'PY'
+import json
+p = "/tmp/ielts-demo/state.json"
+d = json.load(open(p))
+d["questions"] = [
+    {"id": "demo-p1-home", "part": 1, "topic": "Home",
+     "prompt": "What do you like most about your home?"},
+    {"id": "demo-p2-book", "part": 2, "topic": "Books",
+     "prompt": "Describe a book you enjoyed reading."},
+]
+json.dump(d, open(p, "w"), ensure_ascii=False, indent=2)
+print("题库补好了，现在有", len(d["questions"]), "道题")
+PY
+```
 
 - [ ] **备份这份补好的演示数据**（第 7、8 节要故意改坏它，改坏之后好还原）：
       ```bash
@@ -435,9 +457,13 @@ happy	upbeat<br>in an upbeat mood	ielts-speaking ielts-speaking::normal
 - [ ] 点「导出… › AnkiConnect 请求（.json）」，存到桌面
 - [ ] 确认 Anki 开着且装了 AnkiConnect，然后按页面提示跑：
       ```bash
-      curl -s localhost:8765 -d @~/Desktop/ielts-vocabulary-2026-08-07.json
+      curl -s localhost:8765 -d @"$HOME/Desktop/ielts-vocabulary-2026-08-07.json"
       ```
-      （路径里有空格的话记得加引号。）
+      ⚠️ **别把路径写成 `-d @~/Desktop/…`。** 波浪号只在**词首**展开，而这里的词首是 `@`，
+      shell 不展开它，curl 会去找一个字面就叫 `~/Desktop/…` 的文件。实测报
+      `curl: option -d: error encountered when reading a file`（退出码 26）——
+      这一步验的正是「能不能接上你已有的 AnkiConnect 流程」，第一条命令就失败很容易被误判成
+      工具或 AnkiConnect 的毛病。用上面这种 `$HOME` 加引号的写法，路径里有空格也不会散架。
 
 **⚠️ 两个大概率会踩的坑，请当场确认：**
 
@@ -544,19 +570,24 @@ json.dump(d, open(p,'w'), ensure_ascii=False, indent=2); print('weeklyGoal 改�
       每行的展开区、「改目标」、工具栏齿轮，**焦点环可见**。
       先在「系统设置 › 键盘」里打开「**使用键盘导航在控制项之间移动焦点**」（macOS 默认是关的），
       **报告里注明你是在哪种设置下测的**
-- [ ] **三个页面的空状态都有「说明 + 下一步 + 按钮」**。全空那一种这么验（不碰任何已有数据）：
-      ```bash
-      python3 -c "
-      import json
-      p='/tmp/ielts-demo/state.json'
-      d=json.load(open(p)); d['issues']=[]; d['vocabulary']=[]
-      json.dump(d, open(p,'w'), ensure_ascii=False, indent=2); print('清空了')
-      "
-      ```
-      ⌘Q 重开，问题档案页与词汇页各应当是一张空状态卡片，**各带一颗能点的按钮**。
-      词汇页的「导出…」与「复制到剪贴板」两颗按钮应当**是灰的**，
-      **并且旁边有一句话说清为什么是灰的**（点了没反应的按钮比写明原因的灰按钮更让人困惑）。
-      验完还原：`cp /tmp/ielts-demo/state.json.bak /tmp/ielts-demo/state.json`
+- [ ] **三个页面的空状态都有「说明 + 下一步 + 按钮」**。全空那一种这么验（不碰任何已有数据）。
+
+**下面这段同样必须顶格粘贴**（和第 3 节补题库那段一个道理）：带缩进的话，`-c` 后面那个字符串
+第一行就是缩进的 `import json`，Python 当场报 `IndentationError: unexpected indent`。实测过。
+
+```bash
+python3 -c "
+import json
+p='/tmp/ielts-demo/state.json'
+d=json.load(open(p)); d['issues']=[]; d['vocabulary']=[]
+json.dump(d, open(p,'w'), ensure_ascii=False, indent=2); print('清空了')
+"
+```
+
+⌘Q 重开，问题档案页与词汇页各应当是一张空状态卡片，**各带一颗能点的按钮**。
+词汇页的「导出…」与「复制到剪贴板」两颗按钮应当**是灰的**，
+**并且旁边有一句话说清为什么是灰的**（点了没反应的按钮比写明原因的灰按钮更让人困惑）。
+验完还原：`cp /tmp/ielts-demo/state.json.bak /tmp/ielts-demo/state.json`
 
 其余六条顺手过一遍：
 
@@ -585,10 +616,17 @@ Expected（依据第 2 节第四条，读过你真实的 `state.json`）：
 | 「本周训练」脚注 | 「离本周目标还差 5 次。下一步：点下面的「开始练习」，再练一场。」 |
 | 「累计训练」脚注 | 「还没有任何练习记录。下一步：点下面的「开始练习」，练第一场。」 |
 | 「出现变少的毛病」脚注 | 「问题档案还是空的。下一步：练一场并让 ChatGPT 生成复盘，反复出现的毛病会自动记到这里。」 |
-| 问题档案页 | 空状态：说明 + 下一步 + 按钮。**不能是一片空白** |
-| 我的词汇页 | 空状态，两颗导出按钮是灰的且写明了原因 |
+| 问题档案页 | **顶上先有一张橙色警告卡**（「有 1 次练习只在档案里留了记录，训练记录页看不到它们……」），**下面**才是空状态：说明 + 下一步 + 按钮。**不能是一片空白**，那张警告**也不是缺陷** |
+| 我的词汇页 | 空状态，两颗导出按钮是灰的且写明了原因。**这一页没有那张橙色警告**（只有问题档案页读 `dataWarnings`），干净是对的 |
 
 - [ ] **四格是 0 但页面不是一片空白**，每一格的脚注都告诉你下一步做什么
+- [ ] 问题档案页顶上那条警告**出现了**，且原文与第 2 节第四条抄的一致
+
+> **不要把那条橙色警告记成缺陷。** 它来自你 `targets` 里那条
+> `sourceSessionId = "2026-08-05T14:30:44Z"`——那次是用命令行练的，复盘写进了 `targets`，
+> 却没在 `state.sessions` 里留下记录，所以它「只在档案里有」。
+> 详细依据见第 2 节第四条（含实跑结果 `warnings.count == 1`）。
+> **反过来，警告一条都没出现才要记下来**——那说明 Task 6 那个坑没堵住。
 
 > **不要把「三格是 0」写成「Phase 4 还没接上」。** 计划 Step 8 那句话已经过时了
 > （见第 2 节第四条）：记录写入早就接上了，是你还没在界面里练过一场。
@@ -671,6 +709,7 @@ Anki 版本 / 界面语言：
 ## 九、真实数据（第 11 节）
 - 四格显示的值：
 - 页面有没有变成一片空白：
+- 问题档案页顶上那条橙色警告出来了吗（**出来才是对的**，见清单第 2 节第四条）：
 
 ## 十、哪里让我不想用
 （成品标准第 5 节。这一段请写实话，包括不好的部分——这类信息只有你有）
@@ -722,6 +761,10 @@ git commit -m "docs: Phase 7 真机验收结果"
 - **八个筛选没有一个是空的**，「筛到空的空状态」照计划原样验不出来；第 7、8 节各给了造空的办法
 - **塞进 `sync-…` 之后那行会写「出现在 6 场」而 1+4=5**——第 6 场就是那条读不出时间的，警告说的正是它（第 7 节）
 - **周五做验收时「本周训练」是 5/5**，脚注说「本周目标已经完成」而不是「还差 N 次」——对的（第 2 节第二条）
+- **第 11 节切回真实数据后，问题档案页顶上必然多出一张橙色警告卡**（「有 1 次练习只在档案里
+  留了记录……」）。来源是你 `targets` 里那条 `sourceSessionId = "2026-08-05T14:30:44Z"`——
+  那次用命令行练的，写进了 `targets` 却没进 `state.sessions`。警告区排在列表**之前**且
+  与列表空不空无关，所以「空状态 + 顶上一条警告」是这份数据下的正确长相，不是缺陷（第 2 节第四条、第 11 节）
 
 **计划 Task 10 Step 3 那条「手动拿真实数据目录试一次安全闸」也不用做了**：
 `SeedDemoDataScriptTests` 里六条用例已经在假家目录上把它验穿了（含相对路径 `.`、`..`、`~`、末尾斜杠四种绕法），
