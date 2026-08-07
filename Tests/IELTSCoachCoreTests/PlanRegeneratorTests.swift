@@ -50,6 +50,11 @@ final class PlanRegeneratorTests: XCTestCase {
         XCTAssertEqual(completed(regenerated.plan), done, "换周期后，练过的题必须还是练过的")
         XCTAssertEqual(Set(regenerated.carriedOver), done)
         XCTAssertTrue(regenerated.dropped.isEmpty)
+        // 进度保住了，但用户看不见——等于没保住。数据层对了还必须当面说出来，
+        // 而且要带上道数：只说「已完成」三个字，dropped 那句里也有，抓不住这里的丢失。
+        XCTAssertTrue(regenerated.summary.contains("4 道题仍然算已完成"),
+                      "练了 3 天的人点重新生成，界面必须当面告诉他那几道题还算练过，"
+                      + "否则他只能自己去翻计划页数格子。实际文案：\(regenerated.summary)")
     }
 
     func testCarriesProgressWhenTheFocusPartNarrows() throws {
@@ -182,6 +187,10 @@ final class PlanRegeneratorTests: XCTestCase {
         XCTAssertEqual(outcome.plan.days.count, 7)
         XCTAssertTrue(outcome.carriedOver.isEmpty)
         XCTAssertTrue(outcome.dropped.isEmpty)
+        // 题数是用户判断这份计划靠不靠谱的唯一数字，报错了得当场看出来。
+        // bank() 里 Part 2 正好 14 道，与 7 天周期不同号，不会靠巧合蒙对。
+        XCTAssertTrue(outcome.summary.contains("共 14 道题"),
+                      "摘要要说清这次排了多少题。实际文案：\(outcome.summary)")
     }
 
     func testRegeneratingTwiceGivesTheSamePlan() throws {
