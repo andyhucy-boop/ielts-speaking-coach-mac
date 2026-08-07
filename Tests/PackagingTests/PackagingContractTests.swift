@@ -61,6 +61,23 @@ final class PackagingContractTests: XCTestCase {
                        + "要么把它加进 AboutViewModel.acknowledgements 并改掉「没有第三方依赖」那句话。")
     }
 
+    func testChangelogNewestVersionMatchesWhatTheBuildScriptStamps() throws {
+        // 关于页显示 1.0.1、更新记录最新一条写着 1.0.0 —— 这种不一致
+        // 恰好出现在用户最想搞清楚「我手上这份到底是哪一版」的时候。
+        let script = try text(at: "scripts/build-app.sh")
+        let match = try XCTUnwrap(
+            script.range(of: #"APP_VERSION="[^"]+""#, options: .regularExpression),
+            "build-app.sh 里找不到 APP_VERSION")
+        let version = script[match]
+            .replacingOccurrences(of: "APP_VERSION=\"", with: "")
+            .replacingOccurrences(of: "\"", with: "")
+
+        let changelog = try text(at: "Sources/IELTSCoachUI/Upgrade/Changelog.swift")
+        XCTAssertTrue(changelog.contains("version: \"\(version)\""),
+                      "更新记录里没有 \(version) 这一版。"
+                      + "下一步：要么在 Changelog.releases 顶上补一条，要么改回 build-app.sh 里的 APP_VERSION。")
+    }
+
     func testOpenInstructionsCoverGatekeeperAndTheDataDirectory() throws {
         // 这份说明是随包发出去的，收件人只有它。少一条他就卡住了。
         let instructions = try text(at: "packaging/open-instructions.txt")

@@ -300,6 +300,9 @@ public struct RootView: View {
             case .retraining: RetrainingCenterView(app: app, onGo: { go(to: $0) })
             case .issues: IssueArchiveView(app: app, onGo: { go(to: $0) })
             case .vocabulary: VocabularyView(app: app, onGo: { go(to: $0) })
+                // 这一页不读 `app`：它显示的是「你手上这份 App 是哪一版、改了什么」，
+                // 全部来自 `AppMetadata` 与 `Changelog` 那张常量表。
+            case .upgrade: UpgradeView()
             default: PlaceholderView(item: current, onGo: { go(to: $0) })
             }
         }

@@ -45,10 +45,10 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Sendable {
     public var isImplemented: Bool {
         switch self {
         // Phase 4 加了 .history，Phase 6 加了 .retraining，Phase 7 Task 6 加了 .issues、
-        // Task 7 加了 .vocabulary，Phase 8 Task 9 加了 .plan。
+        // Task 7 加了 .vocabulary，Phase 8 Task 9 加了 .plan，Phase 10 Task 17 加了 .upgrade。
         // 后续阶段各自往这里加自己的那一项，不要删别人的。
         case .today, .questionBank, .reviewReports, .history, .retraining, .issues,
-             .vocabulary, .plan: return true
+             .vocabulary, .plan, .upgrade: return true
         default: return false
         }
     }
@@ -68,10 +68,7 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Sendable {
     public var placeholderDescription: String {
         switch self {
         case .today, .questionBank, .reviewReports, .history, .retraining, .issues,
-             .vocabulary, .plan: return ""
-        case .upgrade:
-            return "将来在这里看新版本与更新说明。"
-                + "下一步：这一页没做完不影响任何功能，直接到「今日训练」继续练即可。"
+             .vocabulary, .plan, .upgrade: return ""
         case .feedback:
             return "将来在这里一键复制诊断信息（版本、系统、环境检查结果），你自己决定粘给谁。"
                 + "下一步：这一页没做完不影响练习，可以直接到「今日训练」继续练；"
@@ -90,8 +87,8 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Sendable {
     public var placeholderFallback: SidebarItem? {
         switch self {
         case .today, .questionBank, .reviewReports, .history, .retraining, .issues,
-             .vocabulary, .plan: return nil
-        case .upgrade, .feedback: return .today
+             .vocabulary, .plan, .upgrade: return nil
+        case .feedback: return .today
         }
     }
 
