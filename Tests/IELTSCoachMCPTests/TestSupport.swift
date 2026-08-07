@@ -33,9 +33,6 @@ func makeEnvironment(directory: DataDirectory, opener: FakeDashboardOpener,
 
 /// 让每个 tool 测试都**走一遍真实的协议层**再落到工具上。
 /// 直接调 `tool.run` 会漏掉 tools/call 的参数校验，那部分同样会在真机上出事。
-///
-/// `init(environment:)` 那个 convenience init 要等 Task 6 建出 `ToolCatalog` 之后再补
-/// （见 Phase 9 计划 Task 5 Step 3 的备注）。
 final class ServerHarness {
     let server: MCPServer
     private var nextID = 100
@@ -43,6 +40,12 @@ final class ServerHarness {
     init(tools: [MCPTool]) {
         server = MCPServer(tools: tools)
         _ = server.handle(line: #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}"#)
+    }
+
+    /// 装的是 `ToolCatalog` 的真实目录，不是测试自己挑的几个工具——
+    /// 「工具没被装进目录」这类缺陷只有走真实目录才拦得住。
+    convenience init(environment: MCPEnvironment) {
+        self.init(tools: ToolCatalog.tools(environment: environment))
     }
 
     enum HarnessError: Error { case noResponse, unexpectedProtocolError(String) }
