@@ -1705,6 +1705,7 @@ git commit -m "feat(mcp): JSON-RPC over stdio 协议层"
 - Modify: `Sources/IELTSCoachMCP/MCPTool.swift`（把 Task 4 临时放在这里的 `ToolInputError` / `DashboardOpenError` / `ToolArguments` 最小定义挪走）
 - Create: `Tests/IELTSCoachMCPTests/TestSupport.swift`
 - Create: `Tests/IELTSCoachMCPTests/ToolArgumentsTests.swift`
+- Create: `Tests/IELTSCoachMCPTests/MCPEnvironmentTests.swift`（复审补：见本节末尾「复审修订」）
 
 **Interfaces:**
 - Consumes: `JSONValue`（下标、`stringValue`、`intValue`）、`DataDirectory`、`StateStore`
@@ -1712,7 +1713,7 @@ git commit -m "feat(mcp): JSON-RPC over stdio 协议层"
   - `public struct ToolInputError: Error, Equatable`，含 `message: String`
   - `public struct DashboardOpenError: Error, LocalizedError, Equatable`，含 `message: String`、`errorDescription`
   - `public protocol DashboardOpening { func open(_ url: URL) throws }`
-  - `public struct ToolArguments`：`init(_ value: JSONValue)`、`requiredString(_:trimmed:hint:) throws -> String`、`optionalString(_:) -> String?`、`optionalInt(_:in:default:hint:) throws -> Int`、`optionalChoice(_:allowed:default:hint:) throws -> String`
+  - `public struct ToolArguments`：`init(_ value: JSONValue)`、`requiredString(_:trimmed:hint:) throws -> String`、`optionalString(_:) throws -> String?`、`optionalInt(_:in:default:hint:) throws -> Int`、`optionalChoice(_:allowed:default:hint:) throws -> String`
   - `public struct MCPEnvironment`：`init(directory:opener:now:timeZone:)`、属性 `directory`、`store`、`opener`、`now`、`timeZone`、`timestamp: String`
   - 测试用：`makeTemporaryDirectory()`、`FakeDashboardOpener`、`ServerHarness`
 
@@ -1865,11 +1866,22 @@ final class ToolArgumentsTests: XCTestCase {
         }
     }
 
-    func testOptionalStringTreatsBlankAndNullAsAbsent() {
-        XCTAssertNil(arguments([:]).optionalString("goal"))
-        XCTAssertNil(arguments(["goal": .null]).optionalString("goal"))
-        XCTAssertNil(arguments(["goal": .string("  ")]).optionalString("goal"))
-        XCTAssertEqual(arguments(["goal": .string(" 补一个例子 ")]).optionalString("goal"), "补一个例子")
+    func testOptionalStringTreatsBlankAndNullAsAbsent() throws {
+        XCTAssertNil(try arguments([:]).optionalString("goal"))
+        XCTAssertNil(try arguments(["goal": .null]).optionalString("goal"))
+        XCTAssertNil(try arguments(["goal": .string("  ")]).optionalString("goal"))
+        XCTAssertEqual(try arguments(["goal": .string(" 补一个例子 ")]).optionalString("goal"), "补一个例子")
+    }
+
+    func testOptionalStringRejectsWrongTypeInsteadOfSilentlyDroppingIt() {
+        // 复审补。「键在、但类型不对」不是「没传」，详见本节末尾「复审修订」。
+        XCTAssertThrowsError(try arguments(["goal": .number(12345)]).optionalString("goal")) {
+            let text = message(from: $0)
+            XCTAssertTrue(text.contains("goal"))
+            XCTAssertTrue(text.contains("字符串"))
+        }
+        XCTAssertThrowsError(try arguments(["goal": .bool(true)]).optionalString("goal"))
+        XCTAssertThrowsError(try arguments(["goal": .array([.string("a")])]).optionalString("goal"))
     }
 
     func testOptionalIntUsesTheDefaultWhenAbsent() throws {
@@ -1922,6 +1934,7 @@ final class ToolArgumentsTests: XCTestCase {
             { try self.arguments([:]).requiredString("k", hint: "改这里。") },
             { try self.arguments(["k": .number(1)]).requiredString("k", hint: "改这里。") },
             { try self.arguments(["k": .string(" ")]).requiredString("k", hint: "改这里。") },
+            { try self.arguments(["k": .number(1)]).optionalString("k") as Any },
             { try self.arguments(["k": .number(0)]).optionalInt("k", in: 1...9, default: 5, hint: "改这里。") },
             { try self.arguments(["k": .number(1.5)]).optionalInt("k", in: 1...9, default: 5, hint: "改这里。") },
             { try self.arguments(["k": .string("x")]).optionalChoice("k", allowed: ["y"], default: "y", hint: "改这里。") }
@@ -1978,9 +1991,13 @@ public struct ToolArguments {
         return trimmed ? text.trimmingCharacters(in: .whitespacesAndNewlines) : text
     }
 
-    /// 缺失、null、空白一律当作「没传」。
-    public func optionalString(_ key: String) -> String? {
-        guard let text = value[key]?.stringValue else { return nil }
+    /// 缺失、null、空白一律当作「没传」；**键在、但不是字符串，报错**（复审修订，见本节末尾）。
+    public func optionalString(_ key: String) throws -> String? {
+        guard let raw = value[key], raw != .null else { return nil }
+        guard let text = raw.stringValue else {
+            throw ToolInputError(message: "参数「\(key)」必须是字符串。"
+                + "下一步：把它改成字符串再传一次；本来就不想传这个参数的话，整个省掉即可。")
+        }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
@@ -2066,8 +2083,8 @@ public struct MCPEnvironment {
 
 - [ ] **Step 4: 运行，确认通过**
 
-Run: `swift test --filter ToolArgumentsTests`
-Expected: PASS（12 个测试）
+Run: `swift test --filter 'ToolArgumentsTests|MCPEnvironmentTests'`
+Expected: PASS（13 + 4 个测试）
 
 - [ ] **Step 5: 突变验证**
 
@@ -2076,13 +2093,38 @@ Expected: PASS（12 个测试）
 | `optionalInt` 里的越界分支改成 `return min(max(number, range.lowerBound), range.upperBound)`（夹紧） | `testOptionalIntRejectsOutOfRangeInsteadOfClamping` |
 | `optionalChoice` 里的 `guard allowed.contains(text)` 改成 `return allowed.contains(text) ? text : fallback` | `testOptionalChoiceRejectsUnknownValueAndListsWhatIsAllowed` |
 | 任意一条错误文案里的「下一步：\(hint)」改成只留前半句 | `testEveryErrorMessageTellsTheCallerWhatToDoNext` |
+| `optionalString` 里「不是字符串就抛错」改回 `return nil`（静默当成没传） | `testOptionalStringRejectsWrongTypeInsteadOfSilentlyDroppingIt`、`testEveryErrorMessageTellsTheCallerWhatToDoNext` |
+| `MCPEnvironment.init` 里 `StateStore(directory: directory)` 改成指向别的目录 | `testStoreWritesIntoTheInjectedDirectory` |
+| `timestamp` 改成 `{ "" }` 或任意写死的常量 | `testTimestampUsesTheInjectedInstantInTheProjectFormat` |
+| `self.timeZone = timeZone` 改成写死某个时区 | `testTimeZoneIsTheInjectedOneNotTheMachineDefault` |
 
 - [ ] **Step 6: 提交**
 
 ```bash
-git add Sources/IELTSCoachMCP/ToolArguments.swift Sources/IELTSCoachMCP/MCPEnvironment.swift Sources/IELTSCoachMCP/MCPTool.swift Tests/IELTSCoachMCPTests/TestSupport.swift Tests/IELTSCoachMCPTests/ToolArgumentsTests.swift
+git add Sources/IELTSCoachMCP/ToolArguments.swift Sources/IELTSCoachMCP/MCPEnvironment.swift Sources/IELTSCoachMCP/MCPTool.swift Tests/IELTSCoachMCPTests/TestSupport.swift Tests/IELTSCoachMCPTests/ToolArgumentsTests.swift Tests/IELTSCoachMCPTests/MCPEnvironmentTests.swift
 git commit -m "feat(mcp): 工具参数校验与运行环境"
 ```
+
+**复审修订（2026-08-07）**
+
+两处，都已改在计划正文里，实现与之一致：
+
+1. **`optionalString` 从 `-> String?` 改成 `throws -> String?`。** 原写法对「键存在、
+   但不是字符串」返回 nil，等于把类型错误静默当成「没传」——同一个文件里
+   `requiredString` / `optionalInt` / `optionalChoice` 遇到类型不符统统报错，只有它吞掉。
+   下游的实际后果：`save_session_review` 的 `sessionId` 写成数字时会被当成没给，
+   于是新建一场会话、或把复盘挂到当前会话的题目上，用户看不到任何提示。
+   这与铁律 7（禁止静默失败）和本任务自己那条「越界不许悄悄夹紧」是同一件事，
+   属于铁律 11 说的「计划与铁律冲突」，在这一层修掉，不让 7 个 tool 都建在它上面。
+   「缺失 / null / 空白 = 没传」的语义原样保留；4 个下游调用点相应加 `try`。
+
+2. **补 `MCPEnvironmentTests.swift`。** 原计划里 `MCPEnvironment` 整个文件零执行覆盖：
+   把 `store` 改成指向别的目录、把 `timestamp` 改成 `{ "" }`、把 `timeZone` 写死，
+   1406 条测试全都不会红。其中 store 那条最危险——`TestSupport.swift` 开头写着
+   「绝不能让测试写到 DataDirectory.resolve() 的真实目录」，却没有任何断言保证
+   `store` 真的用的是注入进来的 directory；写成 `DataDirectory.resolve()` 的话，
+   Task 6–9 的每一条 tool 测试都会往用户真实的训练记录里写，而测试照样全绿。
+   时区与时刻各断言两个不同取值，免得「写死一个常量」恰好蒙对。
 
 ---
 
@@ -2283,7 +2325,7 @@ enum InitializeWorkspaceTool {
                 "additionalProperties": .bool(false)
             ])
         ) { arguments in
-            let displayName = arguments.optionalString("displayName") ?? ""
+            let displayName = try arguments.optionalString("displayName") ?? ""
             // 先看文件在不在，再建目录——顺序反了就永远报「已经存在」。
             let existed = FileManager.default.fileExists(atPath: environment.directory.stateFile.path)
             try environment.directory.createIfNeeded()
@@ -2648,7 +2690,7 @@ enum SetTrainingSelectionTool {
         ) { arguments in
             let questionID = try arguments.requiredString("questionId",
                 hint: "先调用 get_dashboard_data 或在 App 的「训练题库」页找到题号，再传进来。")
-            let goal = arguments.optionalString("goal") ?? ""
+            let goal = try arguments.optionalString("goal") ?? ""
 
             // 整个「查题 + 写选择」放在同一次 mutate 里：查不到题就抛错，
             // mutate 的写入发生在 body 之后，因此磁盘上不会留下半个选择。
@@ -3092,7 +3134,7 @@ enum SaveSessionReviewTool {
 
             let state = try environment.store.load()
             let sessionID: String
-            if let given = arguments.optionalString("sessionId") {
+            if let given = try arguments.optionalString("sessionId") {
                 sessionID = try SessionID.validated(given)     // 会直接拼进文件名，必须校验
             } else if let current = state.currentSession {
                 sessionID = current.id
@@ -3100,7 +3142,7 @@ enum SaveSessionReviewTool {
                 sessionID = SessionID.next(existing: state.sessions, now: environment.now(),
                                            timeZone: environment.timeZone)
             }
-            let questionID = arguments.optionalString("questionId")
+            let questionID = try arguments.optionalString("questionId")
                 ?? state.currentSession?.questionId ?? ""
 
             // ⚠️ 顺序不能改：先落盘，再解析。

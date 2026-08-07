@@ -30,9 +30,20 @@ public struct ToolArguments {
         return trimmed ? text.trimmingCharacters(in: .whitespacesAndNewlines) : text
     }
 
-    /// 缺失、null、空白一律当作「没传」。
-    public func optionalString(_ key: String) -> String? {
-        guard let text = value[key]?.stringValue else { return nil }
+    /// 缺失、null、空白一律当作「没传」；**键在、但不是字符串，报错**。
+    ///
+    /// 把类型不符也当成「没传」是静默失败（铁律 7）：`sessionId` 写成数字时
+    /// `save_session_review` 会新开一场会话而不是把复盘追加到指定会话上，
+    /// `list_practice_history` 的 `questionId` 过滤会被悄悄丢掉、返回一份
+    /// 看着对其实没过滤的全量历史——两种情况用户都收不到任何提示。
+    /// 同文件的 requiredString / optionalInt / optionalChoice 遇到类型不符都报错，
+    /// 这里不该是唯一的例外。
+    public func optionalString(_ key: String) throws -> String? {
+        guard let raw = value[key], raw != .null else { return nil }
+        guard let text = raw.stringValue else {
+            throw ToolInputError(message: "参数「\(key)」必须是字符串。"
+                + "下一步：把它改成字符串再传一次；本来就不想传这个参数的话，整个省掉即可。")
+        }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }

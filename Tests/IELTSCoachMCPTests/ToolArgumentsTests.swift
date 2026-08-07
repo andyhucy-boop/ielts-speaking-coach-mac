@@ -43,11 +43,27 @@ final class ToolArgumentsTests: XCTestCase {
         }
     }
 
-    func testOptionalStringTreatsBlankAndNullAsAbsent() {
-        XCTAssertNil(arguments([:]).optionalString("goal"))
-        XCTAssertNil(arguments(["goal": .null]).optionalString("goal"))
-        XCTAssertNil(arguments(["goal": .string("  ")]).optionalString("goal"))
-        XCTAssertEqual(arguments(["goal": .string(" 补一个例子 ")]).optionalString("goal"), "补一个例子")
+    func testOptionalStringTreatsBlankAndNullAsAbsent() throws {
+        XCTAssertNil(try arguments([:]).optionalString("goal"))
+        XCTAssertNil(try arguments(["goal": .null]).optionalString("goal"))
+        XCTAssertNil(try arguments(["goal": .string("  ")]).optionalString("goal"))
+        XCTAssertEqual(try arguments(["goal": .string(" 补一个例子 ")]).optionalString("goal"), "补一个例子")
+    }
+
+    func testOptionalStringRejectsWrongTypeInsteadOfSilentlyDroppingIt() {
+        // 「键在、但类型不对」不是「没传」。悄悄当成没传的后果是实打实的：
+        // save_session_review 会新开一场会话而不是把复盘追加到指定会话上，
+        // list_practice_history 会返回一份看着对、其实没过滤的全量历史，
+        // 而用户和模型都收不到任何提示。铁律 7：禁止静默失败。
+        // 同一个文件里 requiredString / optionalInt / optionalChoice 遇到类型不符都报错，
+        // 只有 optionalString 吞掉的话，7 个 tool 就都建在这个例外上了。
+        XCTAssertThrowsError(try arguments(["goal": .number(12345)]).optionalString("goal")) {
+            let text = message(from: $0)
+            XCTAssertTrue(text.contains("goal"), "错误信息要指名道姓说是哪个参数：\(text)")
+            XCTAssertTrue(text.contains("字符串"), "要说清「必须是字符串」：\(text)")
+        }
+        XCTAssertThrowsError(try arguments(["goal": .bool(true)]).optionalString("goal"))
+        XCTAssertThrowsError(try arguments(["goal": .array([.string("a")])]).optionalString("goal"))
     }
 
     func testOptionalIntUsesTheDefaultWhenAbsent() throws {
@@ -100,6 +116,7 @@ final class ToolArgumentsTests: XCTestCase {
             { try self.arguments([:]).requiredString("k", hint: "改这里。") },
             { try self.arguments(["k": .number(1)]).requiredString("k", hint: "改这里。") },
             { try self.arguments(["k": .string(" ")]).requiredString("k", hint: "改这里。") },
+            { try self.arguments(["k": .number(1)]).optionalString("k") as Any },
             { try self.arguments(["k": .number(0)]).optionalInt("k", in: 1...9, default: 5, hint: "改这里。") },
             { try self.arguments(["k": .number(1.5)]).optionalInt("k", in: 1...9, default: 5, hint: "改这里。") },
             { try self.arguments(["k": .string("x")]).optionalChoice("k", allowed: ["y"], default: "y", hint: "改这里。") }
