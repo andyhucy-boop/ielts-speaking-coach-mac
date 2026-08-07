@@ -96,9 +96,15 @@ public enum AboutViewModel {
         // 设计文档还写着三个逻辑测试是「逐一对译」上游的。
         // 计划自己要求碰到这种情况必须停下来核对上游许可证——核对结果是 MIT
         // （https://github.com/lindsey-labs/ielts-speaking-coach，设计文档记的版本 v0.1.49）。
-        // MIT 允许把这些内容用进本工具、并把编译好的副本给别人，**唯一的条件是保留版权与许可声明**，
-        // 所以那份声明必须真的出现在用户看得到的地方——就是下面这一条。
-        // 写成「未使用其代码」不只是不准确，它会让本工具在分发时不满足 MIT 的那个条件。
+        // MIT 允许把这些内容用进本工具、并把编译好的副本给别人，**唯一的条件是把版权声明与
+        // permission notice 的原文随副本一起交付**。写成「未使用其代码」不只是不准确，
+        // 它会让本工具在分发时不满足 MIT 的那个条件。
+        //
+        // 注意条件要的是**原文**，不是转述：MIT 里那句 “The above copyright notice and this
+        // permission notice shall be included in all copies…” 中的 permission notice，
+        // 指的是 “Permission is hereby granted…” 到 “…THE SOFTWARE.” 那整段英文。
+        // 所以原文放在下面的 `licenseNotice` 里（关于页的许可区原样显示，随二进制一起交出去），
+        // 这一条只负责说清「来自谁、覆盖哪部分、原文在哪」。
         Acknowledgement(
             name: "lindsey-labs/ielts-speaking-coach",
             role: "上游项目。本工具的功能范围、复盘规范与 state.json 的字段结构都来自它；"
@@ -106,7 +112,9 @@ public enum AboutViewModel {
                 + "其余部分是 macOS 原生重写，不是移植。",
             license: "MIT 许可证。Copyright (c) 2026 IELTS Speaking Coach contributors。"
                 + "MIT 允许把它的内容用进本工具并把编译好的副本给别人，"
-                + "条件是保留上面这行版权声明与许可声明——这一条就是它。",
+                + "条件是把版权声明与许可声明的原文随副本一起交付。"
+                + "原文逐字附在本页许可区的「第三方声明」一节里，"
+                + "仓库根目录的 LICENSE 末尾是同一份。",
             url: "https://github.com/lindsey-labs/ielts-speaking-coach"),
         Acknowledgement(
             name: "SF Symbols",
@@ -133,10 +141,20 @@ public enum AboutViewModel {
 
     /// 与仓库根目录的 LICENSE 保持一致。要改就两处一起改。
     ///
-    /// **界面上这份是摘要**：LICENSE 里另有两段（不内置商业题库、不调用 OpenAI 接口）没搬进来，
-    /// 因为关于页已经在致谢里说过同样的事，摆两遍反而没人读。改条款时仍然两处一起改。
+    /// **前半段是摘要**：LICENSE 里另有两段（不内置商业题库、不调用 OpenAI 接口）没搬进来，
+    /// 因为关于页已经在致谢里说过同样的事，摆两遍反而没人读。
+    ///
+    /// **后半段的「第三方声明」不是摘要，是逐字原文，不许改写、不许节选。**
+    /// 工程里有逐字沿用自上游的文本（`AnswerUpgradePolicy` 的规则正文与 partGuidance、
+    /// `ExaminerPrompt` 的英文契约句），上游是 MIT，MIT 唯一的条件是把版权声明与
+    /// permission notice 的**原文**随副本一起交付。交出去的是 .app 而不是这个仓库，
+    /// 而 `.app` 里没有源码树——所以那份原文必须编进二进制、由关于页的许可区原样显示，
+    /// 这就是它出现在这里的原因。中文转述不是 notice，替换掉它等于不合规。
+    ///
+    /// `AboutViewModelTests.testLicenseNoticeShipsTheUpstreamMITNoticeVerbatim`
+    /// 逐字守着下面这段；同名的另一条守着根 LICENSE。
     public static let licenseNotice = """
-        版权所有 © 2026 IELTS Speaking Coach 的作者。保留所有权利。
+        版权所有 © 2026 IELTS Speaking Coach 的作者。除下面「第三方声明」列出的部分外，保留所有权利。
 
         本工具为个人自用而写。作者可以把编译好的副本给任何人，收到副本的人可以自用；\
         未授予公开再分发、修改或商业使用的许可。
@@ -146,5 +164,40 @@ public enum AboutViewModel {
         "IELTS" 与 "ChatGPT" 是各自权利人的商标，此处仅用于说明本工具的用途。
 
         本工具按现状提供，不作任何明示或默示的担保。
+
+        ── 第三方声明 ──────────────────────────────
+
+        本工程含逐字沿用自上游项目 lindsey-labs/ielts-speaking-coach 的文本：\
+        AnswerUpgradePolicy 里的回答升级规则正文与各 Part 指引\
+        （源自上游 desktop/answer-upgrade-policy.mjs），\
+        以及 ExaminerPrompt 里的英文契约句（源自上游 references/examiner-protocol.md）。\
+        其余部分是 macOS 原生重写，不是移植。
+
+        上游按 MIT 许可证发布（https://github.com/lindsey-labs/ielts-speaking-coach）。\
+        MIT 的条件是把版权声明与许可声明的原文随副本一起交付，下面就是那份原文，逐字照录：
+
+        MIT License
+
+        Copyright (c) 2026 IELTS Speaking Coach contributors
+
+        Permission is hereby granted, free of charge, to any person obtaining a copy
+        of this software and associated documentation files (the "Software"), to deal
+        in the Software without restriction, including without limitation the rights
+        to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+        copies of the Software, and to permit persons to whom the Software is
+        furnished to do so, subject to the following conditions:
+
+        The above copyright notice and this permission notice shall be included in all
+        copies or substantial portions of the Software.
+
+        THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+        IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+        FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+        AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+        LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+        OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+        SOFTWARE.
+
+        上面这段 MIT 只覆盖来自上游的那部分文本，不覆盖本工具的其余部分。
         """
 }

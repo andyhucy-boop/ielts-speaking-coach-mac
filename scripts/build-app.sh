@@ -64,6 +64,22 @@ echo "▶︎ 生成图标…"
 "$ROOT/scripts/make-icon.sh"
 cp "$BUILD_DIR/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 
+# LICENSE 必须跟着 .app 走。
+# 工程里有逐字沿用自上游 lindsey-labs/ielts-speaking-coach 的文本
+# （AnswerUpgradePolicy 的规则正文、ExaminerPrompt 的英文契约句），上游是 MIT。
+# MIT 的条件是把版权声明与 permission notice 的原文随副本一起交付——
+# 交出去的是这个 .app，里面没有源码树，所以那份原文得在包里。
+# 关于页也显示同一份（AboutViewModel.licenseNotice），但那要用户去点菜单才看得到，
+# 而且关于页是 Task 7 才接上的；这里放一份文件，合规就不依赖任何一处 UI。
+if [[ ! -f "$ROOT/LICENSE" ]]; then
+    echo "❌ 仓库根目录找不到 LICENSE。"
+    echo "   发生了什么：打不出合规的包——LICENSE 末尾的「第三方声明」里有上游 MIT 的原文，"
+    echo "   MIT 要求它随每一份副本一起交付，缺了它这个 .app 就不该发给别人。"
+    echo "   下一步：确认 LICENSE 还在仓库里并已提交，然后重打。"
+    exit 1
+fi
+cp "$ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
+
 # 注意：没有 NSAccessibilityUsageDescription 这种键，系统不读它。
 # 辅助功能是 TCC 里由用户手动勾选的，弹的是系统固定文案，不是 App 能自定义的。
 cat > "$APP/Contents/Info.plist" <<PLIST

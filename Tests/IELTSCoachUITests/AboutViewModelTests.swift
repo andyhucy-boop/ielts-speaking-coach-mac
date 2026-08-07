@@ -131,4 +131,95 @@ final class AboutViewModelTests: XCTestCase {
         XCTAssertTrue(notice.contains("商标"), "许可说明里要有商标声明")
         XCTAssertTrue(notice.contains("再分发"), "许可说明里要说清能不能再分发")
     }
+
+    // MARK: - 上游 MIT 的合规
+
+    /// 上游 lindsey-labs/ielts-speaking-coach 的 LICENSE，逐字照录。
+    /// 核对方式：`curl https://raw.githubusercontent.com/lindsey-labs/ielts-speaking-coach/main/LICENSE`
+    ///
+    /// 这段英文本身就是 MIT 的那个条件：“The above copyright notice **and this permission
+    /// notice** shall be included in all copies or substantial portions of the Software.”
+    /// permission notice 指的是从 “Permission is hereby granted…” 到 “…THE SOFTWARE.” 的原文，
+    /// 不是它的中文转述。所以下面几条比的是**逐字包含**，而不是「提到了 MIT」——
+    /// 只要实现改回中文概述，它们就必须变红。
+    private static let upstreamMITNotice = """
+        MIT License
+
+        Copyright (c) 2026 IELTS Speaking Coach contributors
+
+        Permission is hereby granted, free of charge, to any person obtaining a copy
+        of this software and associated documentation files (the "Software"), to deal
+        in the Software without restriction, including without limitation the rights
+        to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+        copies of the Software, and to permit persons to whom the Software is
+        furnished to do so, subject to the following conditions:
+
+        The above copyright notice and this permission notice shall be included in all
+        copies or substantial portions of the Software.
+
+        THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+        IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+        FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+        AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+        LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+        OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+        SOFTWARE.
+        """
+
+    /// 读仓库根目录的 LICENSE。读不到就让测试抛错变红——
+    /// 这个文件是分发合规的一半，不能因为「读不着」而被静默跳过。
+    private static func rootLicenseText() throws -> String {
+        let url = URL(fileURLWithPath: #filePath)   // Tests/IELTSCoachUITests/AboutViewModelTests.swift
+            .deletingLastPathComponent()            // Tests/IELTSCoachUITests
+            .deletingLastPathComponent()            // Tests
+            .deletingLastPathComponent()            // 仓库根目录
+            .appendingPathComponent("LICENSE")
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    func testLicenseNoticeShipsTheUpstreamMITNoticeVerbatim() {
+        // 交到别人手上的是 .app，不是这个仓库。licenseNotice 是编进二进制、
+        // 由关于页原样显示的那一份，所以 MIT 原文必须在它里面——
+        // 「随副本一起交付」这个条件靠的就是这一条。
+        XCTAssertTrue(AboutViewModel.licenseNotice.contains(Self.upstreamMITNotice),
+                      "关于页的许可全文里没有上游 MIT 的原文。"
+                          + "中文转述不满足 MIT 的条件，必须逐字附上 permission notice。")
+    }
+
+    func testRootLicenseFileShipsTheUpstreamMITNoticeVerbatim() throws {
+        XCTAssertTrue(try Self.rootLicenseText().contains(Self.upstreamMITNotice),
+                      "根 LICENSE 里没有上游 MIT 的原文。"
+                          + "别人拿到这份代码时只会读 LICENSE，条件要在那里被满足。")
+    }
+
+    func testRootLicenseFileNamesWhatCameFromUpstream() throws {
+        let text = try Self.rootLicenseText()
+        XCTAssertTrue(text.contains("lindsey-labs/ielts-speaking-coach"),
+                      "LICENSE 没提上游项目，读的人无从知道这份 MIT 覆盖的是什么")
+        XCTAssertTrue(text.contains("AnswerUpgradePolicy"),
+                      "回答升级规则正文逐字来自上游，LICENSE 要点名它")
+        XCTAssertTrue(text.contains("ExaminerPrompt"),
+                      "考官提示词的英文契约句逐字来自上游，LICENSE 要点名它")
+    }
+
+    func testRootLicenseScopesItsAllRightsReservedClaim() throws {
+        // 关于页说「MIT，要保留声明」，LICENSE 却说「全是我的，保留所有权利」，
+        // 同一件事两处打架。版权主张要留，但必须把第三方那部分排除出去。
+        let claims = try Self.rootLicenseText()
+            .split(separator: "\n")
+            .filter { $0.contains("保留所有权利") }
+        XCTAssertFalse(claims.isEmpty, "LICENSE 里本来就该有作者自己的版权主张")
+        for line in claims {
+            XCTAssertTrue(line.contains("第三方声明"),
+                          "这句「保留所有权利」没有把第三方部分排除掉：\(line)")
+        }
+    }
+
+    func testUpstreamAcknowledgementPointsAtTheRealNotice() {
+        let license = AboutViewModel.acknowledgements
+            .first { $0.name.contains("ielts-speaking-coach") }?.license ?? ""
+        XCTAssertTrue(license.contains("第三方声明"),
+                      "这一条自己是中文转述，不是 notice；它必须指向真正放着 MIT 原文的地方，"
+                          + "而不是声称「这一条就是它」")
+    }
 }
