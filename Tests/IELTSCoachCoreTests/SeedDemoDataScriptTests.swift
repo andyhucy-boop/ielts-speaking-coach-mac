@@ -34,12 +34,6 @@ final class SeedDemoDataScriptTests: XCTestCase {
         XCTAssertEqual(state.vocabulary.count, 6)
         XCTAssertEqual(state.targets.count, 1)
         XCTAssertEqual(state.settings.weeklyGoal, 5)
-
-        for sub in ["reports", "pending-reviews", "recordings"] {
-            XCTAssertTrue(
-                FileManager.default.fileExists(atPath: run.target.appending(path: sub).path),
-                "\(sub)/ 没有建出来，App 用这份数据归档时会失败")
-        }
     }
 
     func testDemoIssueOccurrencesMatchTheirSourceSessions() throws {
@@ -189,6 +183,49 @@ final class SeedDemoDataScriptTests: XCTestCase {
                        "波浪号没被展开，脚本在当前目录下造了个名叫 ~ 的目录")
     }
 
+    func testRefusesARelativePathThatResolvesIntoTheRealDataDirectory() throws {
+        // 「我人就站在数据目录里，写个 . 总行了吧」——这是最容易敲出来的形状之一，
+        // 也是**唯一一种非得靠脚本第 29 行的 `.standardizedFileURL` 才拦得住**的形状：
+        // 相对路径展开出来的是 /private/var/… 这样的物理路径，而 realRoot 是
+        // 标准化过的 /var/…，两个字符串对不上，前缀比对就完全失效了。
+        //
+        // 实测（Swift 6.3.3）：把第 29 行改成 `URL(fileURLWithPath: outputPath)`，
+        // 这一跑会打印「✅ 演示数据已写入 …」并把哨兵文件整个覆盖掉。
+        let home = try FakeHome()
+        let run = SeedDemoScript.run(target: ".", fakeHome: home.root,
+                                     workingDirectory: home.coachDirectory)
+
+        let message = run.stdout + run.stderr
+        XCTAssertTrue(message.contains("拒绝写入真实数据目录"),
+                      "站在真实数据目录里写 . 就绕过了安全闸。输出=\(message)")
+        XCTAssertNotEqual(run.status, 0, "拒绝了却以 0 退出，调用方分辨不出成功还是失败")
+        XCTAssertFalse(message.contains("✅"), "拒绝了还打印成功标记，正是铁律 7 禁止的静默失败")
+        XCTAssertEqual(try home.stateFileContents(), FakeHome.sentinel,
+                       "真实数据目录里的 state.json 被脚本覆盖了")
+    }
+
+    func testRefusesAPathThatWalksBackIntoTheRealDataDirectoryViaDotDot() throws {
+        // 第二种同样要靠标准化才拦得住的形状：路径里带 ..，落点得算过才知道。
+        //
+        // 刻意**不**用「<真实数据目录>/../IELTS Speaking Coach」——那种写法的字符串
+        // 本身就以真实数据目录开头，不标准化也会被前缀比对拦下，当不了这条防线的证人。
+        // 这里绕的是它的同级：<Application Support>/nope/../IELTS Speaking Coach，
+        // 字符串上看不出落点，文件系统解析后正是真实数据目录。
+        let home = try FakeHome()
+        let applicationSupport = home.coachDirectory.deletingLastPathComponent()
+            .standardizedFileURL.path
+        let detour = applicationSupport + "/nope/../\(DataDirectory.folderName)"
+        let run = SeedDemoScript.run(target: detour, fakeHome: home.root)
+
+        let message = run.stdout + run.stderr
+        XCTAssertTrue(message.contains("拒绝写入真实数据目录"),
+                      "带 .. 绕一圈回到真实数据目录就绕过了安全闸。输出=\(message)")
+        XCTAssertNotEqual(run.status, 0)
+        XCTAssertFalse(message.contains("✅"))
+        XCTAssertEqual(try home.stateFileContents(), FakeHome.sentinel,
+                       "真实数据目录里的 state.json 被脚本覆盖了")
+    }
+
     func testAcceptsADirectoryThatMerelyLooksLikeTheRealOne() throws {
         // 安全闸只能挡真实数据目录本身与它下面的东西。若它顺手把
         // 「路径里带 IELTS Speaking Coach 字样」的目录也挡了，
@@ -229,8 +266,11 @@ enum SeedDemoScript {
         repositoryRoot.appending(path: "scripts/seed-demo-data.swift").path
     }
 
-    static func run(target: String, fakeHome: URL? = nil) -> Run {
-        let workingDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
+    /// - Parameter workingDirectory: 脚本进程的工作目录。只有验相对路径的用例需要指定它
+    ///   （站在真实数据目录里敲 `.`）；其余用例用默认的临时目录即可。
+    static func run(target: String, fakeHome: URL? = nil,
+                    workingDirectory: URL? = nil) -> Run {
+        let workingDirectory = workingDirectory ?? URL(fileURLWithPath: NSTemporaryDirectory())
             .appending(path: "seed-demo-cwd-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: workingDirectory,
                                                  withIntermediateDirectories: true)

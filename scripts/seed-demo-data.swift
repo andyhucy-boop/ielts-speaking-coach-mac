@@ -179,10 +179,11 @@ let state: [String: Any] = [
 ]
 
 do {
-    for sub in ["", "reports", "pending-reviews", "recordings"] {
-        let url = sub.isEmpty ? target : target.appending(path: sub)
-        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-    }
+    // 只建目标目录本身。计划里原本还顺手建了 reports/ pending-reviews/ recordings/，
+    // 但 App 每次读写 state.json 都会先 `DataDirectory.createIfNeeded()` 把这三个建出来，
+    // 其余读取处（RecordingStore、PendingReviewStore、coach reimport）也都先 fileExists 再读，
+    // 没有任何一处需要脚本代劳——建了也没有任何测试守得住，删掉。
+    try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
     let data = try JSONSerialization.data(withJSONObject: state,
                                           options: [.prettyPrinted, .sortedKeys])
     try data.write(to: target.appending(path: "state.json"), options: .atomic)
