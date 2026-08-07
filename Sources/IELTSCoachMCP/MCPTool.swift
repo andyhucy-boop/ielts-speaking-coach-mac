@@ -16,33 +16,11 @@ public struct ToolOutcome: Equatable, Sendable {
     public static func failure(_ message: String) -> ToolOutcome { ToolOutcome(text: message, isError: true) }
 }
 
-// MARK: - 工具的输入与错误
-//
-// 下面三个类型在 Task 5 会各归各位（`ToolArguments` 搬去 ToolArguments.swift 并补全读取方法，
-// `DashboardOpenError` 搬去 MCPEnvironment.swift）。放在这里不是占位符：
-// `MCPTool.throwing` 现在就在真实地构造与捕获它们，测试也覆盖着这条路径。
-
-/// 参数不合法（缺字段、类型不对、取值越界）。message 必须是中文，
-/// 且同时说清「发生了什么」与「下一步做什么」——它会原样回给模型，
-/// 模型要靠它自己改对参数再试一次。
-public struct ToolInputError: Error, Equatable {
-    public let message: String
-    public init(message: String) { self.message = message }
-}
-
-/// 唤起 App（`ieltscoach://`）失败。同样要求中文 + 下一步。
-public struct DashboardOpenError: Error, Equatable {
-    public let message: String
-    public init(message: String) { self.message = message }
-}
-
-/// 一次 tools/call 带来的 arguments 对象。Task 5 会给它加上带中文校验的读取方法。
-public struct ToolArguments {
-    public let value: JSONValue
-    public init(_ value: JSONValue) { self.value = value }
-}
-
 // MARK: - 工具
+//
+// 工具的输入与错误类型不在这里：`ToolInputError` 与 `ToolArguments` 在
+// ToolArguments.swift，`DashboardOpenError` 与 `DashboardOpening` 在 MCPEnvironment.swift。
+// 下面的 `throwing` 会捕获它们，把中文文案原样透给模型。
 
 public struct MCPTool {
     public let name: String
