@@ -35,6 +35,9 @@ let package = Package(
         .testTarget(name: "ChatGPTBridgeTests", dependencies: ["ChatGPTBridge"]),
         .testTarget(name: "IELTSCoachAudioTests", dependencies: ["IELTSCoachAudio"]),
         .testTarget(name: "IELTSCoachUITests", dependencies: ["IELTSCoachUI"]),
-        .testTarget(name: "IELTSCoachMCPTests", dependencies: ["IELTSCoachMCP", "IELTSCoachCore"])
+        .testTarget(name: "IELTSCoachMCPTests", dependencies: ["IELTSCoachMCP", "IELTSCoachCore"]),
+        // 刻意不依赖任何产品代码：它守的是打包脚本与工程配置的契约，不是 Swift 逻辑。
+        // 给它加依赖会让「脚本还没写好」这种失败被编译错误掩盖掉。
+        .testTarget(name: "PackagingTests")
     ]
 )
