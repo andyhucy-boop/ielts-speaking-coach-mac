@@ -27,6 +27,33 @@ final class TrainingPlanCodableTests: XCTestCase {
         XCTAssertEqual(plan.focusPart, .part2)
     }
 
+    /// 比上一条更隐蔽的同类失败：键**在**，但值是这个版本不认识的字符串。
+    /// 枚举的 decodeIfPresent 只在「键不存在」时返回 nil，遇到不认识的字符串会抛
+    /// dataCorrupted——照样一路冒泡到 StateStore 的「训练数据文件已损坏」，
+    /// 用户全部练习记录当场看不见。触发来源是真实的：手改过的 state.json，
+    /// 以及将来给 FocusPart 加了新 case 之后回退/跨机同步的旧版本 App。
+    /// 为了一个展示用的字段丢掉全部练习记录，不成比例。
+    func testDecodesUnknownFocusPartStringAsFullMockInsteadOfBrickingTheWholeFile() throws {
+        let json = """
+        {"lengthDays":7,"createdAt":"2026-08-01T00:00:00Z","focusPart":"Part 4",
+         "days":[{"id":1,"questionIds":["q1"],"completedQuestionIds":["q1"]}]}
+        """
+        let plan = try JSONDecoder().decode(TrainingPlan.self, from: Data(json.utf8))
+        XCTAssertEqual(plan.focusPart, .fullMock, "认不出来的重点 Part 按全真模考处理，不许抛错")
+        XCTAssertEqual(plan.days[0].completedQuestionIds, ["q1"], "练过的题不能因为一个坏字段丢掉")
+
+        // 用户真正会碰到的是整份 state.json：plan 里一个坏枚举值不许把整份记录挡在门外。
+        let state = """
+        {"schemaVersion":3,
+         "plan":{"lengthDays":7,"createdAt":"2026-08-01T00:00:00Z","focusPart":"Part 4",
+                 "days":[{"id":1,"questionIds":["q1"],"completedQuestionIds":["q1"]}]}}
+        """
+        let decoded = try JSONDecoder().decode(CoachState.self, from: Data(state.utf8))
+        XCTAssertEqual(decoded.plan?.focusPart, .fullMock)
+        XCTAssertEqual(decoded.plan?.days[0].completedQuestionIds, ["q1"],
+                       "整份 state.json 必须仍然读得出来，否则 StateStore 会报「训练数据文件已损坏」")
+    }
+
     func testEncodesFocusPartSoItSurvivesARoundTrip() throws {
         let plan = TrainingPlan(lengthDays: 7, createdAt: "2026-08-06T00:00:00Z",
                                 days: [PlanDay(id: 1, questionIds: ["q1"], completedQuestionIds: [])],

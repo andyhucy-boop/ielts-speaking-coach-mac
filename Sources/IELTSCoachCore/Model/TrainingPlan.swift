@@ -23,12 +23,18 @@ public struct TrainingPlan: Codable, Equatable, Sendable {
     /// CoachState 用 decodeIfPresent 读 plan，而 decodeIfPresent 只在「键不存在」时返回 nil；
     /// 键存在但内部缺字段照样抛错，那个错会一路冒泡，让 StateStore 报
     /// 「训练数据文件已损坏」——为了一个新加的字段，把用户全部练习记录挡在门外。
+    ///
+    /// focusPart 要先读字符串再转枚举，是因为**枚举的 decodeIfPresent 只挡「键不存在」，
+    /// 遇到不认识的字符串会抛 dataCorrupted**，后果与缺字段完全一样（整份 state.json 读不出来）。
+    /// 触发来源是真实的：手改过的 state.json，以及将来给 FocusPart 加新 case 之后
+    /// 回退或跨机同步到的旧版本 App。认不出来就按默认值处理，不许连累其余记录。
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         lengthDays = try c.decode(Int.self, forKey: .lengthDays)
         createdAt = try c.decodeIfPresent(String.self, forKey: .createdAt) ?? ""
         days = try c.decodeIfPresent([PlanDay].self, forKey: .days) ?? []
-        focusPart = try c.decodeIfPresent(FocusPart.self, forKey: .focusPart) ?? .fullMock
+        focusPart = FocusPart(rawValue: try c.decodeIfPresent(String.self, forKey: .focusPart) ?? "")
+            ?? .fullMock
     }
 
     public var isComplete: Bool { days.allSatisfy(\.isComplete) }

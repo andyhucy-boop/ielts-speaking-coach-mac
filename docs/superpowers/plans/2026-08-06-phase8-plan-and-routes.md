@@ -148,6 +148,21 @@ docs/
 
 **这一步真正的风险不是加字段，是加字段的方式。** `CoachState.init(from:)` 用 `decodeIfPresent(TrainingPlan.self, forKey: .plan)` 读计划——**`decodeIfPresent` 只在键不存在时返回 nil；键存在但里面缺字段，仍然会抛错**，而这个错会一路冒泡出去，让 `StateStore` 报「训练数据文件已损坏」。用户硬盘上那份 state.json 是旧版本写的，plan 里没有 `focusPart`。若解码要求这个字段必须存在，**用户的全部练习记录会在升级后当场看不见**。
 
+> ### ⚠️ 与 Task 2 的规则冲突（2026-08-07 复审补入，已在下面的代码块里修好）
+>
+> 本计划 **Task 2 结尾**写死了一条通用规则：「枚举的 `decodeIfPresent` 遇到**不认识的字符串**会抛
+> `dataCorrupted`，不是返回 nil……**所以枚举字段一律「先读字符串、再转枚举、转不出来就用默认值」**」。
+> 初稿 Task 1 的 Step 3 代码块（`focusPart = try c.decodeIfPresent(FocusPart.self, ...) ?? .fullMock`）
+> **违反了这条规则**，而 `focusPart` 恰恰是本阶段第一个枚举字段。
+>
+> 实测确认：`state.json` 里 `"plan":{...,"focusPart":"Part 4",...}` →
+> `JSONDecoder().decode(CoachState.self, ...)` 抛 `DecodingError.dataCorrupted` →
+> `StateStore` 报「训练数据文件已损坏」→ **用户全部练习记录当场看不见**，
+> 与「缺字段」的后果一模一样，只是触发条件换成了「坏值」。触发来源真实存在：
+> 手改过的 state.json，以及将来给 `FocusPart` 加新 case 之后回退 / 跨机同步到的旧版本 App。
+>
+> 下面 Step 1 与 Step 3 的代码块**已按 Task 2 的规则改好**，Step 5 也补了对应的突变。
+
 - [ ] **Step 1: 写失败的测试**
 
 `Tests/IELTSCoachCoreTests/TrainingPlanCodableTests.swift`：
@@ -180,6 +195,33 @@ final class TrainingPlanCodableTests: XCTestCase {
         """
         let plan = try JSONDecoder().decode(TrainingPlan.self, from: Data(json.utf8))
         XCTAssertEqual(plan.focusPart, .part2)
+    }
+
+    /// 比上一条更隐蔽的同类失败：键**在**，但值是这个版本不认识的字符串。
+    /// 枚举的 decodeIfPresent 只在「键不存在」时返回 nil，遇到不认识的字符串会抛
+    /// dataCorrupted——照样一路冒泡到 StateStore 的「训练数据文件已损坏」，
+    /// 用户全部练习记录当场看不见。触发来源是真实的：手改过的 state.json，
+    /// 以及将来给 FocusPart 加了新 case 之后回退/跨机同步的旧版本 App。
+    /// 为了一个展示用的字段丢掉全部练习记录，不成比例。
+    func testDecodesUnknownFocusPartStringAsFullMockInsteadOfBrickingTheWholeFile() throws {
+        let json = """
+        {"lengthDays":7,"createdAt":"2026-08-01T00:00:00Z","focusPart":"Part 4",
+         "days":[{"id":1,"questionIds":["q1"],"completedQuestionIds":["q1"]}]}
+        """
+        let plan = try JSONDecoder().decode(TrainingPlan.self, from: Data(json.utf8))
+        XCTAssertEqual(plan.focusPart, .fullMock, "认不出来的重点 Part 按全真模考处理，不许抛错")
+        XCTAssertEqual(plan.days[0].completedQuestionIds, ["q1"], "练过的题不能因为一个坏字段丢掉")
+
+        // 用户真正会碰到的是整份 state.json：plan 里一个坏枚举值不许把整份记录挡在门外。
+        let state = """
+        {"schemaVersion":3,
+         "plan":{"lengthDays":7,"createdAt":"2026-08-01T00:00:00Z","focusPart":"Part 4",
+                 "days":[{"id":1,"questionIds":["q1"],"completedQuestionIds":["q1"]}]}}
+        """
+        let decoded = try JSONDecoder().decode(CoachState.self, from: Data(state.utf8))
+        XCTAssertEqual(decoded.plan?.focusPart, .fullMock)
+        XCTAssertEqual(decoded.plan?.days[0].completedQuestionIds, ["q1"],
+                       "整份 state.json 必须仍然读得出来，否则 StateStore 会报「训练数据文件已损坏」")
     }
 
     func testEncodesFocusPartSoItSurvivesARoundTrip() throws {
@@ -235,12 +277,18 @@ public struct TrainingPlan: Codable, Equatable, Sendable {
     /// CoachState 用 decodeIfPresent 读 plan，而 decodeIfPresent 只在「键不存在」时返回 nil；
     /// 键存在但内部缺字段照样抛错，那个错会一路冒泡，让 StateStore 报
     /// 「训练数据文件已损坏」——为了一个新加的字段，把用户全部练习记录挡在门外。
+    ///
+    /// focusPart 要先读字符串再转枚举，是因为**枚举的 decodeIfPresent 只挡「键不存在」，
+    /// 遇到不认识的字符串会抛 dataCorrupted**，后果与缺字段完全一样（整份 state.json 读不出来）。
+    /// 触发来源是真实的：手改过的 state.json，以及将来给 FocusPart 加新 case 之后
+    /// 回退或跨机同步到的旧版本 App。认不出来就按默认值处理，不许连累其余记录。
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         lengthDays = try c.decode(Int.self, forKey: .lengthDays)
         createdAt = try c.decodeIfPresent(String.self, forKey: .createdAt) ?? ""
         days = try c.decodeIfPresent([PlanDay].self, forKey: .days) ?? []
-        focusPart = try c.decodeIfPresent(FocusPart.self, forKey: .focusPart) ?? .fullMock
+        focusPart = FocusPart(rawValue: try c.decodeIfPresent(String.self, forKey: .focusPart) ?? "")
+            ?? .fullMock
     }
 
     public var isComplete: Bool { days.allSatisfy(\.isComplete) }
@@ -252,20 +300,27 @@ public struct TrainingPlan: Codable, Equatable, Sendable {
 - [ ] **Step 4: 运行，确认通过**
 
 Run: `swift test --filter TrainingPlanCodableTests`
-Expected: PASS（4 个测试）
+Expected: PASS（5 个测试）
 
 Run: `swift test`
 Expected: 全绿（既有的 `PlanBuilderTests`、`CoachStateTests`、`ReviewArchiverTests` 都会走到这段代码）
 
 - [ ] **Step 5: 突变验证**
 
-把 `focusPart = try c.decodeIfPresent(FocusPart.self, forKey: .focusPart) ?? .fullMock`
-改成 `focusPart = try c.decode(FocusPart.self, forKey: .focusPart)`，重跑：
+两个突变都要做（2026-08-07 复审补入第二个），因为这一行同时挡两种失败：
+
+突变 A（挡「坏值」的部分）：把 `focusPart` 那一行改回
+`focusPart = try c.decodeIfPresent(FocusPart.self, forKey: .focusPart) ?? .fullMock`，重跑：
+
+Run: `swift test --filter TrainingPlanCodableTests`
+Expected: `testDecodesUnknownFocusPartStringAsFullMockInsteadOfBrickingTheWholeFile` **变红**（`dataCorrupted`）
+
+突变 B（挡「缺键」的部分）：再改成 `focusPart = try c.decode(FocusPart.self, forKey: .focusPart)`，重跑：
 
 Run: `swift test --filter TrainingPlanCodableTests`
 Expected: `testDecodesLegacyPlanWithoutFocusPart` **变红**（`keyNotFound`）
 
-改回后重跑确认全绿。把两次的输出写进报告。
+改回后重跑确认全绿。把三次的输出写进报告。
 
 **这条守的是本阶段最贵的那种失败：升级之后用户的训练数据整份读不出来。**
 
