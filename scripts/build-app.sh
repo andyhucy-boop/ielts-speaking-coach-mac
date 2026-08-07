@@ -38,12 +38,21 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleExecutable</key><string>IELTSCoachApp</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.5.0</string>
+    <key>CFBundleShortVersionString</key><string>0.9.0</string>
     <key>CFBundleVersion</key><string>1</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSMicrophoneUsageDescription</key>
     <string>开启「保存我的回答录音」后，用于录下你练习时的回答，便于回听。录音只存在本机，可随时删除。</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key><string>com.ielts.speakingcoach.deeplink</string>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>CFBundleURLSchemes</key>
+            <array><string>ieltscoach</string></array>
+        </dict>
+    </array>
 </dict>
 </plist>
 PLIST
@@ -55,6 +64,18 @@ plutil -lint "$APP/Contents/Info.plist" >/dev/null || {
     echo "   下一步：检查 build-app.sh 里那段 heredoc 的标签是否闭合。"
     exit 1
 }
+
+# 光校验 plist 合法没用：少了 CFBundleURLTypes，plist 依然合法，
+# 而 open_dashboard 会静默失效——NSWorkspace.open 返回 false，系统一句话都不说。
+registered_scheme="$(plutil -extract CFBundleURLTypes.0.CFBundleURLSchemes.0 raw \
+    "$APP/Contents/Info.plist" 2>/dev/null || true)"
+if [ "$registered_scheme" != "ieltscoach" ]; then
+    echo "❌ Info.plist 里没有正确注册 ieltscoach:// 这个 URL scheme（读到的是「$registered_scheme」）。"
+    echo "   下一步：检查 build-app.sh 里 CFBundleURLTypes 那一段是否完整。"
+    echo "   不修的话，MCP 的 open_dashboard 会永远打不开窗口，而且不报错。"
+    exit 1
+fi
+echo "✓ 已注册 URL scheme：$registered_scheme://"
 
 # NSMicrophoneUsageDescription 一旦丢了，App 在第一次申请麦克风权限时会直接崩溃，
 # 而崩溃报告里看不出跟这个键有任何关系。上面那段 heredoc 很容易在后续改动里被误伤，

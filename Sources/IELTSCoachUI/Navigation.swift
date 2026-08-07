@@ -1,4 +1,5 @@
 import Foundation
+import IELTSCoachCore
 
 /// 侧边栏十项，与产品设计稿一致。
 public enum SidebarItem: String, CaseIterable, Identifiable, Sendable {
@@ -146,5 +147,22 @@ public enum RootRouter {
                                            navigatingFrom current: SidebarItem?,
                                            to next: SidebarItem?) -> String? {
         next == current ? carried : nil
+    }
+}
+
+extension SidebarItem {
+    /// 深链接路由 → 侧边栏页面。switch 是穷尽的，
+    /// 将来 CoachRoute 加了 case 而这里忘了映射，编译期就会红。
+    public init(route: CoachRoute) {
+        switch route {
+        case .dashboard, .today: self = .today
+        case .questions: self = .questionBank
+        case .plan: self = .plan
+        case .retraining: self = .retraining
+        case .reviews: self = .reviewReports
+        case .history: self = .history
+        case .issues: self = .issues
+        case .vocabulary: self = .vocabulary
+        }
     }
 }
