@@ -370,6 +370,10 @@ final class AppStateTests: XCTestCase {
     }
 
     // MARK: - 「记录对话逐字稿」开关必须真的落盘（铁律 7）
+    //
+    // **Phase 10 Task 16 之后，这个开关的写入口只剩 `CoachSettingsViewModel` 一处**
+    //（`AppState.setTranscriptEnabled` 已删）。这三条跟着改走那条路，
+    // 断言一条没放宽——它们守的从来不是某个方法名，而是「拨过去的开关真的到了磁盘上」。
 
     /// **这条的牙齿在最后那三行。**
     ///
@@ -381,13 +385,14 @@ final class AppStateTests: XCTestCase {
     /// 所以这里换一个全新的 `StateStore` 从磁盘再读一遍（与题库导入那条同一个手法）。
     func testTurningTheTranscriptSwitchOffSurvivesARestart() throws {
         let app = AppState(directory: directory, preflight: { .init(ok: true, messages: []) })
+        let settings = CoachSettingsViewModel(app: app, directory: directory)
         XCTAssertTrue(app.state.settings.transcriptEnabled, "ROADMAP 第 5 节写明默认是开的")
 
-        app.setTranscriptEnabled(false)
+        settings.setTranscriptEnabled(false)
 
-        XCTAssertNil(app.loadError, "写成功了却挂着一条错误信息")
+        XCTAssertNil(settings.error, "写成功了却挂着一条错误信息")
         XCTAssertFalse(app.state.settings.transcriptEnabled,
-                       "拨完开关内存里的状态没跟着变，界面上开关会自己弹回去")
+                       "拨完开关主窗口那份状态没跟着变，训练记录页那一行还写着「开」")
         XCTAssertFalse(try StateStore(directory: directory).load().settings.transcriptEnabled,
                        "开关只改了内存没写进 state.json——用户关掉 App 再打开它就弹回来了")
     }
@@ -396,9 +401,10 @@ final class AppStateTests: XCTestCase {
         // 单向测试是个常见的空转陷阱：`{ $0.settings.transcriptEnabled = false }`
         // 这种写死取值的实现，只测「关」的话是绿的。
         let app = AppState(directory: directory, preflight: { .init(ok: true, messages: []) })
-        app.setTranscriptEnabled(false)
+        let settings = CoachSettingsViewModel(app: app, directory: directory)
+        settings.setTranscriptEnabled(false)
 
-        app.setTranscriptEnabled(true)
+        settings.setTranscriptEnabled(true)
 
         XCTAssertTrue(app.state.settings.transcriptEnabled)
         XCTAssertTrue(try StateStore(directory: directory).load().settings.transcriptEnabled,
@@ -414,17 +420,18 @@ final class AppStateTests: XCTestCase {
             .appending(path: "ielts-ui-blocked-\(UUID().uuidString)")
         try Data("这是个文件，不是目录".utf8).write(to: root)
         defer { try? FileManager.default.removeItem(at: root) }
-        let app = AppState(directory: DataDirectory(root: root),
-                           preflight: { .init(ok: true, messages: []) })
+        let blocked = DataDirectory(root: root)
+        let app = AppState(directory: blocked, preflight: { .init(ok: true, messages: []) })
+        let settings = CoachSettingsViewModel(app: app, directory: blocked)
 
-        app.setTranscriptEnabled(false)
+        settings.setTranscriptEnabled(false)
 
-        let message = try XCTUnwrap(app.loadError, "写盘失败却一声不吭")
-        // 点名是哪个开关。构造 AppState 时读盘也会失败并留下一条**别的**错误信息，
-        // 只断言「loadError 非空」的话，`setTranscriptEnabled` 里的 catch 整个删掉照样绿。
-        XCTAssertTrue(message.contains("记录对话逐字稿"),
-                      "没说清是哪个设置没保存上，用户不知道刚才那一下到底生效没有：" + message)
+        let message = try XCTUnwrap(settings.error, "写盘失败却一声不吭")
         XCTAssertTrue(message.contains("下一步"), "只说失败不说下一步不算合格：" + message)
+        // **开关不许撒谎。** 没存进去就得照旧显示「开」——显示成「关」而练习还在记，
+        // 正是这条测试名字里那个 lie。
+        XCTAssertTrue(settings.transcriptEnabled,
+                      "没存进去却显示成「关」，用户以为逐字稿停了，实际上还在记")
     }
 
     // MARK: - 删一条训练记录（复审 BI-1：这条路径此前一条行为测试都没有）
@@ -613,7 +620,8 @@ final class AppStateTests: XCTestCase {
     func testTurningTheSwitchOffReallyStopsTheSampling() async throws {
         let sampler = Self.scriptedSampler()
         let app = Self.appState(directory: directory, sampler: sampler)
-        app.setTranscriptEnabled(false)
+        // 走用户真正会走的那条路：设置窗口的「练习偏好」（Phase 10 Task 16 起唯一的写入口）。
+        CoachSettingsViewModel(app: app, directory: directory).setTranscriptEnabled(false)
 
         let runner = app.makePracticeRunner()
         try await runner.start(setup: Self.setup())

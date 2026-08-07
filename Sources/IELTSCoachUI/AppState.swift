@@ -27,10 +27,6 @@ public final class AppState {
     /// 读取训练数据失败时的中文说明。非 nil 时界面必须显示它——
     /// 静默失败会让用户以为自己的练习记录没了。
     public private(set) var loadError: String?
-    /// 改设置失败时的中文说明。**非 nil 时界面必须显示，且不许关闭面板**——
-    /// 静默失败会让用户以为目标改好了，下次打开发现又变回去，
-    /// 而且他永远不知道为什么。
-    public private(set) var settingsError: String?
     /// 这次启动里首次使用引导已经收工了（走完最后一步，或在最后一步点了「先跳过」）。
     ///
     /// **它是「本次启动内」的，不进磁盘。** 磁盘上那个「引导看过没有」由
@@ -249,45 +245,13 @@ public final class AppState {
                                          warnings: result.warnings)
     }
 
-    /// 「记录对话逐字稿」开关（ROADMAP 第 5 节，默认开）。
-    ///
-    /// 写盘失败必须让用户看见——静默失败会让用户以为已经关掉了，实际还在记录。
-    /// 这属于本项目最不能接受的那种失败：界面显示的状态和真实行为对不上。
-    public func setTranscriptEnabled(_ enabled: Bool) {
-        do {
-            try store.mutate { $0.settings.transcriptEnabled = enabled }
-            reload()
-        } catch {
-            loadError = "没能保存「记录对话逐字稿」这个设置：\(error.localizedDescription) "
-                + "下一步：确认数据目录可写（默认在「资源库 › Application Support › "
-                + "IELTS Speaking Coach」），然后重试；在此之前这个开关仍按原来的设置生效。"
-        }
-    }
-
-    /// 改每周训练目标。越界的取值按 `CoachSettings.normalized` 归一，不抛错。
-    ///
-    /// **归一必须在这里做一次，不能只靠读回来时那一次。** `CoachSettings.init(from:)`
-    /// 解码时确实还会归一一遍，所以少了这一句，界面上看不出任何异样；
-    /// 但磁盘上那份 state.json 会留着 `"weeklyGoal": 99`，而它是 App 与命令行共用的
-    /// 同一个文件——把一个越界值写进共享数据，等于给下一个读它的人埋一颗雷。
-    ///
-    /// - Returns: 是否写盘成功。界面据此决定要不要关闭设置面板。
-    @discardableResult
-    public func setWeeklyGoal(_ goal: Int) -> Bool {
-        let normalized = CoachSettings.normalized(goal)
-        do {
-            try store.mutate { $0.settings.weeklyGoal = normalized }
-            settingsError = nil
-            reload()          // 立刻把新目标反映到首页的「本周 N/M」上
-            return true
-        } catch {
-            settingsError = "每周训练目标没能存下来：\(error.localizedDescription)"
-                + " 下一步：确认数据目录可写"
-                + "（默认在「资源库 › Application Support › IELTS Speaking Coach」），"
-                + "然后再试一次；在此之前仍按原来的目标计数。"
-            return false
-        }
-    }
+    // Phase 10 Task 16：`setTranscriptEnabled(_:)`、`setWeeklyGoal(_:)` 与 `settingsError`
+    // 都在这里被删掉了。它们是设置窗口出现之前的临时写入口，各带一份自己的错误状态；
+    // **两份错误状态并存的话，界面会显示旧的那一份**，而且没人说得清该看哪个。
+    //
+    // 现在这几个设置的唯一写盘路径是 `AppState.mutate`（经 `CoachSettingsViewModel`），
+    // 错误由 `CoachSettingsViewModel.error` 一处承担。
+    // `Tests/PackagingTests/SettingsHomeContractTests` 钉着「一个设置只有一个写入口」。
 
     /// 删掉一条训练记录，连带清掉它的复盘报告与录音（决策 4）。
     ///
@@ -468,12 +432,17 @@ public final class AppState {
     /// 没有 Info.plist 的命令行进程，Phase 5 计划的 Global Constraints 写明单元测试里
     /// 不许构造 `SystemMicrophoneAuthorizer`（那会真的去问系统要麦克风状态）。
     /// 默认值只在没传参时才求值，所以生产路径拿到的仍是真家伙。
+    /// **`onChange` 默认就是「让本 AppState 重读一遍磁盘」**（Phase 10 Task 15/16）。
+    /// 那一格持有自己的 `StateStore`，写完盘之后本 `AppState` 手上那份 `state` 还是旧的；
+    /// 设置窗口与主窗口共用同一个实例，不重读的话，用户在设置窗口开了录音、
+    /// 主窗口这边仍按关的算——而这种不同步在本机几乎不可能复现。
     public func makeRecordingSettingsViewModel(
         authorizer: any MicrophoneAuthorizing = SystemMicrophoneAuthorizer()
     ) -> RecordingSettingsViewModel {
         RecordingSettingsViewModel(store: store,
                                    recordings: RecordingStore(directory: directory),
-                                   authorizer: authorizer)
+                                   authorizer: authorizer,
+                                   onChange: { [weak self] in self?.reload() })
     }
 
     /// 读出某次练习的复盘，拆成复盘报告页要显示的分区。

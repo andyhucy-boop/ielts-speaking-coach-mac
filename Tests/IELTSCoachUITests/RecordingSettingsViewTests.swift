@@ -19,9 +19,10 @@ import XCTest
 ///   → 开关永远显示「开」，而一秒都不录。计划第 48 行的原话：
 ///   「权限没拿到时，界面上的开关**必须**停在「关」。**显示成「开」却什么都不录，
 ///   是本项目最不能接受的那种失败。**」
-/// - `RecordingSettingsScene` 的 `RecordingSettingsView(viewModel: viewModel)` 换成
-///   `EmptyView()` → 整页蒸发，⌘, 打开是个空窗口。此前只有最外面那一环
-///   （main.swift 里的 `Settings { RecordingSettingsScene() }`）被 `AppSceneTests` 守着。
+/// - 装着它的那一页（Phase 5 是 `RecordingSettingsScene`，Phase 10 Task 16 起是
+///   `SettingsWindowView` 的「录音」分区）里，`RecordingSettingsView(viewModel: viewModel)`
+///   换成 `EmptyView()` → 整格蒸发，⌘, 打开那一栏是空的。此前只有最外面那一环
+///   （main.swift 里的 `Settings { … }`）被 `AppSceneTests` 守着。
 /// - 删掉 `Text(viewModel.consentText)` 那五行 → 权限被撤销之后，
 ///   页面上唯一解释「开关为什么自己关了」的那段话没了，用户只会以为是程序抽风。
 ///
@@ -38,7 +39,10 @@ import XCTest
 final class RecordingSettingsViewTests: XCTestCase {
 
     private static let view = "Recording/RecordingSettingsView.swift"
-    private static let scene = "Recording/RecordingSettingsScene.swift"
+    /// 装着这一页的那一格。Phase 10 Task 16 起是统一设置窗口的「录音」分区
+    /// （从前是 `Recording/RecordingSettingsScene.swift`，那个文件已随合并删掉——
+    /// 留着它就是同一页的第二份入口）。
+    private static let host = "Settings/SettingsWindowView.swift"
 
     // MARK: - 一、开关显示什么，只能由视图模型说了算
 
@@ -98,31 +102,31 @@ final class RecordingSettingsViewTests: XCTestCase {
 
     // MARK: - 二、这一页真的被摆进设置窗口了吗
 
-    /// `AppSceneTests` 守的是 main.swift 里 `Settings { RecordingSettingsScene() }` 那一环，
+    /// `AppSceneTests` 守的是 main.swift 里 `Settings { … }` 那一环，
     /// 再往里一层此前没人管：实测把 `RecordingSettingsView(viewModel: viewModel)` 换成
     /// `EmptyView()`，837 条全绿——⌘, 打开是一个空窗口，开关、权限引导、磁盘占用全没了。
     ///
     /// `onAppear` 里那次 `refresh()` 同样是这一条的一部分，而且守的正是本页头号缺陷：
     /// 用户在系统设置里撤掉麦克风权限之后，**只有重读一遍权限状态**，
     /// 这颗开关才会从「开」回到「关」。删掉它，页面会一直照着上次的结果显示「开」。
-    func testTheSettingsSceneActuallyPutsThisPageOnScreenAndRereadsTheDisk() throws {
-        let body = try SourceGuard.memberBody(of: "public var body",
-                                              in: try SourceGuard.code(Self.scene))
+    func testTheSettingsWindowActuallyPutsThisPageOnScreenAndRereadsTheDisk() throws {
+        let body = try SourceGuard.memberBody(of: "private var recordingSection",
+                                              in: try SourceGuard.code(Self.host))
 
         XCTAssertTrue(
             body.contains("RecordingSettingsView(viewModel:"),
-            "设置场景的 `body` 里没有 `RecordingSettingsView(viewModel: …)`，整页一个像素都不上屏："
-                + "⌘, 打开是个空窗口，录音开关、麦克风权限引导、磁盘占用提示全都没了，"
+            "设置窗口「录音」那一格里没有 `RecordingSettingsView(viewModel: …)`，整页一个像素都不上屏："
+                + "⌘, 打开那一栏是空的，录音开关、麦克风权限引导、磁盘占用提示全都没了，"
                 + "而这不会有任何编译错误。"
-                + "下一步：把它摆回 `body`；换了别的初始化写法就同步改这条测试。")
+                + "下一步：把它摆回那一格；换了别的初始化写法就同步改这条测试。")
 
         XCTAssertTrue(
-            body.contains("viewModel.refresh()"),
+            body.contains("recording.refresh()"),
             "打开这一页时不再 `refresh()` 了。后果有两件，第二件是这一页最要命的："
                 + "磁盘占用会停在打开 App 那一刻的数字；"
                 + "**而麦克风权限是否还在手里也不会重读**——用户在系统设置里把麦克风关掉之后，"
                 + "这颗开关会一直显示「开」而练习一秒都不录。"
-                + "下一步：把 `.onAppear { viewModel.refresh() }` 加回去。")
+                + "下一步：把 `.onAppear { recording.refresh() }` 加回那一格。")
     }
 
     // MARK: - 三、视图模型算给用户看的每一句话，都得真的上屏

@@ -22,12 +22,13 @@ struct TodayView: View {
     /// 空状态那个按钮要把用户送到「训练题库」。导航状态在 `RootView` 手上，所以由它传进来，
     /// 与 `ReviewReportView`、`PlaceholderView` 的做法一致——这一页自己不持有导航状态。
     let onGo: (SidebarItem) -> Void
-    /// 「本周训练」那一格里的「改目标」按钮翻的就是它。
+    /// 「改目标」那颗按钮要把设置窗口停到哪一栏。
     ///
-    /// **是 `@Binding` 而不是本页自己的 `@State`**：`RootView` 工具栏那颗齿轮翻的是同一份，
-    /// 各存各的话两颗按钮会开出两张不同的面板，其中一张改完另一张显示的还是旧值。
-    /// 面板本身挂在 `RootView` 上（`WeeklyGoalSheet`），这一页只负责把开关翻过去。
-    @Binding var showingWeeklyGoal: Bool
+    /// **它和 `RootView` 工具栏那颗齿轮是同一个对象**（由 App 层下发）：
+    /// 两颗按钮打开的是**同一个窗口**的同一栏，不是各弹各的面板。
+    let navigator: SettingsNavigator
+    /// 打开 ⌘, 那个设置窗口。用系统给的这一个，不要私有 selector。
+    @Environment(\.openSettings) private var openSettings
 
     /// 正在进行的这一场。非 nil 时弹出 `PracticeSheet`，由它驱动 ChatGPT。
     ///
@@ -254,9 +255,13 @@ struct TodayView: View {
     /// 「本周训练」那一格里的进度条与「改目标」按钮。
     /// 目标次数来自设置（`weekProgress.goal`），不是写死的 5。
     ///
-    /// 「改目标」这颗按钮由 Task 9 补齐（Task 8 交付时 `WeeklyGoalSheet` 还不存在，
-    /// 先摆一颗点了没反应的按钮是本项目最不能接受的那一类，所以当时按住没做）。
-    /// 它翻的是 `RootView` 手上那份 `showingWeeklyGoal`，与工具栏齿轮同一个开关。
+    /// 「改目标」这颗按钮打开的是**设置窗口本体**，并停在「训练目标」那一栏
+    /// （Phase 10 Task 16）。从前它弹的是一张这一页专用的小面板，
+    /// 于是每周目标有了两份界面——那正是这次合并要消灭的东西。
+    ///
+    /// **首页这颗按钮不撤。** 这一格写着「本周 3/5 次」，旁边不给一个改目标的入口，
+    /// 用户看得见目标却不知道去哪儿改；而深链接同时满足两边：
+    /// 一个窗口、一份状态、两条到达路径。
     private var weekProgressBar: some View {
         let progress = model.weekProgress
         return VStack(alignment: .leading, spacing: Spacing.sm) {
@@ -265,7 +270,7 @@ struct TodayView: View {
                 .tint(Palette.accent)
                 .accessibilityLabel("本周训练进度")
                 .accessibilityValue("\(progress.done) 次，共 \(progress.goal) 次")
-            Button("改目标") { showingWeeklyGoal = true }
+            Button("改目标") { navigator.open(.goals); openSettings() }
                 .buttonStyle(.bordered)
         }
     }
@@ -814,7 +819,7 @@ struct PracticeLaunch: Identifiable {
                 .appending(path: "ielts-coach-preview-today")),
             preflight: { BridgeReadiness(ok: true, messages: ["✅ 环境就绪（预览用的假结果）"]) }),
         onGo: { _ in },
-        showingWeeklyGoal: .constant(false))
+        navigator: SettingsNavigator())
 }
 
 // 点了「开始练习」之后弹出来的那张 sheet 的预览在 `Session/PracticeSheet.swift` 里，

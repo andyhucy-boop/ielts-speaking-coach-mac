@@ -8,9 +8,11 @@ import SwiftUI
 /// 版式全部走 Task 7 的组件与令牌（`CoachCard` / `SectionHeader` / `EmptyStateView`、
 /// `Palette` / `Spacing` / `Radius` / `Typography`）。**这里不许出现字面颜色、字号、圆角。**
 ///
-/// 页头右上那个「记录对话逐字稿」开关是逐字稿功能唯一的关闭入口（ROADMAP 第 5 节）。
-/// 它摆在这一页而不是设置页，是因为这一页就是它的产物——用户在这儿看到记录为空，
-/// 抬头就能看见是不是自己把它关了。
+/// 页头右上从前摆着「记录对话逐字稿」那个开关（Phase 4）。**Phase 10 Task 16 把它撤了。**
+/// 它决定的是**每一场练习**要不要采集逐字稿，不是训练记录页的属性；
+/// 而设置窗口的「练习偏好」里也有同一个开关，两处并存就是「同一个设置两个家」——
+/// 两个家改的还是同一个字段，谁后写盘谁说了算，用户看到的是随机结果。
+/// 这里只留一行只读现状 + 一颗「打开设置 › 练习偏好」按钮。
 ///
 /// **这一页刻意不做搜索、筛选、导出。** 那些都不在 ROADMAP Phase 4 的交付清单里。
 @MainActor
@@ -19,8 +21,12 @@ struct HistoryView: View {
     /// 空状态那颗按钮要把用户送到「今日训练」。导航状态在 `RootView` 手上，所以由它传进来，
     /// 与 `TodayView` / `ReviewReportView` 的做法一致——这一页自己不持有导航状态。
     let onGo: (SidebarItem) -> Void
+    /// 「打开设置 › 练习偏好」那颗按钮要把设置窗口停到哪一栏。
+    let navigator: SettingsNavigator
     /// 「看这次的复盘」：跳到复盘报告页**并选中这一场**。同上，落地由 `RootView` 接。
     let onOpenReview: (PracticeSession) -> Void
+    /// 打开 ⌘, 那个设置窗口。用系统给的这一个，不要私有 selector。
+    @Environment(\.openSettings) private var openSettings
 
     /// 展开着逐字稿的是哪一场。**存 id 不存整条记录**：列表会随 `app.state` 变，
     /// 存对象会在刷新之后指着一份旧的。
@@ -67,36 +73,40 @@ struct HistoryView: View {
         }
     }
 
-    // MARK: - 页头与「记录对话逐字稿」开关
+    // MARK: - 页头与「逐字稿记录开着没有」那一行
 
     private var header: some View {
         HStack(alignment: .top, spacing: Spacing.lg) {
             SectionHeader(number: 2, label: "TRAINING HISTORY", title: SidebarItem.history.title)
-            transcriptToggle
+            transcriptStatus
         }
     }
 
-    /// 开关**两头都要接**：读 `settings.transcriptEnabled`，写 `app.setTranscriptEnabled(_:)`。
+    /// **只读现状 + 去哪儿改。这一页自己一个字都不写盘。**
     ///
-    /// 下面那行小字不是可有可无的。「记录对话」四个字很容易被理解成录音，
-    /// 而录音是另一个默认关闭、需要麦克风权限的开关。不写清楚，谨慎的用户只会把它关掉，
-    /// 然后这一页对他永远是空的。
-    private var transcriptToggle: some View {
+    /// 这一行仍然要有：这一页就是逐字稿的产物，看到记录里没有对话时，
+    /// 抬头能看见是不是自己把它关了——这是 Phase 4 把开关放在这儿的本意，保留下来了。
+    /// 变的只是「改」这个动作：它现在只在设置窗口的「练习偏好」里做。
+    ///
+    /// 那句解释（「它只读 ChatGPT 窗口上已经显示的文字，不录音、不联网」）跟着开关
+    /// 一起搬去了设置窗口（`PracticePreferenceEditor.transcriptExplanation`），
+    /// **不在两边各留一份**——两份说明迟早会说不一样的话。
+    private var transcriptStatus: some View {
         VStack(alignment: .trailing, spacing: Spacing.xs) {
-            Toggle("记录对话逐字稿", isOn: Binding(
-                get: { app.state.settings.transcriptEnabled },
-                set: { app.setTranscriptEnabled($0) }))
-                .toggleStyle(.switch)
+            Text(PracticePreferenceEditor.transcriptStatusText(
+                enabled: app.state.settings.transcriptEnabled))
                 .font(Typography.cardTitle)
                 .foregroundStyle(Palette.textPrimary)
-            Text("开着时，练习中会把考官的问题和你的回答记下来，方便复盘时回看。"
-                 + "它只读 ChatGPT 窗口上已经显示的文字，不录音、不联网。")
-                .font(Typography.secondary)
-                .foregroundStyle(Palette.textSecondary)
                 .multilineTextAlignment(.trailing)
                 .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: 320, alignment: .trailing)
+            Button("打开设置 › 练习偏好") {
+                navigator.open(.practice)
+                openSettings()
+            }
+            .buttonStyle(.bordered)
+            .font(Typography.action)
         }
+        .frame(maxWidth: 320, alignment: .trailing)
     }
 
     // MARK: - 按月分组的列表
@@ -255,9 +265,9 @@ struct HistoryView: View {
             VStack(alignment: .leading, spacing: Spacing.md) {
                 if row.session.transcript.isEmpty {
                     // 空白会让用户以为这一页坏了。说清两种可能，再说下一步。
-                    Text("这一场没有逐字稿。可能是练习时「记录对话逐字稿」是关着的，"
+                    Text("这一场没有逐字稿。可能是练习时逐字稿记录是关着的，"
                          + "也可能是这一场发生在这个功能上线之前。"
-                         + "下一步：确认上面的开关是开的，下次练习就会记下来。")
+                         + "下一步：到「设置」（⌘,）里把「记录对话逐字稿」打开，下次练习就会记下来。")
                         .font(Typography.body)
                         .foregroundStyle(Palette.textPrimary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -381,5 +391,6 @@ struct HistoryView: View {
                 .appending(path: "ielts-coach-preview-history")),
             preflight: { BridgeReadiness(ok: true, messages: ["✅ 环境就绪（预览用的假结果）"]) }),
         onGo: { _ in },
+        navigator: SettingsNavigator(),
         onOpenReview: { _ in })
 }

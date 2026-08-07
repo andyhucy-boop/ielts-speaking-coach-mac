@@ -787,22 +787,68 @@ final class SourceGuardTests: XCTestCase {
     ///
     /// 这是整条守卫的地基：清单要是把全 App 的控件混成一坨，
     /// 「这个控件在不在那一页」就永远为真——最坏的一种空转。
+    /// **切 `Settings { … }` 那一步不许被一个同名开头的标识符骗走。**
+    ///
+    /// 本次真踩了一次：Phase 10 Task 16 在 main.swift 里加了
+    /// `@State private var settingsNavigator = SettingsNavigator()`，
+    /// 它排在场景前面、同样以 `Settings` 开头，于是按文字匹配切出来的是整个
+    /// `var body: some Scene`——「⌘, 打开的是哪一页」从 `SettingsWindowView`
+    /// 变成了它里面第一个视图 `RootView`，设置窗口的控件清单当场变成全 App 的控件，
+    /// 「这个控件在不在那一页」退化成恒真。
+    func testTheSettingsSceneIsNotConfusedByAnIdentifierThatStartsWithSettings() throws {
+        let source = """
+            struct CoachApp: App {
+                @State private var settingsNavigator = SettingsNavigator()
+                var body: some Scene {
+                    Window("主窗口", id: "main") { RootView(app: app) }
+                    Settings {
+                        SettingsWindowView(app: app, navigator: settingsNavigator)
+                    }
+                }
+            }
+            """
+        let body = try SourceGuard.settingsSceneBody(in: source)
+        XCTAssertTrue(body.contains("SettingsWindowView("), "切出来的是：\(body)")
+        XCTAssertFalse(body.contains("RootView("),
+                       "被 `SettingsNavigator()` 骗走了，切出来的是整个 body：\(body)")
+
+        // 场景真没了的时候必须抛错，不能给个空串继续跑（空串会让上面那条恒假、下面那条恒真）。
+        XCTAssertThrowsError(try SourceGuard.settingsSceneBody(
+            in: "struct CoachApp: App { var body: some Scene { Window(\"x\") { RootView() } } }"))
+    }
+
     func testUILocationInventoryKnowsWhichPageEachControlLivesOn() throws {
         let locations = try SourceGuard.uiLocations()
 
         guard let history = locations.first(where: { $0.names.contains("训练记录") }) else {
             return XCTFail("清单里没有「训练记录」这一页：\(locations)")
         }
-        XCTAssertTrue(history.controls.contains("记录对话逐字稿"),
-                      "「记录对话逐字稿」这个开关就在训练记录页右上角，清单里却找不到：\(history)")
+        XCTAssertTrue(history.controls.contains("删除这一场"),
+                      "「删除这一场」就在训练记录页的确认框里，清单里却找不到：\(history)")
+        // Phase 10 Task 16 把逐字稿开关从这一页收进了设置窗口。清单必须跟着变——
+        // 说它还在这儿的话，`RetrainingFlowView` 那句指路要是改回「到训练记录页找」，
+        // 这条守卫会放它过去，而用户翻遍那一页也找不到。
+        XCTAssertFalse(history.controls.contains("记录对话逐字稿"),
+                       "「记录对话逐字稿」已经不在训练记录页了（只剩一行只读现状），"
+                           + "清单却说它还在：\(history)")
 
         guard let settings = locations.first(where: { $0.names.contains("设置") }) else {
             return XCTFail("清单里没有 ⌘, 那个设置窗口：\(locations)")
         }
+        XCTAssertTrue(settings.controls.contains("记录对话逐字稿"),
+                      "逐字稿开关现在在设置窗口的「练习偏好」那一栏，清单里却找不到：\(settings)")
+        // **这一条守的是「容器页」那一步推导。** 录音那一格是把 `Recording/` 里的
+        // `RecordingSettingsView` 原样嵌进设置窗口的；只扫 `Settings/` 一个目录的话，
+        // 「到「录音设置」（⌘,）点「打开录音文件夹」」这句完全正确的指路会被报成幽灵控件。
         XCTAssertTrue(settings.controls.contains("保存我的回答录音"),
-                      "设置窗口那颗录音开关没扫到：\(settings)")
-        XCTAssertFalse(settings.controls.contains("记录对话逐字稿"),
-                       "设置窗口里并没有「记录对话逐字稿」。清单说有，"
+                      "设置窗口那颗录音开关没扫到——多半是「嵌进来的页也算这一页的控件」"
+                          + "那一步推导失效了：\(settings)")
+        XCTAssertTrue(settings.controls.contains("打开录音文件夹"),
+                      "同上：\(settings)")
+        // **分得清页与页**：清单要是把全 App 的控件混成一坨，
+        // 「这个控件在不在那一页」就永远为真——最坏的一种空转。
+        XCTAssertFalse(settings.controls.contains("删除这一场"),
+                       "设置窗口里并没有「删除这一场」。清单说有，"
                            + "就等于把这条守卫关掉了：\(settings)")
 
         // 十项侧边栏里已实现的五页 + 设置窗口。少于这个数说明推导写法失效了。

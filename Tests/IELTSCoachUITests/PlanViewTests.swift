@@ -642,168 +642,56 @@ final class PlanViewTests: XCTestCase {
                           + PlanView.deletedNotice)
     }
 
-    // MARK: - 要求 H：三项练习偏好
+    // MARK: - 要求 H：三项练习偏好搬走之后，这一页只留一条路
+    //
+    // **Phase 10 Task 16 把那三个控件搬进了设置窗口。** 它们影响的是每一场练习，
+    // 不只是这份计划；当初落在这一页页尾，只是因为那时还没有设置窗口。
+    // 那三条「控件长什么样、绑到哪个字段」的断言跟着控件一起搬去了
+    // `SettingsWindowViewTests` 与 `PracticePreferenceEditorTests`——**一条都没丢**。
+    //
+    // 这里留下的是搬家之后这一页该有的样子：既不许把控件留在原地
+    // （`SettingsHomeContractTests` 会当场变红），也不许什么都不留
+    // （用户从前在这儿改这几项，突然一片空白只会让他以为功能没了）。
 
-    func testThePreferenceSectionIsOnThePage() throws {
+    func testThePreferenceSectionIsStillOnThePageAsASignpost() throws {
         let code = try Self.viewCode()
         SourceGuard.assertRenders(
             "preferences", inBodyOf: "var body: some View", of: Self.view,
-            because: "练习偏好那一整块没摆进页面，三项设置全都改不了。")
+            because: "那一整块没摆进页面，从前在这儿改偏好的用户会以为功能被删了。")
         let block = try SourceGuard.memberBody(of: "private var preferences", in: code)
         XCTAssertTrue(block.contains("SectionHeader("),
-                      "偏好区块没有区块标题，会和上面的计划糊成一片。实际取到的是：\n\(block)")
-        for member in ["routePreference", "feedbackPreference", "prepPreference"] {
-            XCTAssertTrue(block.contains(member),
-                          "偏好区块里少了 `\(member)`。实际取到的是：\n\(block)")
-        }
+                      "这一块没有区块标题，会和上面的计划糊成一片。实际取到的是：\n\(block)")
+        XCTAssertTrue(block.contains("默认练习路线、反馈时机、Part 2 准备时间都在设置里改"),
+                      "少了那句说明。只摆一颗按钮的话，用户不知道按下去会看到什么。"
+                          + "实际取到的是：\n\(block)")
+        XCTAssertTrue(block.contains("Button(\"打开设置 › 练习偏好\")"),
+                      "只写了一句「去设置里改」却没给按钮，用户读完还得自己去翻菜单——"
+                          + "DESIGN-SYSTEM 第 4 节要的三样（现状 / 下一步 / 能直接点的按钮）缺了一样。"
+                          + "实际取到的是：\n\(block)")
+        XCTAssertTrue(block.contains("navigator.open(.practice)"),
+                      "按钮没有把设置窗口定到「练习偏好」那一栏，用户点开落在「录音」上。"
+                          + "实际取到的是：\n\(block)")
+        XCTAssertTrue(block.contains("openSettings()"),
+                      "按钮没有真的打开设置窗口，点下去什么都不会发生。实际取到的是：\n\(block)")
     }
 
-    /// 三项偏好共用的那张卡片，**三句渲染一句都不许少**。
+    /// **那三个控件必须真的不在这一页了。**
     ///
-    /// ## 为什么单独写这一条
-    ///
-    /// 上面 `testThePreferenceSectionIsOnThePage` 问的是「三个成员摆进区块了吗」，
-    /// 而 `routePreference` / `feedbackPreference` / `prepPreference` 三个成员确实被
-    /// `preferences` 引用着——**它们「可达」，可它们画不画得出东西，全看 `preferenceCard`**。
-    /// 那三个 Picker 是以闭包的形式传进来的，在 `preferenceCard` 内部被丢掉时，
-    /// `RenderReachabilitySweep` 的可达性分析完全看不见（它只顺着成员名走）。
-    ///
-    /// 实测过两次，都是 1331 条一条不红：
-    ///
-    /// - 删掉 `content()` 那一句 → 要求 H 的三个控件（默认练习路线 / 反馈时机 /
-    ///   Part 2 准备时间）一个都不上屏，「练习偏好」区块只剩三张有标题、有说明、
-    ///   没有任何可点控件的空卡片。
-    /// - 删掉 `Text(explanation)` 那一段 → 要求 H「每项下面一行小字说明取舍」的三行字
-    ///   一个字都不上屏。而 `testEachPreferenceSpellsOutWhatItCostsYou` 只断言三个常量的
-    ///   字面值，`testTheDefaultRouteGoesThroughTheOneTranslationLayerInBothDirections`
-    ///   只断言常量被传了进去——**「传进去了」和「画出来了」是两件事**，中间那一段没人守。
-    ///
-    /// 这正是本项目栽过四次的那一类（删掉 `PracticeSheet` 两句渲染，465 条全绿）。
-    func testThePreferenceCardDrawsItsTitleItsControlAndItsTradeOffLine() throws {
-        let card = try SourceGuard.memberBody(of: "private func preferenceCard",
-                                              in: try Self.viewCode())
-        XCTAssertTrue(card.contains("Text(title)"),
-                      "偏好卡片没把 `title` 画出来，三张卡片会变成三坨没有抬头的控件，"
-                          + "用户不知道自己在改哪一项。实际取到的是：\n\(card)")
-        XCTAssertTrue(card.contains("content()"),
-                      "偏好卡片收下了控件却没画出来（计划要求 H 的三个控件一个都不上屏，"
-                          + "「练习偏好」区块只剩三张空卡片）。"
-                          + "注意这一句被删掉时可达性扫描看不见——那三个 Picker 是以闭包传进来的。"
-                          + "实际取到的是：\n\(card)")
-        XCTAssertTrue(card.contains("Text(explanation)"),
-                      "偏好卡片收下了取舍说明却没画出来。计划要求 H 明写「每项下面一行小字"
-                          + "说明取舍」——那行小字不是装饰：两个选项哪个合适取决于用户现在想练什么，"
-                          + "不写清代价他只能靠猜，而猜错要练完一整场才发现。"
-                          + "实际取到的是：\n\(card)")
-    }
-
-    /// 三项偏好各自把**自己那一行**取舍说明交给卡片。
-    ///
-    /// 上面那条守的是「卡片画不画」，这一条守的是「传进去的是不是那一份」。
-    /// 少了这一条，`explanation:` 传成空串或者三处传同一份，
-    /// `testEachPreferenceSpellsOutWhatItCostsYou`（只断言常量的字面值）照样绿。
-    func testEachPreferenceHandsItsOwnTradeOffLineToTheCard() throws {
+    /// 上一条只问「路标在不在」，把控件留在路标旁边它照样绿——而那就是
+    /// 「练习偏好有两个家」本身：两处各写一次盘，谁后写谁说了算，用户看到的是随机结果。
+    /// 源码层面 `SettingsHomeContractTests` 从写入口那一头守着同一件事，
+    /// 这一条从界面这一头守：控件、绑定、共用卡片，一个都不许留。
+    func testTheThreePreferenceControlsReallyLeftThisPage() throws {
         let code = try Self.viewCode()
-        for (marker, constant, name) in [
-            ("private var routePreference", "Self.defaultRouteExplanation", "默认练习路线"),
-            ("private var feedbackPreference", "Self.feedbackTimingExplanation", "反馈时机"),
-            ("private var prepPreference", "Self.part2PrepExplanation", "Part 2 准备时间")
-        ] {
-            let control = try SourceGuard.memberBody(of: marker, in: code)
-            XCTAssertTrue(control.contains("preferenceCard("),
-                          "「\(name)」没走共用的 `preferenceCard`，那张卡片上的三句渲染"
-                              + "（标题 / 控件 / 取舍说明）对它就一句都不作数。"
-                              + "实际取到的是：\n\(control)")
-            XCTAssertTrue(control.contains(constant),
-                          "「\(name)」下面那行小字不是 `\(constant)`。计划要求 H 逐字给了这三行，"
-                              + "传错一份或者传成空串，用户读到的就是别一项的取舍。"
-                              + "实际取到的是：\n\(control)")
+        for leftover in ["routePreference", "feedbackPreference", "prepPreference",
+                         "preferenceCard", "routeBinding", "feedbackBinding", "prepBinding",
+                         "PracticeRoutePreference"] {
+            XCTAssertFalse(code.contains(leftover),
+                           "这一页里还留着 `\(leftover)`。练习偏好现在只有一个家"
+                               + "（设置窗口的「练习偏好」那一栏）；留在这儿就是两个入口，"
+                               + "而两个入口迟早会显示两个不一样的取值。"
+                               + "下一步：把它删掉，这一页只留那条深链接。")
         }
-    }
-
-    func testTheDefaultRouteGoesThroughTheOneTranslationLayerInBothDirections() throws {
-        let code = try Self.viewCode()
-        let control = try SourceGuard.memberBody(of: "private var routePreference", in: code)
-        XCTAssertTrue(control.contains("PracticeRoute.allCases"),
-                      "默认路线的选项是手抄的一份。实际取到的是：\n\(control)")
-        XCTAssertTrue(control.contains("route.title"),
-                      "选项没用 `PracticeRoute.title` 显示，用户看到的会是 `planToday` "
-                          + "这种英文 case 名。实际取到的是：\n\(control)")
-        XCTAssertTrue(control.contains("Self.defaultRouteExplanation"),
-                      "这项设置下面没有那行取舍说明。实际取到的是：\n\(control)")
-
-        let binding = try SourceGuard.memberBody(of: "private var routeBinding", in: code)
-        XCTAssertTrue(binding.contains("PracticeRoutePreference.route(fromSettings:"),
-                      "读的时候没走 `PracticeRoutePreference`。Core 存的是字符串，"
-                          + "认不出来时要退回默认路线，而不是让控件空着。实际取到的是：\n\(binding)")
-        XCTAssertTrue(binding.contains("PracticeRoutePreference.rawValue(for:"),
-                      "写的时候没走 `PracticeRoutePreference.rawValue(for:)`。存与读各写各的，"
-                          + "迟早出现「存的是这个、读的是那个」。实际取到的是：\n\(binding)")
-        XCTAssertTrue(binding.contains("settings.defaultRoute"),
-                      "默认路线没有存进 `settings.defaultRoute`。实际取到的是：\n\(binding)")
-    }
-
-    func testTheFeedbackTimingAndPrepModeAreStoredWhereTheRestOfTheAppReadsThem() throws {
-        let code = try Self.viewCode()
-        for (marker, field, explanation) in [
-            ("private var feedbackBinding", "settings.feedbackTiming", "反馈时机"),
-            ("private var prepBinding", "settings.part2PrepMode", "Part 2 准备时间")
-        ] {
-            let binding = try SourceGuard.memberBody(of: marker, in: code)
-            XCTAssertTrue(binding.contains(field),
-                          "「\(explanation)」没有存进 `\(field)`——开练时读的就是那个字段，"
-                              + "存错地方等于这个设置永远不生效。实际取到的是：\n\(binding)")
-        }
-        for (marker, needle, explanation) in [
-            ("private var feedbackPreference", "FeedbackTiming.allCases", "反馈时机"),
-            ("private var prepPreference", "Part2PrepMode.allCases", "Part 2 准备时间")
-        ] {
-            let control = try SourceGuard.memberBody(of: marker, in: code)
-            XCTAssertTrue(control.contains(needle),
-                          "「\(explanation)」的选项是手抄的一份，不是 `\(needle)`。"
-                              + "实际取到的是：\n\(control)")
-        }
-    }
-
-    /// 三个选项的中文标题真跑一遍，并且**穷尽**：将来给这两个枚举加一档，
-    /// 编译器会当场逼人补上，前提是这里的 `switch` 没有 `default:` 兜底。
-    func testEveryOptionHasADistinctChineseTitle() throws {
-        XCTAssertEqual(PlanView.feedbackTimingTitle(.deferred), "全程零反馈")
-        XCTAssertEqual(PlanView.feedbackTimingTitle(.immediate), "当场点出")
-        XCTAssertEqual(PlanView.part2PrepTitle(.countdown), "一分钟倒计时")
-        XCTAssertEqual(PlanView.part2PrepTitle(.learnerControlled), "自己决定")
-
-        let code = try Self.viewCode()
-        for name in ["feedbackTimingTitle", "part2PrepTitle"] {
-            let body = try SourceGuard.functionBody(named: name, in: code)
-            XCTAssertFalse(body.contains("default:"),
-                           "`\(name)` 用了 `default:` 兜底。将来加一档，它会被静默地显示成"
-                               + "某个已有选项的名字，编译器一声不吭。下一步：逐档写全。")
-        }
-    }
-
-    /// 三行取舍说明逐字来自 spec 3.1（计划 Task 9 要求 H）。
-    ///
-    /// **这三行不是装饰。** 「全程零反馈」和「当场点出」哪个更好取决于用户现在想练什么，
-    /// 不写代价的话，他只能靠猜，而猜错要练完一整场才发现。
-    func testEachPreferenceSpellsOutWhatItCostsYou() {
-        XCTAssertEqual(PlanView.defaultRouteExplanation, "今日训练页会把这条路线排在最前面。")
-        XCTAssertEqual(
-            PlanView.feedbackTimingExplanation,
-            "全程零反馈像真考试，但答砸的地方要等到最后才知道；"
-                + "当场点出纠正及时，代价是不再是真实考试节奏，单场时间也会拉长。")
-        XCTAssertEqual(
-            PlanView.part2PrepExplanation,
-            "一分钟倒计时像真考试，练的是压力下组织语言；自己决定适合刚起步时先把内容想清楚。")
-    }
-
-    func testChangingAPreferenceWritesItThroughAndSurfacesAnyFailure() throws {
-        let save = try SourceGuard.functionBody(named: "save", in: try Self.viewCode())
-        XCTAssertTrue(save.contains("app.mutate"),
-                      "改偏好没有落盘，用户重开 App 又变回去了。实际取到的是：\n\(save)")
-        XCTAssertTrue(save.contains("notice = app.mutate"),
-                      "写盘失败时那句中文说明被丢掉了。界面上开关拨过去了、磁盘上没变，"
-                          + "是本项目最不能接受的那一种失败（铁律 7）。实际取到的是：\n\(save)")
     }
 
     // MARK: - 接线：这一页得真的挂在侧边栏上

@@ -39,42 +39,77 @@ final class AppSceneTests: XCTestCase {
 
         XCTAssertTrue(
             code.contains("Window("),
-            "找不到窗口场景。下一步：确认入口仍然是 `Window(\"…\", id: …) { RootView() }`。")
+            "找不到窗口场景。下一步：确认入口仍然是 `Window(\"…\", id: …) { RootView(app: app, …) }`。")
 
         XCTAssertEqual(
-            SourceGuard.occurrences(of: "RootView()", in: code), 1,
-            "入口文件里 `RootView()` 出现了不止一次——多一次就多一份 `AppState`，"
-                + "也就多一次开机 preflight。下一步：确认没有第二个场景在开第二个根视图。")
+            SourceGuard.occurrences(of: "RootView(", in: code), 1,
+            "入口文件里 `RootView(` 出现了不止一次——多一个根视图就多一个主窗口。"
+                + "下一步：确认没有第二个场景在开第二个根视图。")
+    }
+
+    /// **整个进程只许有一份 `AppState`，而且它建在 App 层。**
+    ///
+    /// Phase 10 Task 16 把它从 `RootView` 提了上来：设置窗口（⌘,）是另一个 Scene，
+    /// 两个窗口只有共用同一个实例，「在设置窗口把每周目标改成 9、主窗口那格当场变成 N/9」
+    /// 才是必然的；各建各的话就只能靠事后刷新去补，而漏一处就是一个在本机永远复现不了的 bug
+    /// ——你改完总会顺手看一眼那个窗口。
+    ///
+    /// 所以这里数三个数：`AppState()` 只许出现一次，两个 Scene 都得拿着**那一个** `app`。
+    func testBothScenesShareTheOneAndOnlyAppState() throws {
+        let code = try SourceGuard.repositoryCode(Self.mainPath)
+
+        XCTAssertEqual(
+            SourceGuard.occurrences(of: "AppState()", in: code), 1,
+            "入口文件里 `AppState()` 出现了 \(SourceGuard.occurrences(of: "AppState()", in: code)) 次。"
+                + "多一份就是多一份状态：设置窗口改完，主窗口那格纹丝不动，"
+                + "而且不会有任何编译错误。下一步：只建一份，两个 Scene 都传它。")
+
+        XCTAssertTrue(
+            code.contains("RootView(app: app"),
+            "主窗口没有拿 App 层那份 `app`（多半是又自己 new 了一个）。"
+                + "下一步：`RootView(app: app, navigator: settingsNavigator)`。")
+
+        let settingsScene = try SourceGuard.settingsSceneBody(in: code)
+        XCTAssertTrue(
+            settingsScene.contains("app: app"),
+            "设置窗口没有拿 App 层那份 `app`，它和主窗口就是两份互不相通的状态："
+                + "在设置里改完，主窗口要切一次页才看得到（甚至永远看不到）。"
+                + "实际取到的是：\n\(settingsScene)")
+        XCTAssertTrue(
+            settingsScene.contains("navigator: settingsNavigator"),
+            "设置窗口没有拿 App 层那份 `SettingsNavigator`，首页齿轮那条"
+                + "「打开设置并停在训练目标」的深链接就永远落不到那一栏。"
+                + "实际取到的是：\n\(settingsScene)")
     }
 
     /// **设置窗口（⌘,）与它里面那一页的接线，同样得有人守。**
     ///
-    /// 实测：把 main.swift 里 `Settings { RecordingSettingsScene() }` 那一行删掉，
+    /// 实测（Phase 5 那一版）：把 main.swift 里那句 `Settings { … }` 删掉，
     /// `swift test` 是 804 条全绿——因为「保存我的回答录音」那一页的测试测的是
     /// `RecordingSettingsViewModel`（逻辑），没有一条问过「这一页到底挂上 App 了吗」。
     /// 后果是整页从 App 里消失：开关、麦克风权限引导、磁盘占用提示全都没了，
     /// ⌘, 打开是一个空窗口，而全套测试照样绿。
     ///
-    /// 这正是上一轮复审刚抓过的同一类缺口（「整份 Phase 5 计划没有任何一个任务认领
-    /// 把录音器接到 App 上」，commit 5ee085c）：**逻辑测得再扎实，也证明不了它被接上了。**
-    func testTheSettingsWindowActuallyOpensTheRecordingSettingsPage() throws {
+    /// Phase 10 Task 16 之后这个窗口装的是 `SettingsWindowView`（四个分区），
+    /// 它没了的话丢的就不止录音那一页，而是全 App 所有能改的设置。
+    func testTheSettingsWindowActuallyOpensTheUnifiedSettingsPage() throws {
         let code = try SourceGuard.repositoryCode(Self.mainPath)
 
         XCTAssertTrue(
             code.contains("Settings {"),
             "入口文件里没有 `Settings { … }` 场景，⌘, 打开的会是一个空的设置窗口："
-                + "录音开关、麦克风权限引导、磁盘占用提示整页从 App 里消失。"
-                + "下一步：把 `Settings { RecordingSettingsScene() }` 加回 `CoachApp.body`；"
+                + "录音、训练目标、练习偏好、数据与隐私四个分区整个从 App 里消失，"
+                + "而首页齿轮和另外两处「打开设置 › 练习偏好」按钮全都会变成点了没反应。"
+                + "下一步：把 `Settings { SettingsWindowView(…) }` 加回 `CoachApp.body`；"
                 + "真要改成别的写法（例如 `Settings` 与 `{` 之间不留空格），同步改这条断言。")
 
         // 光有 `Settings { }` 不够——里面是空的一样等于这一页不存在。
-        // `memberBody` 切的是 `Settings` 后面那对大括号里的内容，找不到会抛错（不会静默放行）。
-        let settingsScene = try SourceGuard.memberBody(of: "Settings", in: code)
+        // 切的是 `Settings {` 后面那对大括号里的内容，找不到会抛错（不会静默放行）。
+        let settingsScene = try SourceGuard.settingsSceneBody(in: code)
         XCTAssertTrue(
-            settingsScene.contains("RecordingSettingsScene()"),
-            "设置窗口里没有 `RecordingSettingsScene()`，⌘, 打开的是一个空窗口。"
-                + "下一步：确认 `Settings { RecordingSettingsScene() }` 还在；"
-                + "这一页换了别的类型名的话，同步改这条断言。")
+            settingsScene.contains("SettingsWindowView("),
+            "设置窗口里没有 `SettingsWindowView(…)`，⌘, 打开的是一个空窗口。"
+                + "下一步：确认它还在；这一页换了别的类型名的话，同步改这条断言。")
     }
 
     /// 同一类缺陷还能从哪儿溜过去：往 App 目标里再加一个文件，在里面开第二个场景。

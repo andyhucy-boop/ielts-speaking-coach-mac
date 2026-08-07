@@ -4,7 +4,18 @@ import IELTSCoachCore
 import SwiftUI
 
 public struct RootView: View {
-    @State private var app: AppState
+    /// **由 App 层建、由 App 层下发**（Phase 10 Task 16）。
+    ///
+    /// 从前是这一层自己 `@State private var app = AppState()`，那时进程里只有一个窗口，
+    /// 也就只有一份状态。现在设置窗口是另一个 Scene，两边必须是**同一个实例**——
+    /// 各建各的话，「在设置窗口把每周目标改成 9、主窗口那格当场变成 N/9」
+    /// 就只能靠事后刷新去补，而漏一处就是一个在本机永远复现不了的 bug。
+    let app: AppState
+    /// 设置窗口停在哪一栏。工具栏那颗齿轮先 `open(.goals)` 再 `openSettings()`，
+    /// 于是窗口弹出来时已经在「训练目标」那一栏了。
+    let navigator: SettingsNavigator
+    /// 打开 ⌘, 那个设置窗口。**用系统给的这一个，不要私有 selector。**
+    @Environment(\.openSettings) private var openSettings
     /// 从「训练记录」点「看这次的复盘」带过来的那一场。
     ///
     /// **选中哪一页归 `app.navigation` 管，这一个仍留在这里**：它是「复盘报告」这一页
@@ -18,12 +29,6 @@ public struct RootView: View {
     /// **它是一次性的：用户自己再切一次页就作废**（见 `go(to:)`）。
     /// 只写不清的话方向会反过来犯同一个错——见 `RootRouter.carriedReviewSession` 的说明。
     @State private var requestedReviewSessionID: String?
-
-    /// 每周训练目标那张面板开着没有。
-    ///
-    /// **两个入口共用这一份**：工具栏的齿轮按钮，和首页「本周训练」那一格里的「改目标」。
-    /// 各存各的话，两颗按钮会开出两张不同的面板，其中一张改完另一张显示的还是旧值。
-    @State private var showingWeeklyGoal = false
 
     /// 收到一条打不开的 `ieltscoach://` 链接时要显示的那句话。
     ///
@@ -47,19 +52,24 @@ public struct RootView: View {
     /// （理由写在 `OnboardingProgressStore` 上）。
     private let onboardingStore: any OnboardingProgressStore
 
-    /// 生产入口：真实数据目录 + 真实的环境检查。
-    public init() { self.init(app: AppState()) }
-
-    /// 注入用，**预览必须走这一个**。
+    /// 生产入口。**`AppState` 与 `SettingsNavigator` 都由 App 层建好传进来**，
+    /// 这一层不再自己 new——那两份状态要和设置窗口共用同一个实例（见 `app` 的说明）。
     ///
-    /// 不带参数的 `AppState()` 用的是生产默认值：`AppState.livePreflight` 会
-    /// `NSWorkspace.open` 真的把 ChatGPT 启起来（铁律 5），`DataDirectory.resolve()`
-    /// 又会在用户真实的「应用程序支持」目录里建目录和 `.state.lock`。
-    /// 也就是说，在预览里直接写无参的 `RootView()`，会让「打开画布看一眼布局」这件事
-    /// 产生真实副作用。`PreviewSafetyTests` 扫源码守着这件事。
+    /// 预览与测试同样走这一个：不带参数的 `AppState()` 用的是生产默认值，
+    /// `AppState.livePreflight` 会 `NSWorkspace.open` 真的把 ChatGPT 启起来（铁律 5），
+    /// `DataDirectory.resolve()` 又会在用户真实的「应用程序支持」目录里建目录和 `.state.lock`。
+    /// `PreviewSafetyTests` 扫源码守着这件事。
+    public init(app: AppState, navigator: SettingsNavigator) {
+        self.init(app: app, navigator: navigator, onboardingStore: UserDefaultsOnboardingStore())
+    }
+
+    /// 注入引导进度用，**预览必须走这一个**：不然打开画布会往真实的偏好设置里
+    /// 写一句「引导看过了」。
     init(app: AppState,
+         navigator: SettingsNavigator,
          onboardingStore: any OnboardingProgressStore = UserDefaultsOnboardingStore()) {
-        _app = State(initialValue: app)
+        self.app = app
+        self.navigator = navigator
         self.onboardingStore = onboardingStore
     }
 
@@ -173,19 +183,18 @@ public struct RootView: View {
             detail
                 .toolbar {
                     ToolbarItem {
-                        Button { showingWeeklyGoal = true } label: {
+                        // 打开的是**设置窗口本体**，并停在「训练目标」那一栏。
+                        // 从前这里弹的是一张自己的小面板（`WeeklyGoalSheet`），
+                        // 于是同一个设置有了两份界面；Task 16 把面板整个删掉，
+                        // 只留这条深链接：一个窗口、一份状态、两条到达路径。
+                        Button { navigator.open(.goals); openSettings() } label: {
                             Label("每周训练目标", systemImage: "gearshape")
                         }
-                        // **不挂 ⌘,。** 那个快捷键归 `Sources/IELTSCoachApp/main.swift` 里
-                        // Phase 5 建的 `Settings { RecordingSettingsScene() }` 场景——
-                        // 两处绑同一个快捷键，SwiftUI 不报错，只会随机胜出一个，
-                        // 于是用户按 ⌘, 时而弹录音设置、时而弹每周目标，
-                        // 而 Phase 5 有三处提示写着「到「录音设置」（⌘,）…」。
-                        .help("改每周训练目标")
+                        // **不挂 ⌘,。** 那个快捷键归 `Sources/IELTSCoachApp/main.swift` 里的
+                        // `Settings { SettingsWindowView(…) }` 场景——两处绑同一个快捷键，
+                        // SwiftUI 不报错，只会随机胜出一个，用户按 ⌘, 时而弹这个、时而弹那个。
+                        .help("到设置里改每周训练目标")
                     }
-                }
-                .sheet(isPresented: $showingWeeklyGoal) {
-                    WeeklyGoalSheet(app: app, isPresented: $showingWeeklyGoal)
                 }
         }
     }
@@ -271,8 +280,7 @@ public struct RootView: View {
             .frame(maxWidth: 640, alignment: .leading)
         } else {
             switch current {
-            case .today: TodayView(app: app, onGo: { go(to: $0) },
-                                   showingWeeklyGoal: $showingWeeklyGoal)
+            case .today: TodayView(app: app, onGo: { go(to: $0) }, navigator: navigator)
             case .questionBank: QuestionBankView(app: app)
             case .reviewReports: ReviewReportView(app: app, onGo: { go(to: $0) },
                                                   requestedSessionID: requestedReviewSessionID)
@@ -282,12 +290,13 @@ public struct RootView: View {
                 // 看到的还是他上回在这一页点开的那一场。
                 .id(requestedReviewSessionID)
             case .history: HistoryView(app: app, onGo: { go(to: $0) },
+                                       navigator: navigator,
                                        onOpenReview: { session in
                                            // 这一条不走 `go(to:)`：它就是要带着这一场过去。
                                            requestedReviewSessionID = session.id
                                            app.navigation.selection = .reviewReports
                                        })
-            case .plan: PlanView(app: app)
+            case .plan: PlanView(app: app, navigator: navigator)
             case .retraining: RetrainingCenterView(app: app, onGo: { go(to: $0) })
             case .issues: IssueArchiveView(app: app, onGo: { go(to: $0) })
             case .vocabulary: VocabularyView(app: app, onGo: { go(to: $0) })
@@ -333,12 +342,13 @@ struct PlaceholderView: View {
 
 /// 预览一律走注入：假的环境检查（不碰真的 ChatGPT）+ 临时目录（不碰用户真实的训练数据）
 /// + 只活在内存里的引导进度（不往真实偏好设置里写「引导看过了」）。
-/// 见 `RootView.init(app:onboardingStore:)` 的说明。
+/// 见 `RootView.init(app:navigator:onboardingStore:)` 的说明。
 #Preview {
     RootView(app: AppState(
         directory: DataDirectory(root: URL(fileURLWithPath: NSTemporaryDirectory())
             .appending(path: "ielts-coach-preview")),
         preflight: { BridgeReadiness(ok: true, messages: ["✅ 环境就绪（预览用的假结果）"]) }),
+             navigator: SettingsNavigator(),
              onboardingStore: InMemoryOnboardingStore(
                 completedVersion: OnboardingFlow.currentVersion))
 }

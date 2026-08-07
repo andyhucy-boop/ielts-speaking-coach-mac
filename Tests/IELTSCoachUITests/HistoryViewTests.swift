@@ -50,44 +50,52 @@ final class HistoryViewTests: XCTestCase {
             because: "页头写好了却没摆进 `body`。下一步：把它放回去。")
     }
 
-    // MARK: - 要求 2：「记录对话逐字稿」开关
+    // MARK: - 要求 2：逐字稿记录开着没有（Phase 10 Task 16 起是只读现状 + 一条深链接）
 
-    /// 开关必须**两头都接上**：读的是 `settings.transcriptEnabled`，写的是
-    /// `app.setTranscriptEnabled(_:)`。
+    /// 这一行必须**说清现状、并给一条能走的路**，而且**自己一个字都不许写盘**。
     ///
-    /// 只接读的那一头（`.constant(...)`）：开关拨不动，用户以为程序卡了。
-    /// 只接写的那一头：拨完界面不跟着变，用户会再拨一次，等于拨了两下。
-    func testTheTranscriptSwitchIsWiredBothWays() throws {
-        let toggle = try SourceGuard.memberBody(of: "private var transcriptToggle",
+    /// Phase 4 把开关本体放在这里；Task 16 把它收进设置窗口的「练习偏好」——
+    /// 它决定的是每一场练习要不要采集逐字稿，不是训练记录页的属性。
+    /// 两处都留一个开关的话，改的是同一个字段却各写各的盘，谁后写谁说了算，
+    /// 用户看到的是随机结果（`SettingsHomeContractTests` 从写入口那一头守着同一件事）。
+    ///
+    /// 那一行仍然要有：这一页就是逐字稿的产物，看到记录里没有对话时，
+    /// 抬头能看见是不是自己把它关了——这是当初把开关放在这儿的本意，保留了下来。
+    func testThePageShowsWhetherTranscriptRecordingIsOnAndWhereToChangeIt() throws {
+        let status = try SourceGuard.memberBody(of: "private var transcriptStatus",
                                                 in: try Self.viewCode())
-        XCTAssertTrue(toggle.contains("Toggle(\"记录对话逐字稿\""),
-                      "「记录对话逐字稿」这个开关没了。它是 ROADMAP 第 5 节要求的两个开关之一，"
-                          + "而且是逐字稿功能唯一的关闭入口。实际取到的是：\n\(toggle)")
-        XCTAssertTrue(toggle.contains("app.state.settings.transcriptEnabled"),
-                      "开关没有从 `settings.transcriptEnabled` 取当前状态，"
-                          + "显示的是个与真实设置无关的值——用户看到「开着」，实际可能是关的。")
-        XCTAssertTrue(toggle.contains("app.setTranscriptEnabled("),
-                      "开关拨过去之后没有调 `app.setTranscriptEnabled(_:)`，"
-                          + "也就是根本没落盘：关掉 App 再打开它会自己弹回来，"
-                          + "而这期间练习仍然在记逐字稿。")
+        XCTAssertTrue(status.contains("PracticePreferenceEditor.transcriptStatusText("),
+                      "这一行没走 `PracticePreferenceEditor.transcriptStatusText(enabled:)`，"
+                          + "自己拼一句的话，它和设置窗口那边迟早说不一样的话。"
+                          + "实际取到的是：\n\(status)")
+        XCTAssertTrue(status.contains("app.state.settings.transcriptEnabled"),
+                      "这一行显示的现状不是从 `settings.transcriptEnabled` 取的，"
+                          + "也就是它和真实设置无关——用户看到「开」，实际可能是关的。"
+                          + "实际取到的是：\n\(status)")
+        XCTAssertTrue(status.contains("Button(\"打开设置 › 练习偏好\")"),
+                      "只写了一句现状却没给按钮，用户读完还得自己去翻菜单。"
+                          + "实际取到的是：\n\(status)")
+        XCTAssertTrue(status.contains("navigator.open(.practice)"),
+                      "按钮没有把设置窗口定到「练习偏好」那一栏，用户点开落在「录音」上。"
+                          + "实际取到的是：\n\(status)")
+        XCTAssertTrue(status.contains("openSettings()"),
+                      "按钮没有真的打开设置窗口，点下去什么都不会发生。实际取到的是：\n\(status)")
 
         SourceGuard.assertRenders(
-            "transcriptToggle", inBodyOf: "private var header", of: Self.view,
-            because: "开关写好了却没摆进页头，用户没有任何办法关掉逐字稿。下一步：把它放回去。")
+            "transcriptStatus", inBodyOf: "private var header", of: Self.view,
+            because: "这一行写好了却没摆进页头，用户看不到逐字稿到底开着没有。下一步：把它放回去。")
     }
 
-    /// 开关下面那行小字必须说清「它到底会做什么、不会做什么」。
+    /// **这一页不许再有任何写设置的入口。**
     ///
-    /// 「记录对话」四个字很容易被理解成录音。不写这一句，谨慎的用户只会把它关掉，
-    /// 而关掉之后训练记录页就永远是空的。
-    func testTheSwitchExplainsWhatItDoesAndWhatItDoesNot() throws {
-        let toggle = try SourceGuard.memberBody(of: "private var transcriptToggle",
-                                                in: try Self.viewCode())
-        for phrase in ["考官的问题和你的回答", "不录音", "不联网"] {
-            XCTAssertTrue(toggle.contains(phrase),
-                          "开关下面的说明里没有「\(phrase)」。"
-                              + "「记录对话」很容易被当成录音，说明少一句，用户就只会把它关掉。")
-        }
+    /// 上一条只问「路标在不在」，把开关留在路标旁边它照样绿——而那正是这次合并要消灭的东西。
+    func testTheTranscriptSwitchItselfIsGoneFromThisPage() throws {
+        let code = try Self.viewCode()
+        XCTAssertFalse(code.contains("Toggle("),
+                       "训练记录页还留着一个开关。逐字稿只在设置窗口的「练习偏好」里改。")
+        XCTAssertFalse(code.contains("setTranscriptEnabled"),
+                       "训练记录页还在自己写这个设置。写入口只留 "
+                           + "`CoachSettingsViewModel.setTranscriptEnabled(_:)` 一处。")
     }
 
     // MARK: - 要求 3：按月分组，数据来自 HistoryViewModel

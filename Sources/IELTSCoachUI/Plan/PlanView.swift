@@ -24,6 +24,11 @@ import SwiftUI
 @MainActor
 struct PlanView: View {
     let app: AppState
+    /// 「打开设置 › 练习偏好」那颗按钮要把设置窗口停到哪一栏。由 `RootView` 传进来，
+    /// 与工具栏齿轮、首页「改目标」是同一个对象——三处打开的是同一个窗口。
+    let navigator: SettingsNavigator
+    /// 打开 ⌘, 那个设置窗口。用系统给的这一个，不要私有 selector。
+    @Environment(\.openSettings) private var openSettings
 
     /// 用户在表单里改过的选择。**nil 表示「还没动过」**，此时按现有计划（或默认值）显示。
     ///
@@ -379,68 +384,33 @@ struct PlanView: View {
         }
     }
 
-    // MARK: - 练习偏好（改动即时落盘）
+    // MARK: - 练习偏好搬去设置窗口了，这里只留一条路
 
+    /// 三项练习偏好（默认路线、反馈时机、Part 2 准备时间）从前就摆在这一页页尾。
+    ///
+    /// **Phase 10 Task 16 把它们搬进了设置窗口。** 理由：它们影响的是**每一场练习**，
+    /// 不只是计划；当初落在这儿，只是因为那时还没有设置窗口。
+    /// 留在两处的话，「练习偏好」就有两个家，而两个家迟早会显示两个不一样的取值。
+    ///
+    /// **这里不能什么都不留**：用户从前在这一页改这几项，突然一片空白只会让他以为功能没了。
+    /// 一行说明 + 一颗能直接点的按钮（DESIGN-SYSTEM 第 4 节对空状态的三样要求同理）。
     private var preferences: some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
             SectionHeader(number: 3, label: "PRACTICE PREFERENCES", title: "练习偏好")
-            routePreference
-            feedbackPreference
-            prepPreference
-        }
-    }
-
-    private var routePreference: some View {
-        preferenceCard(title: "默认练习路线", explanation: Self.defaultRouteExplanation) {
-            Picker("默认练习路线", selection: routeBinding) {
-                ForEach(PracticeRoute.allCases) { route in
-                    Text(route.title).tag(route)
+            CoachCard {
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    Text("默认练习路线、反馈时机、Part 2 准备时间都在设置里改。"
+                         + "它们影响的是每一场练习，不只是这份计划，所以收在同一个地方。")
+                        .font(Typography.body)
+                        .foregroundStyle(Palette.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("打开设置 › 练习偏好") {
+                        navigator.open(.practice)
+                        openSettings()
+                    }
+                    .buttonStyle(.bordered)
+                    .font(Typography.action)
                 }
-            }
-        }
-    }
-
-    private var feedbackPreference: some View {
-        preferenceCard(title: "反馈时机", explanation: Self.feedbackTimingExplanation) {
-            Picker("反馈时机", selection: feedbackBinding) {
-                ForEach(FeedbackTiming.allCases, id: \.self) { timing in
-                    Text(Self.feedbackTimingTitle(timing)).tag(timing)
-                }
-            }
-        }
-    }
-
-    private var prepPreference: some View {
-        preferenceCard(title: "Part 2 准备时间", explanation: Self.part2PrepExplanation) {
-            Picker("Part 2 准备时间", selection: prepBinding) {
-                ForEach(Part2PrepMode.allCases, id: \.self) { mode in
-                    Text(Self.part2PrepTitle(mode)).tag(mode)
-                }
-            }
-        }
-    }
-
-    /// 三项偏好长得一样，所以摆版只写一处。
-    ///
-    /// **那行小字不是装饰**：两个选项哪个更合适取决于用户现在想练什么，
-    /// 不写清代价的话他只能靠猜，而猜错要练完一整场才发现。
-    private func preferenceCard<Content: View>(
-        title: String, explanation: String,
-        @ViewBuilder content: () -> Content) -> some View {
-        CoachCard {
-            VStack(alignment: .leading, spacing: Spacing.sm) {
-                Text(title)
-                    .font(Typography.cardTitle)
-                    .foregroundStyle(Palette.textPrimary)
-                content()
-                    .pickerStyle(.radioGroup)
-                    .labelsHidden()
-                    .font(Typography.body)
-                    .foregroundStyle(Palette.textPrimary)
-                Text(explanation)
-                    .font(Typography.secondary)
-                    .foregroundStyle(Palette.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -457,24 +427,9 @@ struct PlanView: View {
                 set: { edited = PlanDraft(lengthDays: draft.lengthDays, focusPart: $0) })
     }
 
-    /// 默认练习路线。**存与读都走 `PracticeRoutePreference`**：Core 存的是字符串
-    /// （Core 不许依赖 UI），两边靠一个约定好的名字对齐，没有任何类型能替我们检查它。
-    private var routeBinding: Binding<PracticeRoute> {
-        Binding(get: { PracticeRoutePreference.route(fromSettings: app.state.settings.defaultRoute) },
-                set: { route in
-                    save { $0.settings.defaultRoute = PracticeRoutePreference.rawValue(for: route) }
-                })
-    }
-
-    private var feedbackBinding: Binding<FeedbackTiming> {
-        Binding(get: { app.state.settings.feedbackTiming },
-                set: { timing in save { $0.settings.feedbackTiming = timing } })
-    }
-
-    private var prepBinding: Binding<Part2PrepMode> {
-        Binding(get: { app.state.settings.part2PrepMode },
-                set: { mode in save { $0.settings.part2PrepMode = mode } })
-    }
+    // 三项偏好的绑定跟着控件一起搬去了 `SettingsWindowView`（Phase 10 Task 16）。
+    // **别在这儿加回来**：`SettingsHomeContractTests` 会当场变红——
+    // 同一个设置有两个写入口，谁后写盘谁说了算，用户看到的是随机结果。
 
     // MARK: - 动作
 
@@ -516,12 +471,6 @@ struct PlanView: View {
     /// 问不出它后面有没有再跟一句别的（实测：加一句 `$0.sessions = []`，41 条一条不红）。
     static func clearPlan(_ state: inout CoachState) {
         state.plan = nil
-    }
-
-    /// 存一项偏好。成功时 `mutate` 返回 nil，正好把上一条提示清掉——
-    /// 留着一条旧的失败说明，用户会以为这一次也没存上。
-    private func save(_ change: (inout CoachState) -> Void) {
-        notice = app.mutate { change(&$0) }
     }
 
     /// 打开这一页时滚到「今天」那一天。30 天的计划停在第 1 天的话，每次都得自己滚到底。
@@ -648,32 +597,8 @@ struct PlanView: View {
             + "下一步：换一个周期或重点 Part 再试一次；现有的计划与练习记录都没有变。"
     }
 
-    // MARK: - 三项练习偏好的中文说法（逐字来自 spec 3.1）
-
-    static func feedbackTimingTitle(_ timing: FeedbackTiming) -> String {
-        // 逐档写全，不用 `default:` 兜底：将来加一档，兜底会把它静默地显示成
-        // 某个已有选项的名字，编译器一声不吭。
-        switch timing {
-        case .deferred: return "全程零反馈"
-        case .immediate: return "当场点出"
-        }
-    }
-
-    static func part2PrepTitle(_ mode: Part2PrepMode) -> String {
-        switch mode {
-        case .countdown: return "一分钟倒计时"
-        case .learnerControlled: return "自己决定"
-        }
-    }
-
-    static let defaultRouteExplanation = "今日训练页会把这条路线排在最前面。"
-
-    static let feedbackTimingExplanation =
-        "全程零反馈像真考试，但答砸的地方要等到最后才知道；"
-        + "当场点出纠正及时，代价是不再是真实考试节奏，单场时间也会拉长。"
-
-    static let part2PrepExplanation =
-        "一分钟倒计时像真考试，练的是压力下组织语言；自己决定适合刚起步时先把内容想清楚。"
+    // 三项偏好的选项名与取舍说明搬去了 `PracticePreferenceEditor`（Phase 10 Task 16），
+    // 跟着控件一起走。留一份在这儿的话，两处迟早会说不一样的话。
 }
 
 /// 预览一律注入：假的环境检查（不碰真的 ChatGPT）+ 临时目录（不碰用户真实的训练数据）。
@@ -682,5 +607,6 @@ struct PlanView: View {
     PlanView(app: AppState(
         directory: DataDirectory(root: URL(fileURLWithPath: NSTemporaryDirectory())
             .appending(path: "ielts-coach-preview-plan")),
-        preflight: { BridgeReadiness(ok: true, messages: ["✅ 环境就绪（预览用的假结果）"]) }))
+        preflight: { BridgeReadiness(ok: true, messages: ["✅ 环境就绪（预览用的假结果）"]) }),
+             navigator: SettingsNavigator())
 }

@@ -1468,40 +1468,57 @@ enum SourceGuard {
     /// - **⌘, 那个窗口是谁**：App 层的 `Settings { … }` 场景。
     ///
     /// 推不出来一律抛错，绝不返回空清单——空清单会让「这个控件在不在那一页」恒真。
+    ///
+    /// **设置窗口是唯一一个「容器页」**（`followsEmbeddedPages`）：它把别处写好的页
+    /// 原样嵌进来当一个分区用——「录音」那一格就是 `Recording/` 里的
+    /// `RecordingSettingsView`（Phase 10 Task 16 起）。只扫它自己那个目录的话，
+    /// 「到「录音设置」（⌘,）点「打开录音文件夹」」这种**完全正确**的指路会被报成幽灵控件，
+    /// 而几次误报之后这条守卫就会被人整条删掉。
+    ///
+    /// 所以对它多走一步：把它源码里构造的那些视图所在的目录也算进来。
+    /// **仍然是从源码推的，没有手写控件清单**；也**只对这一个位置放宽**——
+    /// 侧边栏那几页照旧只认自己目录里的控件，否则「这个控件在不在那一页」会退化成恒真。
     static func uiLocations() throws -> [UILocation] {
-        var entries: [(names: [String], type: String)] = []
+        var entries: [(names: [String], type: String, followsEmbeddedPages: Bool)] = []
 
         let titles = try sidebarTitles()
         for branch in try switchBranches(over: "current", in: try code("RootView.swift")) {
             guard let caseName = branch.cases.first, let title = titles[caseName],
                   let type = firstViewTypeName(in: branch.body) else { continue }
-            entries.append((names: [title], type: type))
+            entries.append((names: [title], type: type, followsEmbeddedPages: false))
         }
         guard entries.count >= 4 else { throw Failure.noUILocations(found: entries.map(\.type)) }
 
-        let appCode = try repositoryCode(appSceneRelativePath)
-        guard let settingsBody = try? memberBody(of: "Settings", in: appCode),
-              let settingsType = firstViewTypeName(in: settingsBody) else {
+        let settingsBody = try settingsSceneBody(in: try repositoryCode(appSceneRelativePath))
+        guard let settingsType = firstViewTypeName(in: settingsBody) else {
             throw Failure.settingsSceneNotFound
         }
-        entries.append((names: settingsWindowNames, type: settingsType))
+        entries.append((names: settingsWindowNames, type: settingsType,
+                        followsEmbeddedPages: true))
 
         let files = try swiftFiles()
         var located: [UILocation] = []
         for entry in entries {
-            guard let file = try files.first(where: { url in
-                let source = stripLineComments(
-                    try read(contentsOf: url, describedAs: try relativePath(of: url)))
-                return source.range(of: #"\bstruct\s+\#(entry.type)\b"#, options: .regularExpression)
-                    != nil
-            }) else {
+            guard let file = try fileDeclaring(entry.type, among: files) else {
                 throw Failure.viewTypeNotFound(type: entry.type)
             }
-            let directory = try relativePath(of: file).split(separator: "/").dropLast()
-                .joined(separator: "/")
+            var directories = [try directoryOf(file)]
+            if entry.followsEmbeddedPages {
+                let source = stripLineComments(
+                    try read(contentsOf: file, describedAs: try relativePath(of: file)))
+                for embedded in viewTypeNames(in: source) where embedded != entry.type {
+                    guard let host = try fileDeclaring(embedded, among: files) else { continue }
+                    let directory = try directoryOf(host)
+                    if !directories.contains(directory) { directories.append(directory) }
+                }
+            }
+            var controls: Set<String> = []
+            for directory in directories {
+                controls.formUnion(try literalControlTitles(under: directory))
+            }
             located.append(UILocation(names: entry.names,
-                                      directory: directory,
-                                      controls: try literalControlTitles(under: directory)))
+                                      directory: directories.joined(separator: " + "),
+                                      controls: controls))
         }
         return located
     }
@@ -1529,7 +1546,28 @@ enum SourceGuard {
 
     /// 一段代码里第一个被构造出来的视图/场景类型名。
     private static func firstViewTypeName(in code: String) -> String? {
-        captures(of: #"\b([A-Z][A-Za-z0-9_]*(?:View|Scene))\s*\("#, in: code).first
+        viewTypeNames(in: code).first
+    }
+
+    /// 一段代码里被构造出来的所有视图/场景类型名，按出现顺序、去重。
+    static func viewTypeNames(in code: String) -> [String] {
+        var seen: Set<String> = []
+        return captures(of: #"\b([A-Z][A-Za-z0-9_]*(?:View|Scene))\s*\("#, in: code)
+            .filter { seen.insert($0).inserted }
+    }
+
+    /// 声明 `struct <type>` 的那个文件。
+    private static func fileDeclaring(_ type: String, among files: [URL]) throws -> URL? {
+        try files.first { url in
+            let source = stripLineComments(
+                try read(contentsOf: url, describedAs: try relativePath(of: url)))
+            return source.range(of: #"\bstruct\s+\#(type)\b"#, options: .regularExpression) != nil
+        }
+    }
+
+    /// 这个文件所在的目录（相对 `Sources/IELTSCoachUI`）。
+    private static func directoryOf(_ file: URL) throws -> String {
+        try relativePath(of: file).split(separator: "/").dropLast().joined(separator: "/")
     }
 
     /// 某个目录下字面写死的按钮与开关标题。
@@ -1549,6 +1587,26 @@ enum SourceGuard {
 
     /// App 层那个场景文件。侧边栏之外的窗口（⌘, 设置）只在这里能查到是谁画的。
     static let appSceneRelativePath = "Sources/IELTSCoachApp/main.swift"
+
+    /// App 层那个 `Settings { … }` 场景的大括号内容。**入参是已经去过注释的代码。**
+    ///
+    /// **不能拿 `memberBody(of: "Settings", …)` 凑合。** 那一个取的是第一处**文字**匹配，
+    /// 而 Phase 10 Task 16 起 main.swift 里 `SettingsNavigator()` 排在场景前面——
+    /// 它同样以 `Settings` 开头，于是切出来的是整个 `var body: some Scene`，
+    /// 「⌘, 打开的是哪一页」就从 `SettingsWindowView` 变成了它里面第一个视图 `RootView`。
+    /// 本次实测过这个形态：设置窗口的控件清单因此变成了**全 App 的控件**，
+    /// 「这个控件在不在那一页」当场退化成恒真——最坏的一种空转。
+    ///
+    /// 找不到一律抛错，绝不返回空串。
+    static func settingsSceneBody(in appCode: String) throws -> String {
+        guard let declaration = appCode.range(of: #"\bSettings\s*\{"#,
+                                              options: .regularExpression),
+              let body = balancedBody(after: appCode.index(before: declaration.upperBound),
+                                      in: appCode) else {
+            throw Failure.settingsSceneNotFound
+        }
+        return body
+    }
 
     // MARK: - 断言：这段渲染必须在
 
