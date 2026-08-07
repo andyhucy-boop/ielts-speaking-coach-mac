@@ -56,10 +56,14 @@ public struct PermissionGateView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text(PermissionStatus.title(for: state)).font(.title2).bold()
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            Text(PermissionStatus.title(for: state))
+                .font(Typography.sectionTitle)
+                .foregroundStyle(Palette.textPrimary)
             Text(PermissionStatus.guidance(for: state, host: host))
-                .font(.body).textSelection(.enabled)
+                .font(Typography.body)
+                .foregroundStyle(Palette.textPrimary)
+                .textSelection(.enabled)
 
             // 「重新检查」的反馈。查出来的结论和上次一样时，这一页别处一个像素都不会变，
             // 用户分不清是「查过了还是不行」还是「按钮坏了」。
@@ -71,24 +75,32 @@ public struct PermissionGateView: View {
             if let notice { noticeLine(notice) }
 
             if !messages.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("检查结果原文").font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    Text("检查结果原文")
+                        .font(Typography.label)
+                        .foregroundStyle(Palette.textSecondary)
                     ForEach(messages, id: \.self) {
-                        Text($0).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                        Text($0)
+                            .font(Typography.secondary)
+                            .foregroundStyle(Palette.textSecondary)
+                            .textSelection(.enabled)
                     }
                 }
             }
 
-            HStack(spacing: 8) {
+            HStack(spacing: Spacing.sm) {
                 if state == .needsAccessibility {
                     Button("打开系统设置") {
                         notice = PermissionStatus.openSettings(host: host, using: openURL)
                     }
                     .buttonStyle(.borderedProminent)
+                    .tint(Palette.accent)
                     Button("重新检查", action: onRecheck)
                 } else {
                     // 每页只有一个主行动：没有「打开系统设置」时，主行动是「重新检查」
-                    Button("重新检查", action: onRecheck).buttonStyle(.borderedProminent)
+                    Button("重新检查", action: onRecheck)
+                        .buttonStyle(.borderedProminent)
+                        .tint(Palette.accent)
                 }
                 if state != .ready {
                     Button("复制诊断信息") {
@@ -101,19 +113,23 @@ public struct PermissionGateView: View {
 
             Text("「先跳过」后可以先浏览题库和历史复盘；在上面的问题解决之前，"
                  + "自动驱动 ChatGPT 的练习没法进行。")
-                .font(.callout).foregroundStyle(.secondary)
+                .font(Typography.secondary)
+                .foregroundStyle(Palette.textSecondary)
         }
-        .padding(32)
+        .padding(Spacing.xl)
         .frame(maxWidth: 640, alignment: .leading)
     }
 
-    /// 两处反馈走同一套排版。抽出来不只是去重：这一页还没收编进设计系统
-    /// （`DesignTokenSweepTests.notYetMigrated`），字面样式各写一份的话，
-    /// 这一页记在案的字面值上限会跟着涨一档。
+    /// 两处反馈走同一套排版。抽出来是为了让两处的字体、颜色、可选中永远一致——
+    /// 各写一份的话，「失败」那一处的红迟早会和另一处对不上。
+    ///
+    /// **失败用 `Palette.danger` 而不是 `Color.red`。** 系统红在深色底上是一个刺眼
+    /// 且对比度不足的红，而 `Palette.danger` 两套外观各有取值，
+    /// 都在 `AppearanceContrastTests` 那张矩阵里过了 4.5:1。
     @ViewBuilder private func noticeLine(_ notice: ActionNotice) -> some View {
         Text(notice.text)
-            .font(.callout)
-            .foregroundStyle(notice.isFailure ? Color.red : Color.secondary)
+            .font(Typography.secondary)
+            .foregroundStyle(notice.isFailure ? Palette.danger : Palette.textSecondary)
             .textSelection(.enabled)
     }
 }

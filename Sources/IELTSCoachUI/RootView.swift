@@ -148,16 +148,18 @@ public struct RootView: View {
     /// 检查最长可能花十秒（要等 ChatGPT 的无障碍树醒过来）。这段时间里界面必须一直在说话，
     /// 否则用户对着一个不动的窗口只会以为死机了（DESIGN-SYSTEM 第 5 节）。
     private var checkingEnvironment: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: Spacing.md) {
             ProgressView()
-            Text("正在检查运行环境…").font(.title3)
+            Text("正在检查运行环境…")
+                .font(Typography.sectionTitle)
+                .foregroundStyle(Palette.textPrimary)
             Text("在确认 ChatGPT 桌面应用是否已安装、辅助功能权限是否已授权。"
                  + "下一步：稍等几秒，检查完会自动进入；最长约十秒。")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+                .font(Typography.secondary)
+                .foregroundStyle(Palette.textSecondary)
                 .multilineTextAlignment(.center)
         }
-        .padding(32)
+        .padding(Spacing.xl)
         .frame(maxWidth: 480)
     }
 
@@ -253,12 +255,19 @@ public struct RootView: View {
         if let loadError = app.loadError {
             // 读不到数据时不进任何一页：那些页面全靠 state 渲染，进去只会是一堆空列表，
             // 用户会以为练习记录没了。
-            VStack(alignment: .leading, spacing: 12) {
-                Text("读不到训练数据").font(.title3).bold()
-                Text(loadError).font(.body).textSelection(.enabled)
-                Button("重试") { app.reload() }.buttonStyle(.borderedProminent)
+            VStack(alignment: .leading, spacing: Spacing.md) {
+                Text("读不到训练数据")
+                    .font(Typography.sectionTitle)
+                    .foregroundStyle(Palette.textPrimary)
+                Text(loadError)
+                    .font(Typography.body)
+                    .foregroundStyle(Palette.textPrimary)
+                    .textSelection(.enabled)
+                Button("重试") { app.reload() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Palette.accent)
             }
-            .padding(32)
+            .padding(Spacing.xl)
             .frame(maxWidth: 640, alignment: .leading)
         } else {
             switch current {
@@ -300,19 +309,24 @@ struct PlaceholderView: View {
     let onGo: (SidebarItem) -> Void
 
     var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: item.systemImage).font(.largeTitle).foregroundStyle(.secondary)
-            Text("「\(item.title)」还没做").font(.title3)
+        VStack(spacing: Spacing.md) {
+            Image(systemName: item.systemImage)
+                .font(Typography.pageTitle)
+                .foregroundStyle(Palette.textSecondary)
+            Text("「\(item.title)」还没做")
+                .font(Typography.sectionTitle)
+                .foregroundStyle(Palette.textPrimary)
             Text(item.placeholderDescription)
-                .font(.callout)
-                .foregroundStyle(.secondary)
+                .font(Typography.secondary)
+                .foregroundStyle(Palette.textSecondary)
                 .multilineTextAlignment(.center)
             if let target = item.placeholderFallback {
                 Button(item.placeholderActionTitle) { onGo(target) }
                     .buttonStyle(.borderedProminent)
+                    .tint(Palette.accent)
             }
         }
-        .padding(32)
+        .padding(Spacing.xl)
         .frame(maxWidth: 480)
     }
 }
