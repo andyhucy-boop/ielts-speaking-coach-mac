@@ -205,26 +205,8 @@ struct VocabularyView: View {
     private var exportSection: some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
             HStack(spacing: Spacing.md) {
-                Menu("导出…") {
-                    ForEach(VocabularyExportFormat.allCases) { format in
-                        Button(format.title) {
-                            lastChosenFormat = format
-                            savingFormat = format
-                        }
-                    }
-                }
-                .fixedSize()
-                .disabled(model.rows.isEmpty)
-
-                Button("复制到剪贴板") {
-                    let document = exportDocument(for: Self.clipboardFormat)
-                    // 写剪贴板是有可能失败的，`setString` 的返回值不能吞。
-                    notice = Self.clipboardNotice(didWrite: writeToPasteboard(document.text),
-                                                  document: document,
-                                                  format: Self.clipboardFormat)
-                }
-                .disabled(model.rows.isEmpty)
-
+                exportMenu
+                copyButton
                 Spacer(minLength: 0)
             }
 
@@ -235,6 +217,41 @@ struct VocabularyView: View {
                 .foregroundStyle(Palette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    /// 「导出…」菜单。
+    ///
+    /// **两颗按钮各占一个成员，不挤在 `exportSection` 里**：两处 `.disabled(model.rows.isEmpty)`
+    /// 挤在同一段里的话，扫源码只问得出「这一段里有没有出现过」——
+    /// 删掉其中一处，另一处照样让断言为真，于是空词汇本也能点导出、
+    /// 存出一个没有任何卡片的文件，而全套测试一条不红（实测）。
+    /// 分成两个成员之后，每一颗的禁用条件各有一条断言盯着。
+    private var exportMenu: some View {
+        Menu("导出…") {
+            ForEach(VocabularyExportFormat.allCases) { format in
+                Button(format.title) {
+                    lastChosenFormat = format
+                    savingFormat = format
+                }
+            }
+        }
+        .fixedSize()
+        // 一个词都没有时不许点：点下去只会存出一个没有任何卡片的文件。
+        .disabled(model.rows.isEmpty)
+    }
+
+    /// 「复制到剪贴板」。理由同上，单独成一个成员。
+    private var copyButton: some View {
+        Button("复制到剪贴板") {
+            let document = exportDocument(for: Self.clipboardFormat)
+            // 写剪贴板是有可能失败的，`setString` 的返回值不能吞。
+            notice = Self.clipboardNotice(didWrite: writeToPasteboard(document.text),
+                                          document: document,
+                                          format: Self.clipboardFormat)
+        }
+        // 一个词都没有时不许点：点下去会把一份没有卡片的内容写进剪贴板，
+        // 顺手冲掉用户正在复制的东西。
+        .disabled(model.rows.isEmpty)
     }
 
     /// 词汇本为空时，两颗按钮为什么是灰的。

@@ -178,24 +178,75 @@ final class VocabularyViewTests: XCTestCase {
 
     func testTheExportMenuOffersEveryFormatAndSavesThroughTheFileExporter() throws {
         let code = try Self.viewCode()
-        let export = try SourceGuard.memberBody(of: "private var exportSection", in: code)
-        XCTAssertTrue(export.contains("VocabularyExportFormat.allCases"),
+        let menu = try SourceGuard.memberBody(of: "private var exportMenu", in: code)
+        XCTAssertTrue(menu.contains("VocabularyExportFormat.allCases"),
                       "导出菜单的格式不是 `VocabularyExportFormat.allCases`。手抄一份的话，"
-                          + "以后加一种格式界面上不会出现。实际取到的是：\n\(export)")
-        XCTAssertTrue(export.contains("format.title"),
+                          + "以后加一种格式界面上不会出现。实际取到的是：\n\(menu)")
+        XCTAssertTrue(menu.contains("format.title"),
                       "菜单项没用 `format.title` 显示，用户看到的是 `ankiTSV` 这种英文 case 名"
-                          + "（铁律 6）。实际取到的是：\n\(export)")
-        XCTAssertTrue(export.contains("savingFormat = format"),
-                      "点了菜单项不会打开保存面板，等于点了没反应。实际取到的是：\n\(export)")
+                          + "（铁律 6）。实际取到的是：\n\(menu)")
+        XCTAssertTrue(menu.contains("savingFormat = format"),
+                      "点了菜单项不会打开保存面板，等于点了没反应。实际取到的是：\n\(menu)")
         XCTAssertTrue(code.contains(".fileExporter("),
                       "没有 `.fileExporter`，选了格式之后没有任何地方能把文件存下来。")
         XCTAssertTrue(code.contains("defaultFilename: savingFileName"),
                       "保存面板没有带上 `ExportDocument.suggestedFileName`，"
                           + "用户拿到的是一个叫「未命名」的文件。")
         SourceGuard.assertRenders(
+            "exportMenu", inBodyOf: "private var exportSection", of: Self.view,
+            because: "导出菜单写好了却没摆进那一排按钮里，用户没有任何入口能把词存成文件。")
+        SourceGuard.assertRenders(
             "exportSection", inBodyOf: "var body: some View", of: Self.view,
             because: "导出入口写好了却没摆进 `body`，这一页就只是个只能看的词表——"
                 + "而导出正是 Task 7 的核心交付。")
+    }
+
+    /// **真正写到磁盘和剪贴板的那两份内容，必须走同一个带筛选的入口。**
+    ///
+    /// 这一条守的是本项目实测过的两处退化：
+    ///
+    /// - 把 `savingDocument` 里那句改成 `model.exportDocument(format:…, filter: .all)`
+    ///   （用户筛到「优先记」、存出来的文件却是全部词汇）——全量 1131 条全绿；
+    /// - 把「复制到剪贴板」那句改成同样的写法——同样全绿。
+    ///
+    /// 原因是上面那条 `testWhatGetsExportedFollowsWhatIsOnScreen` 只切了
+    /// `exportDocument(for:)` 这一段的函数体来扫，而文件的字节与剪贴板的内容都不从那儿来。
+    /// 所以这里问的是「唯一入口」：全文只允许有一处碰 `model.exportDocument(`，
+    /// 而且它必须在 `exportDocument(for:)` 里、必须带上当前筛选。
+    func testEveryExportPathGoesThroughTheOneBuilderThatCarriesTheFilter() throws {
+        let code = try Self.viewCode()
+
+        XCTAssertEqual(SourceGuard.occurrences(of: "model.exportDocument(", in: code), 1,
+                       "这一页有不止一处直接调 `VocabularyViewModel.exportDocument(…)`。"
+                           + "多出来的那一处可以自己传一个 `filter:`，于是用户筛到「优先记」"
+                           + "却导出了全部词汇，而所有测试照样绿。"
+                           + "下一步：让所有导出路径都走 `exportDocument(for:)` 这一个入口。")
+
+        let builder = try SourceGuard.memberBody(of: "private func exportDocument", in: code)
+        XCTAssertTrue(builder.contains("model.exportDocument("),
+                      "唯一入口 `exportDocument(for:)` 自己不再调视图模型了，"
+                          + "那上面那条「只有一处」的断言就守了一处不相干的代码。"
+                          + "实际取到的是：\n\(builder)")
+
+        let saving = try SourceGuard.memberBody(of: "private var savingDocument", in: code)
+        XCTAssertTrue(saving.contains("exportDocument(for: savingFormat)"),
+                      "存到磁盘的那份文档不是从 `exportDocument(for:)` 来的——"
+                          + "文件里的字节正是这一处决定的，绕过去就等于导出不跟随筛选。"
+                          + "实际取到的是：\n\(saving)")
+
+        let fileName = try SourceGuard.memberBody(of: "private var savingFileName", in: code)
+        XCTAssertTrue(fileName.contains("exportDocument(for:"),
+                      "预填的文件名不是从 `exportDocument(for:)` 来的。"
+                          + "实际取到的是：\n\(fileName)")
+
+        let copy = try SourceGuard.memberBody(of: "private var copyButton", in: code)
+        XCTAssertTrue(copy.contains("exportDocument(for: Self.clipboardFormat)"),
+                      "复制到剪贴板的那份内容不是从 `exportDocument(for:)` 来的——"
+                          + "剪贴板里的字正是这一处决定的。实际取到的是：\n\(copy)")
+
+        XCTAssertTrue(code.contains("document: savingDocument"),
+                      "`.fileExporter` 交出去的不是 `savingDocument`，"
+                          + "上面那条针对 `savingDocument` 的断言就在守一段没人用的实现。")
     }
 
     /// **导出一个文件却不说怎么用，等于没做这个功能。**
@@ -316,18 +367,21 @@ final class VocabularyViewTests: XCTestCase {
     }
 
     func testTheClipboardButtonReallyWritesAndReallyChecksTheResult() throws {
-        let export = try SourceGuard.memberBody(of: "private var exportSection",
-                                                in: try Self.viewCode())
-        XCTAssertTrue(export.contains("Button(\"复制到剪贴板\")"),
+        let copy = try SourceGuard.memberBody(of: "private var copyButton",
+                                              in: try Self.viewCode())
+        XCTAssertTrue(copy.contains("Button(\"复制到剪贴板\")"),
                       "没有「复制到剪贴板」这颗按钮。用户已有的 AnkiConnect 脚本"
-                          + "可以直接吃剪贴板内容，这是这一页最短的一条路。实际取到的是：\n\(export)")
-        XCTAssertTrue(export.contains("writeToPasteboard("),
-                      "「复制到剪贴板」点下去没有真的写剪贴板。实际取到的是：\n\(export)")
-        XCTAssertTrue(export.contains("clipboardNotice(didWrite:"),
+                          + "可以直接吃剪贴板内容，这是这一页最短的一条路。实际取到的是：\n\(copy)")
+        XCTAssertTrue(copy.contains("writeToPasteboard("),
+                      "「复制到剪贴板」点下去没有真的写剪贴板。实际取到的是：\n\(copy)")
+        XCTAssertTrue(copy.contains("clipboardNotice(didWrite:"),
                       "写剪贴板的成败没有交给 `clipboardNotice(didWrite:document:format:)` 判断——"
                           + "自己写一句「已复制」的话，上面那条真跑起来的测试就在测一段没人用的实现，"
                           + "而 `NSPasteboard.setString` 返回 false 时用户会被告知复制成功。"
-                          + "实际取到的是：\n\(export)")
+                          + "实际取到的是：\n\(copy)")
+        SourceGuard.assertRenders(
+            "copyButton", inBodyOf: "private var exportSection", of: Self.view,
+            because: "「复制到剪贴板」写好了却没摆进那一排按钮里，用户点不到它。")
     }
 
     /// 反馈得真的画出来，而且 `details` 里每一条都要画。
@@ -394,16 +448,39 @@ final class VocabularyViewTests: XCTestCase {
                           + "实际取到的是：\n\(empty)")
     }
 
-    /// 词汇本为空时导出必须禁用，**并且要说清为什么**。
+    /// 词汇本为空时导出必须禁用（计划 Step 3 验收要求 6）。
+    ///
+    /// **两颗按钮各断言各的。** 从前这里写的是
+    /// `export.contains(".disabled(model.rows.isEmpty)")` ——纯子串判断，
+    /// 而 `exportSection` 里有两处 `.disabled(model.rows.isEmpty)`，
+    /// 删掉任意一处另一处照样让断言为真（实测：单删导出菜单那一句，
+    /// 空词汇本也能点导出、存出一个没有任何卡片的文件，全量 1131 条全绿）。
+    func testTheExportMenuIsDisabledOnAnEmptyVocabulary() throws {
+        let menu = try SourceGuard.memberBody(of: "private var exportMenu",
+                                              in: try Self.viewCode())
+        XCTAssertTrue(menu.contains(".disabled(model.rows.isEmpty)"),
+                      "词汇本为空时导出菜单还能点，点下去会存出一个没有任何卡片的文件。"
+                          + "实际取到的是：\n\(menu)")
+    }
+
+    func testTheCopyButtonIsDisabledOnAnEmptyVocabulary() throws {
+        let copy = try SourceGuard.memberBody(of: "private var copyButton",
+                                              in: try Self.viewCode())
+        XCTAssertTrue(copy.contains(".disabled(model.rows.isEmpty)"),
+                      "词汇本为空时「复制到剪贴板」还能点，点下去会把一份没有任何卡片的内容"
+                          + "写进剪贴板，把用户正在复制的东西冲掉。实际取到的是：\n\(copy)")
+    }
+
+    /// 灰掉的按钮必须说清为什么灰。
     /// 一颗点了什么都不会发生的按钮，比一颗灰掉并写明原因的按钮更让人困惑。
-    func testExportIsDisabledOnAnEmptyVocabularyAndSaysWhy() throws {
+    func testTheDisabledExportSaysWhyItIsDisabled() throws {
         let export = try SourceGuard.memberBody(of: "private var exportSection",
                                                 in: try Self.viewCode())
-        XCTAssertTrue(export.contains(".disabled(model.rows.isEmpty)"),
-                      "词汇本为空时导出按钮还能点，点下去会存出一个没有任何卡片的文件。"
-                          + "实际取到的是：\n\(export)")
         XCTAssertTrue(export.contains("disabledHint"),
                       "导出灰掉了却没说为什么。实际取到的是：\n\(export)")
+        XCTAssertTrue(export.contains("model.rows.isEmpty ?"),
+                      "那句说明没有按「词汇本空不空」切换，用户在有词的时候也会读到"
+                          + "「现在没有任何东西可以导出」。实际取到的是：\n\(export)")
         let hint = VocabularyView.disabledHint
         XCTAssertFalse(hint.isEmpty)
         XCTAssertTrue(hint.contains("下一步"), "禁用说明没说下一步做什么：\(hint)")
@@ -423,8 +500,11 @@ final class VocabularyViewTests: XCTestCase {
                       "「换成全部看看」那颗按钮点下去不会真的换回全部。"
                           + "按钮点了没反应是本项目最不能接受的那一类。实际取到的是：\n\(empty)")
 
+        // 问的是 `VocabularyPriority.high.title` 而不是 `VocabularyFilter.high.title`：
+        // 后者和被测那句话是同一个属性产出的，档次名一起变英文时这条断言恒真（自证式断言）。
+        // Core 那边已经把 `VocabularyPriority.high.title` 钉成了「优先记」。
         let hint = VocabularyView.filteredEmptyHint(.high)
-        XCTAssertTrue(hint.contains(VocabularyFilter.high.title),
+        XCTAssertTrue(hint.contains(VocabularyPriority.high.title),
                       "筛选后的空状态没说清是哪一档筛空了：\(hint)")
         XCTAssertTrue(hint.contains("下一步"), "筛选后的空状态没说下一步做什么：\(hint)")
         XCTAssertTrue(hint.contains(VocabularyFilter.all.title),
