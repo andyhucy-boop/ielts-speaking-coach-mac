@@ -8,7 +8,8 @@ public enum ToolCatalog {
             InitializeWorkspaceTool.make(environment: environment),
             OpenDashboardTool.make(environment: environment),
             SetTrainingSelectionTool.make(environment: environment),
-            GetTrainingContextTool.make(environment: environment)
+            GetTrainingContextTool.make(environment: environment),
+            SaveSessionReviewTool.make(environment: environment)
         ]
     }
 }
