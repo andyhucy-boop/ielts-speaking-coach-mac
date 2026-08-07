@@ -138,6 +138,7 @@ public struct RootView: View {
                                            app.navigation.selection = .reviewReports
                                        })
             case .retraining: RetrainingCenterView(app: app, onGo: { go(to: $0) })
+            case .issues: IssueArchiveView(app: app, onGo: { go(to: $0) })
             default: PlaceholderView(item: current, onGo: { go(to: $0) })
             }
         }

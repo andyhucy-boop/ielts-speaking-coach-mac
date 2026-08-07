@@ -17,12 +17,21 @@ final class NavigationTests: XCTestCase {
     func testImplementedPagesMatchWhatIsActuallyBuilt() {
         // 断言集合相等而不是「至少包含」——多标一项会让用户点进一个空页面，
         // 而空页面会让人以为程序坏了。
-        // Phase 4 把「训练记录」加了进来，Phase 6 把「复训中心」加了进来。
+        // Phase 4 把「训练记录」加了进来，Phase 6 把「复训中心」加了进来，
+        // Phase 7 Task 6 把「问题档案」加了进来。
         // 后续阶段各自往里加自己的那一项，不要把别人加的删掉：
-        // Phase 7 加 .issues 与 .vocabulary，Phase 8 加 .plan，Phase 10 加 .upgrade 与 .feedback。
+        // Phase 7 Task 7 加 .vocabulary，Phase 8 加 .plan，Phase 10 加 .upgrade 与 .feedback。
         let implemented = SidebarItem.allCases.filter(\.isImplemented)
         XCTAssertEqual(Set(implemented),
-                       [.today, .questionBank, .reviewReports, .history, .retraining])
+                       [.today, .questionBank, .reviewReports, .history, .retraining, .issues])
+    }
+
+    /// 问题档案页已经做出来了，侧边栏必须点得进去。
+    ///
+    /// 上面那条断言的是整个集合，看报错只知道「集合不一样」；这一条把这一页单独钉住，
+    /// 谁不小心把它从 `isImplemented` 里划掉，报错会直接说是哪一页。
+    func testIssueArchivePageIsUnlocked() {
+        XCTAssertTrue(SidebarItem.issues.isImplemented, "问题档案页已实现，必须在侧边栏可点")
     }
 
     func testHistoryHasAMeaningfulTitleAndIcon() {
@@ -52,9 +61,10 @@ final class NavigationTests: XCTestCase {
     /// 铁律 6 把「发生了什么 + 下一步做什么」明确扩展到了空状态与界面提示。
     func testEveryUnimplementedPageSaysWhatWillBeThereAndWhatToDoNow() {
         let unimplemented = SidebarItem.allCases.filter { !$0.isImplemented }
-        // Phase 4 交付「训练记录」之后从 7 降到 6，Phase 6 交付「复训中心」之后降到 5。
+        // Phase 4 交付「训练记录」之后从 7 降到 6，Phase 6 交付「复训中心」之后降到 5，
+        // Phase 7 Task 6 交付「问题档案」之后降到 4。
         // **这个数字只许降，不许升**——升上去意味着有人把一页已经做出来的又标回了「还没做」。
-        XCTAssertEqual(unimplemented.count, 5)
+        XCTAssertEqual(unimplemented.count, 4)
         for item in unimplemented {
             XCTAssertFalse(item.placeholderDescription.isEmpty,
                            "「\(item.title)」的占位页会是一片空白，用户会以为程序坏了")
