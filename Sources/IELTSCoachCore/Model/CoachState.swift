@@ -11,6 +11,11 @@ public struct LearnerProfile: Codable, Equatable, Sendable {
 }
 
 public struct CoachSettings: Codable, Equatable, Sendable {
+    /// `PracticeRoute.rawValue` 的默认值。**`PracticeRoute` 定义在 `IELTSCoachUI` 里，
+    /// 而 Core 不允许依赖 UI**，所以这里只能存字符串。两边的对齐由
+    /// `Tests/IELTSCoachUITests/PracticeRoutePreferenceTests.swift` 里的一条测试守住。
+    public static let defaultRouteFallback = "planToday"
+
     public var recordingEnabled: Bool
     public var recordingConsentAt: String
     /// 「记录对话逐字稿」。ROADMAP 第 5 节：开 / 关，**默认开**。
@@ -21,6 +26,13 @@ public struct CoachSettings: Codable, Equatable, Sendable {
     public var transcriptEnabled: Bool
     /// 每周训练目标次数。ROADMAP 第 5 节：用户可配置，默认 5 次。**Phase 7 Task 1 加的。**
     public var weeklyGoal: Int
+    /// 用户偏好的练习路线，存的是 `PracticeRoute.rawValue`。
+    /// ROADMAP 第 5 节：默认「按计划练今天」。**Phase 8 Task 2 加的。**
+    public var defaultRoute: String
+    /// 考官何时给反馈。ROADMAP 第 5 节：默认全程零反馈。**Phase 8 Task 2 加的。**
+    public var feedbackTiming: FeedbackTiming
+    /// Part 2 的一分钟准备怎么处理。ROADMAP 第 5 节：默认倒计时。**Phase 8 Task 2 加的。**
+    public var part2PrepMode: Part2PrepMode
 
     public static let defaultTranscriptEnabled = true
 
@@ -40,17 +52,38 @@ public struct CoachSettings: Codable, Equatable, Sendable {
     // transcriptEnabled / weeklyGoal 都给默认值，既有调用点（CoachState.empty、各处测试）不用改。
     // **transcriptEnabled 保持在 weeklyGoal 前面，与 Phase 4 定下的位置一致**——
     // 换位置会打断 Phase 4 已有的调用点；两个都有默认值，只传 weeklyGoal: 照样能编译。
+    // Phase 8 的三项练习偏好一律**追加在末尾**，同样只为了不动前面阶段已有的调用点。
     public init(recordingEnabled: Bool, recordingConsentAt: String,
                 transcriptEnabled: Bool = CoachSettings.defaultTranscriptEnabled,
-                weeklyGoal: Int = CoachSettings.defaultWeeklyGoal) {
+                weeklyGoal: Int = CoachSettings.defaultWeeklyGoal,
+                defaultRoute: String = CoachSettings.defaultRouteFallback,
+                feedbackTiming: FeedbackTiming = .deferred,
+                part2PrepMode: Part2PrepMode = .countdown) {
         self.recordingEnabled = recordingEnabled
         self.recordingConsentAt = recordingConsentAt
         self.transcriptEnabled = transcriptEnabled
         self.weeklyGoal = CoachSettings.normalized(weeklyGoal)
+        self.defaultRoute = defaultRoute
+        self.feedbackTiming = feedbackTiming
+        self.part2PrepMode = part2PrepMode
     }
 
     enum CodingKeys: String, CodingKey {
         case recordingEnabled, recordingConsentAt, transcriptEnabled, weeklyGoal
+        case defaultRoute, feedbackTiming, part2PrepMode
+    }
+
+    /// 先读字符串再转枚举，转不出来就用默认值。
+    /// 直接 decode 枚举的话，遇到不认识的取值会抛 `dataCorrupted`，而这个错会一路
+    /// 冒泡到 `CoachState`，让 `StateStore` 报「训练数据文件已损坏」——
+    /// 为了一个偏好设置丢掉全部练习记录，不成比例。
+    /// **注意 `decodeIfPresent` 只挡「键不存在」，挡不住「键在但值不认识」**，
+    /// 所以这一层不能省。
+    private static func stringEnum<T: RawRepresentable>(
+        _ container: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys, fallback: T
+    ) -> T where T.RawValue == String {
+        let raw = (try? container.decodeIfPresent(String.self, forKey: key)) ?? nil
+        return raw.flatMap(T.init(rawValue:)) ?? fallback
     }
 
     /// 手写解码：transcriptEnabled 是 Phase 4、weeklyGoal 是 Phase 7 才加的字段，
@@ -69,6 +102,11 @@ public struct CoachSettings: Codable, Equatable, Sendable {
             ?? CoachSettings.defaultTranscriptEnabled
         weeklyGoal = CoachSettings.normalized(
             try container.decodeIfPresent(Int.self, forKey: .weeklyGoal))
+        // ↓ Phase 8 Task 2 的三行。老的 state.json 里没有这三个键，缺了必须照样读得出来。
+        defaultRoute = try container.decodeIfPresent(String.self, forKey: .defaultRoute)
+            ?? CoachSettings.defaultRouteFallback
+        feedbackTiming = CoachSettings.stringEnum(container, .feedbackTiming, fallback: .deferred)
+        part2PrepMode = CoachSettings.stringEnum(container, .part2PrepMode, fallback: .countdown)
     }
 }
 
