@@ -83,7 +83,7 @@ public final class CoachSettingsViewModel {
     /// 逐字段赋值，**不整体替换 `settings`**。
     /// `CoachSettings` 被 Phase 5 / 7 / 8 各加过字段，整体替换的写法
     /// 很容易把别人的字段顺手清成默认值，而且一声不吭。
-    private func apply(_ change: @escaping (inout CoachState) -> Void) {
+    private func apply(_ change: (inout CoachState) -> Void) {
         if let failure = app.mutate({ change(&$0) }) {
             error = failure
         } else {
