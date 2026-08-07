@@ -229,7 +229,8 @@ final class PlanViewTests: XCTestCase {
     }
 
     func testTheRegenerateDialogIsActuallyWiredToThePage() throws {
-        let body = try SourceGuard.memberBody(of: "var body: some View", in: try Self.viewCode())
+        let code = try Self.viewCode()
+        let body = try SourceGuard.memberBody(of: "var body: some View", in: code)
         XCTAssertTrue(body.contains("Self.regenerateConfirmationTitle"),
                       "确认框写好了却没挂在页面上，「重新生成」会不问一声就直接重排。"
                           + "实际取到的是：\n\(body)")
@@ -240,6 +241,19 @@ final class PlanViewTests: XCTestCase {
                       "确认框没和 `isConfirmingRegenerate` 绑起来。实际取到的是：\n\(body)")
         XCTAssertTrue(body.contains("Button(\"重新生成\")"),
                       "确认框里没有那颗「重新生成」按钮，弹出来只能取消。实际取到的是：\n\(body)")
+
+        // 只问「有没有这颗按钮」是不够的：把它的动作掏空成 `Button("重新生成") { }`，
+        // 上面那条照样绿，而用户点下去什么都不会发生（铁律 7）。
+        // 切的是确认框自己那一段，不是整个 body——`requestGenerate()` 里另有一处
+        // `generate()` 的调用，扫全文的话，把按钮的动作掏空也扫得到那处残影。
+        let dialog = try SourceGuard.memberBody(of: "$isConfirmingRegenerate", in: code)
+        XCTAssertTrue(dialog.contains("Button(\"重新生成\") { generate() }"),
+                      "确认框里那颗「重新生成」按钮没接上 `generate()`——按钮在、点了不动，"
+                          + "用户会一直点。实际取到的是：\n\(dialog)")
+        XCTAssertTrue(dialog.contains("Button(\"取消\", role: .cancel)"),
+                      "确认框里没有那颗「取消」（计划要求 C 明写按钮是「重新生成」/「取消」）。"
+                          + "没有 `.cancel` 那一颗，回车与 ESC 就没有落点，"
+                          + "用户想反悔却退不出去。实际取到的是：\n\(dialog)")
     }
 
     // MARK: - 要求 D：生成之后的落盘与回话
@@ -526,6 +540,29 @@ final class PlanViewTests: XCTestCase {
                       "删除的确认框没挂在页面上。实际取到的是：\n\(body)")
         XCTAssertTrue(body.contains("$isConfirmingDelete"),
                       "删除确认框没和 `isConfirmingDelete` 绑起来。实际取到的是：\n\(body)")
+
+        // **这一段是补的。** 上面四条断言的是标题常量、正文常量和 `$isConfirmingDelete`，
+        // 恰好把那颗真正执行删除的按钮整个漏在外面：实测把
+        // `Button("删除", role: .destructive) { deletePlan() }` 整颗删掉，1331 条一条不红——
+        // 确认框弹出来只剩「取消」，用户没有任何办法撤掉一份排错的计划，
+        // `deletePlan()` 连同它下面那条「只动 plan 一个字段」的测试一起变成死代码。
+        // 重新生成那一侧本来就有 `Button("重新生成")` 的守卫，删除这一侧是漏写不是取舍。
+        //
+        // 切确认框自己那一段而不是整个 body：`deleteSection` 里还有一颗
+        // `Button("删除计划", role: .destructive)`，扫全文的话那颗残影会替这颗挡枪。
+        let dialog = try SourceGuard.memberBody(of: "$isConfirmingDelete", in: code)
+        XCTAssertTrue(dialog.contains("Button(\"删除\", role: .destructive)"),
+                      "删除确认框里没有那颗「删除」按钮（计划要求 G 明写按钮是「删除」/「取消」）。"
+                          + "弹出来只剩「取消」，用户没有任何办法撤掉一份排错的计划。"
+                          + "实际取到的是：\n\(dialog)")
+        XCTAssertTrue(dialog.contains("{ deletePlan() }"),
+                      "确认框里那颗「删除」按钮没接上 `deletePlan()`——按钮在、点了不动，"
+                          + "而界面上没有任何迹象说明什么都没发生（铁律 7）。"
+                          + "实际取到的是：\n\(dialog)")
+        XCTAssertTrue(dialog.contains("Button(\"取消\", role: .cancel)"),
+                      "删除确认框里没有那颗「取消」。删除是不可逆的动作，"
+                          + "没有 `.cancel` 那一颗，回车与 ESC 就没有落点，"
+                          + "用户想反悔却退不出去。实际取到的是：\n\(dialog)")
     }
 
     /// **删除计划只许动 `plan` 一个字段。**
@@ -581,6 +618,23 @@ final class PlanViewTests: XCTestCase {
                           + "就在测一段没人用的实现。实际取到的是：\n\(delete)")
         XCTAssertTrue(delete.contains("Self.deletedNotice"),
                       "删完一个字都不说。实际取到的是：\n\(delete)")
+
+        // **这两条是补的，而且必须是这两条。** 上面三条只查了 `app.mutate`、`Self.clearPlan`、
+        // `Self.deletedNotice` 三个词出现过没有，于是实测把这一句换成
+        // `_ = app.mutate(Self.clearPlan)` 加一句 `notice = Self.deletedNotice`，
+        // 三个词全都还在，1331 条一条不红——而那正是铁律 7 点名的静默失败：
+        // 磁盘写不进去，界面照样宣布「计划已经删掉了……都还在」，
+        // 用户下次打开发现计划还在，只会以为是程序坏了。
+        // 存偏好那一侧的 `save` 一直断言的是 `notice = app.mutate`（有牙），
+        // 同一份文件里这一侧写松了，是漏写不是取舍。
+        XCTAssertTrue(delete.contains("notice = app.mutate("),
+                      "写盘失败时 `mutate` 返回的那句中文说明被丢掉了（多半是写成了 "
+                          + "`_ = app.mutate(…)`）。删除失败却显示「计划已经删掉了」，"
+                          + "是本项目最不能接受的那一种失败（铁律 7）。实际取到的是：\n\(delete)")
+        XCTAssertTrue(delete.contains("?? Self.deletedNotice"),
+                      "「计划已经删掉了」那句话不是失败消息的兜底，而是无条件显示的。"
+                          + "写盘失败时用户会同时被告知「删掉了」和什么都没发生。"
+                          + "实际取到的是：\n\(delete)")
         XCTAssertTrue(PlanView.deletedNotice.contains("下一步"),
                       "删完那句话没说下一步做什么（铁律 6）：" + PlanView.deletedNotice)
         XCTAssertTrue(PlanView.deletedNotice.contains("还在"),
@@ -601,6 +655,69 @@ final class PlanViewTests: XCTestCase {
         for member in ["routePreference", "feedbackPreference", "prepPreference"] {
             XCTAssertTrue(block.contains(member),
                           "偏好区块里少了 `\(member)`。实际取到的是：\n\(block)")
+        }
+    }
+
+    /// 三项偏好共用的那张卡片，**三句渲染一句都不许少**。
+    ///
+    /// ## 为什么单独写这一条
+    ///
+    /// 上面 `testThePreferenceSectionIsOnThePage` 问的是「三个成员摆进区块了吗」，
+    /// 而 `routePreference` / `feedbackPreference` / `prepPreference` 三个成员确实被
+    /// `preferences` 引用着——**它们「可达」，可它们画不画得出东西，全看 `preferenceCard`**。
+    /// 那三个 Picker 是以闭包的形式传进来的，在 `preferenceCard` 内部被丢掉时，
+    /// `RenderReachabilitySweep` 的可达性分析完全看不见（它只顺着成员名走）。
+    ///
+    /// 实测过两次，都是 1331 条一条不红：
+    ///
+    /// - 删掉 `content()` 那一句 → 要求 H 的三个控件（默认练习路线 / 反馈时机 /
+    ///   Part 2 准备时间）一个都不上屏，「练习偏好」区块只剩三张有标题、有说明、
+    ///   没有任何可点控件的空卡片。
+    /// - 删掉 `Text(explanation)` 那一段 → 要求 H「每项下面一行小字说明取舍」的三行字
+    ///   一个字都不上屏。而 `testEachPreferenceSpellsOutWhatItCostsYou` 只断言三个常量的
+    ///   字面值，`testTheDefaultRouteGoesThroughTheOneTranslationLayerInBothDirections`
+    ///   只断言常量被传了进去——**「传进去了」和「画出来了」是两件事**，中间那一段没人守。
+    ///
+    /// 这正是本项目栽过四次的那一类（删掉 `PracticeSheet` 两句渲染，465 条全绿）。
+    func testThePreferenceCardDrawsItsTitleItsControlAndItsTradeOffLine() throws {
+        let card = try SourceGuard.memberBody(of: "private func preferenceCard",
+                                              in: try Self.viewCode())
+        XCTAssertTrue(card.contains("Text(title)"),
+                      "偏好卡片没把 `title` 画出来，三张卡片会变成三坨没有抬头的控件，"
+                          + "用户不知道自己在改哪一项。实际取到的是：\n\(card)")
+        XCTAssertTrue(card.contains("content()"),
+                      "偏好卡片收下了控件却没画出来（计划要求 H 的三个控件一个都不上屏，"
+                          + "「练习偏好」区块只剩三张空卡片）。"
+                          + "注意这一句被删掉时可达性扫描看不见——那三个 Picker 是以闭包传进来的。"
+                          + "实际取到的是：\n\(card)")
+        XCTAssertTrue(card.contains("Text(explanation)"),
+                      "偏好卡片收下了取舍说明却没画出来。计划要求 H 明写「每项下面一行小字"
+                          + "说明取舍」——那行小字不是装饰：两个选项哪个合适取决于用户现在想练什么，"
+                          + "不写清代价他只能靠猜，而猜错要练完一整场才发现。"
+                          + "实际取到的是：\n\(card)")
+    }
+
+    /// 三项偏好各自把**自己那一行**取舍说明交给卡片。
+    ///
+    /// 上面那条守的是「卡片画不画」，这一条守的是「传进去的是不是那一份」。
+    /// 少了这一条，`explanation:` 传成空串或者三处传同一份，
+    /// `testEachPreferenceSpellsOutWhatItCostsYou`（只断言常量的字面值）照样绿。
+    func testEachPreferenceHandsItsOwnTradeOffLineToTheCard() throws {
+        let code = try Self.viewCode()
+        for (marker, constant, name) in [
+            ("private var routePreference", "Self.defaultRouteExplanation", "默认练习路线"),
+            ("private var feedbackPreference", "Self.feedbackTimingExplanation", "反馈时机"),
+            ("private var prepPreference", "Self.part2PrepExplanation", "Part 2 准备时间")
+        ] {
+            let control = try SourceGuard.memberBody(of: marker, in: code)
+            XCTAssertTrue(control.contains("preferenceCard("),
+                          "「\(name)」没走共用的 `preferenceCard`，那张卡片上的三句渲染"
+                              + "（标题 / 控件 / 取舍说明）对它就一句都不作数。"
+                              + "实际取到的是：\n\(control)")
+            XCTAssertTrue(control.contains(constant),
+                          "「\(name)」下面那行小字不是 `\(constant)`。计划要求 H 逐字给了这三行，"
+                              + "传错一份或者传成空串，用户读到的就是别一项的取舍。"
+                              + "实际取到的是：\n\(control)")
         }
     }
 
