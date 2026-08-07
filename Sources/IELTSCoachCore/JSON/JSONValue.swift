@@ -73,6 +73,29 @@ extension JSONValue {
         return s
     }
 
+    public var doubleValue: Double? {
+        guard case .number(let value) = self else { return nil }
+        return value
+    }
+
+    /// 只接受整数。3.5 不会被截断成 3——静默截断意味着调用方传了 3.5、
+    /// 拿到的却是 3 的行为，而且没有任何提示。
+    ///
+    /// 用 `Int(exactly:)` 一步做完「是整数」与「在 Int 范围内」两件事，而不是
+    /// 「先 `rounded() == value`、再 `value <= Double(Int.max)`、最后 `Int(value)`」：
+    /// `Double(Int.max)` 实际是 2^63，比 `Int.max` 大 1，那种写法在参数恰好是 2^63 时
+    /// 会通过范围判断、然后在转换处崩溃——MCP server 一崩，stdio 连接就断了，
+    /// 客户端只会显示「服务器没响应」，用户拿不到任何线索。
+    public var intValue: Int? {
+        guard case .number(let value) = self else { return nil }
+        return Int(exactly: value)
+    }
+
+    public var boolValue: Bool? {
+        guard case .bool(let value) = self else { return nil }
+        return value
+    }
+
     /// 用于「必须有非空文本」的校验：非字符串或去空白后为空都算空。
     public var isBlank: Bool {
         (stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
