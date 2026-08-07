@@ -19,6 +19,12 @@ struct TodayView: View {
     /// 空状态那个按钮要把用户送到「训练题库」。导航状态在 `RootView` 手上，所以由它传进来，
     /// 与 `ReviewReportView`、`PlaceholderView` 的做法一致——这一页自己不持有导航状态。
     let onGo: (SidebarItem) -> Void
+    /// 「本周训练」那一格里的「改目标」按钮翻的就是它。
+    ///
+    /// **是 `@Binding` 而不是本页自己的 `@State`**：`RootView` 工具栏那颗齿轮翻的是同一份，
+    /// 各存各的话两颗按钮会开出两张不同的面板，其中一张改完另一张显示的还是旧值。
+    /// 面板本身挂在 `RootView` 上（`WeeklyGoalSheet`），这一页只负责把开关翻过去。
+    @Binding var showingWeeklyGoal: Bool
 
     /// 正在进行的这一场。非 nil 时弹出 `PracticeSheet`，由它驱动 ChatGPT。
     ///
@@ -181,25 +187,23 @@ struct TodayView: View {
         }
     }
 
-    /// 「本周训练」那一格里的进度条。目标次数来自设置（`weekProgress.goal`），不是写死的 5。
+    /// 「本周训练」那一格里的进度条与「改目标」按钮。
+    /// 目标次数来自设置（`weekProgress.goal`），不是写死的 5。
     ///
-    /// **这一格里还欠一颗「改目标」按钮，留给 Task 9。**
-    /// 计划 Task 8 视图验收第 2 条要求「「本周训练」那一格里额外放一个「改目标」按钮，
-    /// 点了打开 Task 9 的设置面板」，而计划 Task 9 的 Step 3 又写着由它给 `TodayView`
-    /// 加一个 `@Binding var showingWeeklyGoal: Bool` 参数「供「改目标」按钮使用」，
-    /// 且 Task 9 的 git 清单里列了本文件——计划本身在这一条上自相矛盾。
-    ///
-    /// 按住不做的理由：那颗按钮要打开的面板（`WeeklyGoalSheet`）是 Task 9 的交付物，
-    /// 现在还不存在。先摆一颗点了没反应的按钮，是本项目最不能接受的那一类。
-    /// 所以这里按铁律 11 把它写明白，而不是猜着做（交付报告里也记了同一件事）。
-    /// **Task 9 的实现者：这颗按钮还欠着，请连同 binding 一起补上。**
+    /// 「改目标」这颗按钮由 Task 9 补齐（Task 8 交付时 `WeeklyGoalSheet` 还不存在，
+    /// 先摆一颗点了没反应的按钮是本项目最不能接受的那一类，所以当时按住没做）。
+    /// 它翻的是 `RootView` 手上那份 `showingWeeklyGoal`，与工具栏齿轮同一个开关。
     private var weekProgressBar: some View {
         let progress = model.weekProgress
-        return ProgressView(value: Double(min(progress.done, progress.goal)),
-                            total: Double(max(progress.goal, 1)))
-            .tint(Palette.accent)
-            .accessibilityLabel("本周训练进度")
-            .accessibilityValue("\(progress.done) 次，共 \(progress.goal) 次")
+        return VStack(alignment: .leading, spacing: Spacing.sm) {
+            ProgressView(value: Double(min(progress.done, progress.goal)),
+                         total: Double(max(progress.goal, 1)))
+                .tint(Palette.accent)
+                .accessibilityLabel("本周训练进度")
+                .accessibilityValue("\(progress.done) 次，共 \(progress.goal) 次")
+            Button("改目标") { showingWeeklyGoal = true }
+                .buttonStyle(.bordered)
+        }
     }
 
     // MARK: - 训练记录还没接上，这件事得说出来
@@ -598,7 +602,8 @@ struct PracticeLaunch: Identifiable {
             directory: DataDirectory(root: URL(fileURLWithPath: NSTemporaryDirectory())
                 .appending(path: "ielts-coach-preview-today")),
             preflight: { BridgeReadiness(ok: true, messages: ["✅ 环境就绪（预览用的假结果）"]) }),
-        onGo: { _ in })
+        onGo: { _ in },
+        showingWeeklyGoal: .constant(false))
 }
 
 // 点了「开始练习」之后弹出来的那张 sheet 的预览在 `Session/PracticeSheet.swift` 里，

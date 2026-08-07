@@ -91,6 +91,16 @@ final class WeeklyGoalTests: XCTestCase {
         XCTAssertEqual(try StateStore(directory: directory).load().settings.weeklyGoal, 5)
     }
 
+    func testSettingWeeklyGoalThroughTheStoreClampsAndPersists() throws {
+        // 这就是 AppState.setWeeklyGoal 做的事：先归一，再写盘。
+        let store = StateStore(directory: directory)
+        try store.mutate { $0.settings.weeklyGoal = CoachSettings.normalized(99) }
+        XCTAssertEqual(try StateStore(directory: directory).load().settings.weeklyGoal, 5)
+
+        try store.mutate { $0.settings.weeklyGoal = CoachSettings.normalized(7) }
+        XCTAssertEqual(try StateStore(directory: directory).load().settings.weeklyGoal, 7)
+    }
+
     func testWeeklyGoalIsWrittenIntoStateFile() throws {
         let store = StateStore(directory: directory)
         try store.mutate { $0.settings.weeklyGoal = 4 }

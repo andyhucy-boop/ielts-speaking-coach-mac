@@ -19,6 +19,12 @@ public struct RootView: View {
     /// 只写不清的话方向会反过来犯同一个错——见 `RootRouter.carriedReviewSession` 的说明。
     @State private var requestedReviewSessionID: String?
 
+    /// 每周训练目标那张面板开着没有。
+    ///
+    /// **两个入口共用这一份**：工具栏的齿轮按钮，和首页「本周训练」那一格里的「改目标」。
+    /// 各存各的话，两颗按钮会开出两张不同的面板，其中一张改完另一张显示的还是旧值。
+    @State private var showingWeeklyGoal = false
+
     /// 生产入口：真实数据目录 + 真实的环境检查。
     public init() { self.init(app: AppState()) }
 
@@ -79,6 +85,22 @@ public struct RootView: View {
             .navigationSplitViewColumnWidth(200)
         } detail: {
             detail
+                .toolbar {
+                    ToolbarItem {
+                        Button { showingWeeklyGoal = true } label: {
+                            Label("每周训练目标", systemImage: "gearshape")
+                        }
+                        // **不挂 ⌘,。** 那个快捷键归 `Sources/IELTSCoachApp/main.swift` 里
+                        // Phase 5 建的 `Settings { RecordingSettingsScene() }` 场景——
+                        // 两处绑同一个快捷键，SwiftUI 不报错，只会随机胜出一个，
+                        // 于是用户按 ⌘, 时而弹录音设置、时而弹每周目标，
+                        // 而 Phase 5 有三处提示写着「到「录音设置」（⌘,）…」。
+                        .help("改每周训练目标")
+                    }
+                }
+                .sheet(isPresented: $showingWeeklyGoal) {
+                    WeeklyGoalSheet(app: app, isPresented: $showingWeeklyGoal)
+                }
         }
     }
 
@@ -122,7 +144,8 @@ public struct RootView: View {
             .frame(maxWidth: 640, alignment: .leading)
         } else {
             switch current {
-            case .today: TodayView(app: app, onGo: { go(to: $0) })
+            case .today: TodayView(app: app, onGo: { go(to: $0) },
+                                   showingWeeklyGoal: $showingWeeklyGoal)
             case .questionBank: QuestionBankView(app: app)
             case .reviewReports: ReviewReportView(app: app, onGo: { go(to: $0) },
                                                   requestedSessionID: requestedReviewSessionID)

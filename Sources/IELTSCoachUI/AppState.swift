@@ -27,6 +27,10 @@ public final class AppState {
     /// 读取训练数据失败时的中文说明。非 nil 时界面必须显示它——
     /// 静默失败会让用户以为自己的练习记录没了。
     public private(set) var loadError: String?
+    /// 改设置失败时的中文说明。**非 nil 时界面必须显示，且不许关闭面板**——
+    /// 静默失败会让用户以为目标改好了，下次打开发现又变回去，
+    /// 而且他永远不知道为什么。
+    public private(set) var settingsError: String?
     public var permissionSkipped = false
 
     /// 侧边栏选中项与跨页跳转意图。
@@ -205,6 +209,31 @@ public final class AppState {
             loadError = "没能保存「记录对话逐字稿」这个设置：\(error.localizedDescription) "
                 + "下一步：确认数据目录可写（默认在「资源库 › Application Support › "
                 + "IELTS Speaking Coach」），然后重试；在此之前这个开关仍按原来的设置生效。"
+        }
+    }
+
+    /// 改每周训练目标。越界的取值按 `CoachSettings.normalized` 归一，不抛错。
+    ///
+    /// **归一必须在这里做一次，不能只靠读回来时那一次。** `CoachSettings.init(from:)`
+    /// 解码时确实还会归一一遍，所以少了这一句，界面上看不出任何异样；
+    /// 但磁盘上那份 state.json 会留着 `"weeklyGoal": 99`，而它是 App 与命令行共用的
+    /// 同一个文件——把一个越界值写进共享数据，等于给下一个读它的人埋一颗雷。
+    ///
+    /// - Returns: 是否写盘成功。界面据此决定要不要关闭设置面板。
+    @discardableResult
+    public func setWeeklyGoal(_ goal: Int) -> Bool {
+        let normalized = CoachSettings.normalized(goal)
+        do {
+            try store.mutate { $0.settings.weeklyGoal = normalized }
+            settingsError = nil
+            reload()          // 立刻把新目标反映到首页的「本周 N/M」上
+            return true
+        } catch {
+            settingsError = "每周训练目标没能存下来：\(error.localizedDescription)"
+                + " 下一步：确认数据目录可写"
+                + "（默认在「资源库 › Application Support › IELTS Speaking Coach」），"
+                + "然后再试一次；在此之前仍按原来的目标计数。"
+            return false
         }
     }
 
