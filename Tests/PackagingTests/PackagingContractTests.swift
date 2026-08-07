@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 
 final class PackagingContractTests: XCTestCase {
@@ -6,6 +7,66 @@ final class PackagingContractTests: XCTestCase {
 
     private func text(at relativePath: String) throws -> String {
         try String(contentsOf: root.appending(path: relativePath), encoding: .utf8)
+    }
+
+    /// 去掉 Swift 源码里的注释，字符串字面量原样保留。
+    ///
+    /// `text(at:)` 读的是原文。不先去注释，文件里随便一行
+    /// `// 举例：version: "1.0.0"` 就足以让下面那条版本一致性断言绿着通过——
+    /// 而它本该盯住的是 `Changelog.releases` 里真实的那一条。
+    private func strippingSwiftComments(_ source: String,
+                                        file: StaticString = #filePath,
+                                        line: UInt = #line) -> String {
+        XCTAssertFalse(source.contains("\"\"\""),
+                       "这个扫描器不认多行字符串字面量（\"\"\"），再用下去它可能把注释当成字符串留下来，"
+                       + "版本一致性那条断言就又变成摆设了。"
+                       + "下一步：要么别在这个文件里用多行字符串，要么先把扫描器补上这一种再改源码。",
+                       file: file, line: line)
+
+        var output = ""
+        let characters = Array(source)
+        var index = 0
+        var blockCommentDepth = 0        // Swift 的块注释可以嵌套
+        var insideStringLiteral = false
+
+        func character(at offset: Int) -> Character? {
+            let position = index + offset
+            return position < characters.count ? characters[position] : nil
+        }
+
+        while index < characters.count {
+            let current = characters[index]
+
+            if blockCommentDepth > 0 {
+                if current == "/", character(at: 1) == "*" { blockCommentDepth += 1; index += 2; continue }
+                if current == "*", character(at: 1) == "/" { blockCommentDepth -= 1; index += 2; continue }
+                index += 1
+                continue
+            }
+
+            if insideStringLiteral {
+                if current == "\\" {                     // 转义序列连同被转义的字符一起照抄
+                    output.append(current)
+                    if let escaped = character(at: 1) { output.append(escaped) }
+                    index += 2
+                    continue
+                }
+                if current == "\"" { insideStringLiteral = false }
+                output.append(current)
+                index += 1
+                continue
+            }
+
+            if current == "/", character(at: 1) == "/" {
+                while index < characters.count, characters[index] != "\n" { index += 1 }
+                continue
+            }
+            if current == "/", character(at: 1) == "*" { blockCommentDepth = 1; index += 2; continue }
+            if current == "\"" { insideStringLiteral = true }
+            output.append(current)
+            index += 1
+        }
+        return output
     }
 
     func testAllPackagingScriptsAreExecutable() {
@@ -64,18 +125,55 @@ final class PackagingContractTests: XCTestCase {
     func testChangelogNewestVersionMatchesWhatTheBuildScriptStamps() throws {
         // 关于页显示 1.0.1、更新记录最新一条写着 1.0.0 —— 这种不一致
         // 恰好出现在用户最想搞清楚「我手上这份到底是哪一版」的时候。
+        //
+        // 断的是**最新那一条**，不是「全文里出现过」。早先写成
+        // `changelog.contains("version: \"\(version)\"")`，两种情形都是全绿的：
+        // 表顶上多出一条 1.1.0 而脚本还停在 1.0.0（也就是这条测试要防的那件事本身），
+        // 以及全表都是 2.0.0、只有一行注释里写着 1.0.0。
+
+        // 脚本这边：只认顶格的赋值。`# APP_VERSION="9.9.9"` 这种注释不算数，
+        // 而 shell 以最后一次赋值为准，所以多于一处就没法判断哪个才是打进 .app 的。
         let script = try text(at: "scripts/build-app.sh")
-        let match = try XCTUnwrap(
-            script.range(of: #"APP_VERSION="[^"]+""#, options: .regularExpression),
-            "build-app.sh 里找不到 APP_VERSION")
-        let version = script[match]
-            .replacingOccurrences(of: "APP_VERSION=\"", with: "")
+        let assignments = try NSRegularExpression(pattern: #"(?m)^APP_VERSION="([^"]*)""#)
+            .matches(in: script, range: NSRange(script.startIndex..., in: script))
+        XCTAssertEqual(assignments.count, 1,
+                       "build-app.sh 里顶格的 APP_VERSION=\"…\" 赋值有 \(assignments.count) 处，"
+                       + "而 shell 以最后一次赋值为准，这条测试无从判断哪一个才是打进 .app 的版本。"
+                       + "下一步：把 build-app.sh 收敛成只有一处 APP_VERSION=\"…\"。")
+        let stamped = try XCTUnwrap(
+            assignments.first
+                .flatMap { Range($0.range(at: 1), in: script) }
+                .map { String(script[$0]) },
+            "build-app.sh 里找不到顶格的 APP_VERSION=\"…\" 赋值。"
+            + "下一步：Info.plist 的 CFBundleShortVersionString 就是从它来的，把它加回去。")
+        XCTAssertFalse(stamped.isEmpty,
+                       "build-app.sh 里的 APP_VERSION 是空串，打出来的 .app 会没有版本号。"
+                       + "下一步：填上真实版本号。")
+
+        // 表这边：PackagingTests 刻意不依赖 IELTSCoachUI（原因写在 Package.swift 里），
+        // 所以只能读文本。「最新那一条 = 数组里的第一条」这个前提由
+        // ChangelogTests.testVersionsAreUniqueAndNewestFirst 守着。
+        let changelog = strippingSwiftComments(
+            try text(at: "Sources/IELTSCoachUI/Upgrade/Changelog.swift"))
+        let table = try XCTUnwrap(
+            changelog.range(of: "static let releases"),
+            "Changelog.swift 里找不到 releases 这张表——它改名或者被删了。"
+            + "下一步：把表加回来，或者同步改这条测试指向新名字。")
+        let newestMatch = try XCTUnwrap(
+            changelog.range(of: #"version:\s*"([^"]*)""#,
+                            options: .regularExpression,
+                            range: table.upperBound..<changelog.endIndex),
+            "Changelog.releases 里一条 version: \"…\" 都没有，这张表是空的。"
+            + "下一步：至少补一条当前版本的记录，否则「功能升级」页等于还是占位页。")
+        let newest = String(changelog[newestMatch])
+            .replacingOccurrences(of: #"^version:\s*""#, with: "", options: .regularExpression)
             .replacingOccurrences(of: "\"", with: "")
 
-        let changelog = try text(at: "Sources/IELTSCoachUI/Upgrade/Changelog.swift")
-        XCTAssertTrue(changelog.contains("version: \"\(version)\""),
-                      "更新记录里没有 \(version) 这一版。"
-                      + "下一步：要么在 Changelog.releases 顶上补一条，要么改回 build-app.sh 里的 APP_VERSION。")
+        XCTAssertEqual(newest, stamped,
+                       "更新记录最新一条写的是 \(newest)，而 build-app.sh 打进 .app 的是 \(stamped)——"
+                       + "用户在关于页看到的版本号，和在「功能升级」页读到的最新一条对不上。"
+                       + "下一步：要么把 build-app.sh 的 APP_VERSION 改成 \(newest)，"
+                       + "要么在 Changelog.releases 顶上补一条 \(stamped) 的记录。")
     }
 
     func testOpenInstructionsCoverGatekeeperAndTheDataDirectory() throws {
