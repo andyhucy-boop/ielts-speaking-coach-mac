@@ -9,9 +9,11 @@ let package = Package(
         .library(name: "ChatGPTBridge", targets: ["ChatGPTBridge"]),
         .library(name: "IELTSCoachAudio", targets: ["IELTSCoachAudio"]),
         .library(name: "IELTSCoachUI", targets: ["IELTSCoachUI"]),
+        .library(name: "IELTSCoachMCP", targets: ["IELTSCoachMCP"]),
         .executable(name: "axprobe", targets: ["axprobe"]),
         .executable(name: "coach", targets: ["coach"]),
-        .executable(name: "IELTSCoachApp", targets: ["IELTSCoachApp"])
+        .executable(name: "IELTSCoachApp", targets: ["IELTSCoachApp"]),
+        .executable(name: "ielts-speaking-mcp", targets: ["ielts-speaking-mcp"])
     ],
     targets: [
         .target(name: "IELTSCoachCore"),
@@ -22,12 +24,17 @@ let package = Package(
         .target(name: "IELTSCoachAudio", dependencies: ["IELTSCoachCore"]),
         .target(name: "IELTSCoachUI",
                 dependencies: ["IELTSCoachCore", "ChatGPTBridge", "IELTSCoachAudio"]),
+        // 只依赖 Core：MCP 一行都不碰 ChatGPT（spec 4.4），
+        // 也因此它的测试在没有 ChatGPT、没有图形界面的环境里能全跑。
+        .target(name: "IELTSCoachMCP", dependencies: ["IELTSCoachCore"]),
         .executableTarget(name: "axprobe", dependencies: ["ChatGPTBridge"]),
         .executableTarget(name: "coach", dependencies: ["IELTSCoachCore", "ChatGPTBridge"]),
         .executableTarget(name: "IELTSCoachApp", dependencies: ["IELTSCoachUI"]),
+        .executableTarget(name: "ielts-speaking-mcp", dependencies: ["IELTSCoachMCP"]),
         .testTarget(name: "IELTSCoachCoreTests", dependencies: ["IELTSCoachCore"]),
         .testTarget(name: "ChatGPTBridgeTests", dependencies: ["ChatGPTBridge"]),
         .testTarget(name: "IELTSCoachAudioTests", dependencies: ["IELTSCoachAudio"]),
-        .testTarget(name: "IELTSCoachUITests", dependencies: ["IELTSCoachUI"])
+        .testTarget(name: "IELTSCoachUITests", dependencies: ["IELTSCoachUI"]),
+        .testTarget(name: "IELTSCoachMCPTests", dependencies: ["IELTSCoachMCP", "IELTSCoachCore"])
     ]
 )
