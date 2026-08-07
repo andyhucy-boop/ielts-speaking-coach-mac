@@ -1,0 +1,87 @@
+import XCTest
+@testable import IELTSCoachCore
+
+final class PlanScopeTests: XCTestCase {
+
+    private func q(_ id: String, _ part: Int) -> Question {
+        Question(id: id, part: part, topic: "T", prompt: "P-\(id)")
+    }
+
+    /// 模拟题库的自然顺序：Part 1 一整块，然后 Part 2，然后 Part 3。
+    private var bank: [Question] {
+        [q("a1", 1), q("a2", 1), q("a3", 1), q("b1", 2), q("b2", 2), q("c1", 3)]
+    }
+
+    func testSinglePartKeepsOnlyThatPartInBankOrder() {
+        XCTAssertEqual(PlanScope.select(from: bank, focusPart: .part1).map(\.id), ["a1", "a2", "a3"])
+        XCTAssertEqual(PlanScope.select(from: bank, focusPart: .part2).map(\.id), ["b1", "b2"])
+        XCTAssertEqual(PlanScope.select(from: bank, focusPart: .part3).map(\.id), ["c1"])
+    }
+
+    /// 照搬题库顺序去分 7 天，会出现前几天全是 Part 1、最后几天全是 Part 3。
+    /// 那不叫全真模考。
+    func testFullMockInterleavesAcrossParts() {
+        XCTAssertEqual(PlanScope.select(from: bank, focusPart: .fullMock).map(\.id),
+                       ["a1", "b1", "c1", "a2", "b2", "a3"])
+    }
+
+    func testFullMockKeepsEveryQuestionExactlyOnce() {
+        let selected = PlanScope.select(from: bank, focusPart: .fullMock)
+        XCTAssertEqual(selected.count, bank.count)
+        XCTAssertEqual(Set(selected.map(\.id)), Set(bank.map(\.id)))
+    }
+
+    /// state.json 是纯文本、可以手改；PDF 提取器也可能吐出意外的 part。
+    /// 认不出 Part 的题既不能被丢掉，也不能让轮转卡在死循环里。
+    func testFullMockSurvivesOutOfRangePartValues() {
+        let dirty = bank + [q("x", 9)]
+        let selected = PlanScope.select(from: dirty, focusPart: .fullMock)
+        XCTAssertEqual(selected.count, dirty.count)
+        XCTAssertEqual(selected.last?.id, "x", "认不出 Part 的题排在最后，但不能被丢掉")
+    }
+
+    func testEmptyBankSelectsNothing() {
+        XCTAssertTrue(PlanScope.select(from: [], focusPart: .fullMock).isEmpty)
+        XCTAssertTrue(PlanScope.select(from: [], focusPart: .part2).isEmpty)
+    }
+
+    func testNoBlockingReasonWhenThereAreEnoughQuestions() {
+        XCTAssertNil(PlanScope.blockingReason(questionCount: 7, lengthDays: 7, focusPart: .part1))
+        XCTAssertNil(PlanScope.blockingReason(questionCount: 40, lengthDays: 30, focusPart: .fullMock))
+    }
+
+    /// 题数少于天数时 PlanBuilder 会给尾部若干天分 0 题，而空天的 isComplete
+    /// 永远是 false，「计划完成」这件事就再也不会发生。所以要在生成前拦住。
+    func testBlockingReasonWhenFewerQuestionsThanDays() throws {
+        let reason = try XCTUnwrap(
+            PlanScope.blockingReason(questionCount: 12, lengthDays: 30, focusPart: .part2))
+        XCTAssertTrue(reason.contains("12"), "要说清现在有多少题")
+        XCTAssertTrue(reason.contains("30"), "要说清想分几天")
+        XCTAssertTrue(reason.contains("改成 7 天"), "12 道题最多撑 7 天，要给一个真的办得到的建议")
+        XCTAssertTrue(reason.contains("下一步"))
+    }
+
+    func testBlockingReasonWhenEvenTheShortestCycleIsImpossible() throws {
+        let reason = try XCTUnwrap(
+            PlanScope.blockingReason(questionCount: 3, lengthDays: 7, focusPart: .part2))
+        XCTAssertFalse(reason.contains("改成"),
+                       "3 道题连 7 天都分不满，不能建议一个同样办不到的天数")
+        XCTAssertTrue(reason.contains("至少 7 道"))
+        XCTAssertTrue(reason.contains("下一步"))
+    }
+
+    func testBlockingReasonWhenThatPartHasNoQuestionsAtAll() throws {
+        let reason = try XCTUnwrap(
+            PlanScope.blockingReason(questionCount: 0, lengthDays: 7, focusPart: .part2))
+        XCTAssertTrue(reason.contains("Part 2"), "要说清是哪个 Part 没题")
+        XCTAssertTrue(reason.contains("训练题库"), "要指出去哪儿解决")
+        XCTAssertTrue(reason.contains("下一步"))
+    }
+
+    func testLabelsAreChineseAndDistinct() {
+        let labels = FocusPart.allCases.map(PlanScope.label(for:))
+        XCTAssertEqual(Set(labels).count, labels.count, "四个重点 Part 的说明不能重名")
+        XCTAssertTrue(PlanScope.label(for: .fullMock).contains("全真模考"))
+        XCTAssertTrue(PlanScope.label(for: .part1).contains("Part 1"))
+    }
+}
