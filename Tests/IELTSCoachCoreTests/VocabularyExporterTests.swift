@@ -88,22 +88,25 @@ final class VocabularyExporterTests: XCTestCase {
         let document = tsv([record("v1", basic: "   "), record("v2", basic: "good")])
         XCTAssertEqual(document.exportedCount, 1)
         XCTAssertEqual(document.skipped.count, 1)
-        XCTAssertTrue(document.skipped[0].contains("下一步"))
+        // 用 first 而不是 [0]：跳过说明丢了的时候，这里该是一条红的断言，
+        // 不该是一次数组越界崩溃——崩溃会把整轮测试打断，后面的结果全看不到。
+        XCTAssertTrue((document.skipped.first ?? "").contains("下一步"))
     }
 
     func testRecordWithEmptyBackIsSkippedWithAnActionableMessage() {
         let document = tsv([record("v1", basic: "good", better: "", collocation: "")])
         XCTAssertEqual(document.exportedCount, 0)
         XCTAssertEqual(document.skipped.count, 1)
-        XCTAssertTrue(document.skipped[0].contains("good"), "说明里要指出是哪一条被跳过了")
-        XCTAssertTrue(document.skipped[0].contains("下一步"))
+        let message = document.skipped.first ?? ""
+        XCTAssertTrue(message.contains("good"), "说明里要指出是哪一条被跳过了：\(message)")
+        XCTAssertTrue(message.contains("下一步"))
     }
 
     func testEmptyVocabularySaysSoInsteadOfHandingOverAnEmptyFile() {
         let document = tsv([])
         XCTAssertEqual(document.exportedCount, 0)
         XCTAssertEqual(document.skipped.count, 1)
-        XCTAssertTrue(document.skipped[0].contains("下一步"))
+        XCTAssertTrue((document.skipped.first ?? "").contains("下一步"))
         XCTAssertTrue(dataLines(document).isEmpty)
     }
 
@@ -278,5 +281,65 @@ final class VocabularyExporterTests: XCTestCase {
                                    collocation: "")])
         XCTAssertEqual(dataLines(document)[0].components(separatedBy: "\t")[1], "line1<br>line2",
                        "单独的 \\r 必须被替换成 <br>")
+    }
+
+    // MARK: - 纯换行的字段不许绕过两道跳过闸门（复审发现，2026-08-07）
+    //
+    // `sanitize` 原来先把 `\n` 换成 `<br>`、最后才按 `.whitespaces`（**不含换行**）
+    // 修剪，于是判空时字符串已经是 `<br>` 了：两处 `guard !...isEmpty` 都判不出来，
+    // 卡片照导、`skipped` 里一个字都没有——正是本项目最危险的那种「静默的 0」。
+    // 可达路径不是理论上的：ReviewArchiver 只对 `basic` 做了
+    // `.whitespacesAndNewlines` 修剪，`better` / `collocation` 是原样入库的，
+    // ChatGPT 复盘里一个 `"better": "\n"` 就会一路变成一张背面空白的卡。
+
+    /// 正面只有一个换行：用户在 Anki 里拿到的是一张正面完全空白的卡，
+    /// 而导出界面显示「导出 1 条、跳过 0 条」，他不会去查。
+    func testNewlineOnlyBasicWordIsSkippedInsteadOfExportingABlankFront() {
+        let document = tsv([record("v1", basic: "\n")])
+        XCTAssertEqual(document.exportedCount, 0, "正面只有换行的卡片不能被导出去")
+        XCTAssertTrue(dataLines(document).isEmpty, "文件里不该有这条数据行：\(document.text)")
+        XCTAssertEqual(document.skipped.count, 1, "跳过必须有说明，不能静默少导")
+        XCTAssertTrue((document.skipped.first ?? "").contains("下一步"))
+    }
+
+    /// 背面两个字段都只有换行：背面清洗出来是 `<br><br><br>`，
+    /// 在 Anki 里就是三行空行——「记它没有意义」正是计划里写明要跳过的那一格。
+    func testNewlineOnlyBackIsSkippedInsteadOfExportingABlankBack() {
+        let document = tsv([record("v1", basic: "good", better: "\n", collocation: "\r\n")])
+        XCTAssertEqual(document.exportedCount, 0, "背面只有换行的卡片不能被导出去")
+        XCTAssertTrue(dataLines(document).isEmpty, "文件里不该有这条数据行：\(document.text)")
+        XCTAssertEqual(document.skipped.count, 1, "跳过必须有说明，不能静默少导")
+        let message = document.skipped.first ?? ""
+        XCTAssertTrue(message.contains("good"), "说明里要指出是哪一条被跳过了：\(message)")
+        XCTAssertTrue(message.contains("下一步"))
+    }
+
+    /// 同一个错的轻症版本：计划的清洗规则写的是「首尾空白 → 去掉」，换行也是空白。
+    /// 先换 `<br>` 再修剪，等于把首尾的换行留成了 `<br>`——
+    /// 卡片正面顶上、背面末尾各多出一行空行。
+    func testLeadingAndTrailingNewlinesDoNotBecomeStrayBreaks() {
+        let document = tsv([record("v1", basic: "\ngood\n", better: "\nrewarding\n",
+                                   collocation: "")])
+        let columns = (dataLines(document).first ?? "").components(separatedBy: "\t")
+        guard columns.count == 3 else {
+            return XCTFail("这条有内容，不该被跳过，应当导出一行三列：\(document.text)")
+        }
+        XCTAssertEqual(columns[0], "good", "正面首尾的换行必须去掉，不能留成 <br>")
+        XCTAssertEqual(columns[1], "rewarding", "背面首尾的换行必须去掉，不能留成 <br>")
+    }
+
+    /// AnkiConnect 走的是同一段筛选逻辑，但它是**直接写进用户牌组**的那条路——
+    /// TSV 至少还能在导入对话框里瞄一眼，这条 curl 完就进去了。
+    func testAnkiConnectAlsoRefusesNewlineOnlyCards() throws {
+        let document = VocabularyExporter.export([record("v1", basic: "\n"),
+                                                  record("v2", basic: "good", better: "\n",
+                                                         collocation: "\n")],
+                                                 format: .ankiConnectJSON,
+                                                 exportedAt: exportedAt, calendar: utc)
+        XCTAssertEqual(document.exportedCount, 0)
+        XCTAssertEqual(document.skipped.count, 2, "两条都要有说明")
+        let notes = try XCTUnwrap(
+            try JSONValue.decode(from: document.text)["params"]?["notes"]?.arrayValue)
+        XCTAssertTrue(notes.isEmpty, "空白卡片不能进 addNotes 请求：\(document.text)")
     }
 }

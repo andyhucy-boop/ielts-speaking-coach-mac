@@ -128,12 +128,18 @@ public enum VocabularyExporter {
     /// **用清洗而不是加引号**：加引号要处理转义、还要赌 Anki 版本认不认；
     /// 清洗是确定性的、可测的。替换顺序不能变——先处理 \r\n，
     /// 否则会被拆成两个 <br>。
+    ///
+    /// **修剪必须在替换之前，而且要按 .whitespacesAndNewlines。**
+    /// 反过来（先替换、末尾再按 .whitespaces 修剪）会让一个纯换行的字段
+    /// 变成 "<br>"：判空时它已经不是空的了，于是下面两处 `guard !...isEmpty`
+    /// 都判不出来，一张正面（或背面）在 Anki 里完全空白的卡会被静默导出去，
+    /// skipped 里还一个字都没有。
     private static func sanitize(_ text: String) -> String {
-        text.replacingOccurrences(of: "\t", with: " ")
+        text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\t", with: " ")
             .replacingOccurrences(of: "\r\n", with: "<br>")
             .replacingOccurrences(of: "\r", with: "<br>")
             .replacingOccurrences(of: "\n", with: "<br>")
-            .trimmingCharacters(in: .whitespaces)
     }
 
     // MARK: - TSV
