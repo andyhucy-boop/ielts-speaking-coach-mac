@@ -1,0 +1,28 @@
+# IELTS Speaking Coach 的本机 MCP server。
+# 把这一段追加到 ~/.codex/config.toml（用 scripts/install-codex-plugin.sh 可以自动生成带绝对路径的版本）。
+#
+# ⚠️ 下面这些键名（[mcp_servers.<名字>] / command / args / env）**还没有在本机核实过**，
+#    它来自对 Codex CLI 配置格式的假定。抄之前先自己确认一遍：
+#
+#        codex --version
+#        codex mcp --help
+#
+#    若你的 Codex 版本用的是别的形状，以它为准，把这个文件和
+#    scripts/install-codex-plugin.sh 里的模板一起改过来，
+#    并把真实格式记进 docs/phase9-acceptance.md——下一个读这份文件的人需要知道真相是什么。
+#
+# 为什么必须写绝对路径：Codex 启动 MCP server 时不保证继承你 shell 里的 PATH，
+# 写成 ielts-speaking-mcp 很可能报「找不到命令」，而那条报错出现在 Codex 的日志里、不在终端上。
+#
+# 这个 server 一行都不碰 ChatGPT（它不依赖 ChatGPTBridge），
+# 因此接上它之后，工具调用不会在你的 ChatGPT 账号里产生任何真实对话或语音通话。
+
+[mcp_servers.ielts_speaking]
+command = "/Users/你的用户名/.local/bin/ielts-speaking-mcp"
+args = []
+
+# 可选：把训练数据指到别的目录。默认是 ~/Library/Application Support/IELTS Speaking Coach。
+# 拿它做试验时很有用——试完删掉这一段就回到真实数据。
+# 注意 save_session_review 会真的往目录里写东西：拿真实数据目录做试验之前先想清楚。
+# [mcp_servers.ielts_speaking.env]
+# IELTS_SPEAKING_DATA_DIR = "/Users/你的用户名/tmp/ielts-mcp-试验"
