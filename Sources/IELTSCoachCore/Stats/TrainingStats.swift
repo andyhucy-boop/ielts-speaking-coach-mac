@@ -55,8 +55,9 @@ public struct TrainingStats: Equatable, Sendable {
         var undated = 0
 
         for session in state.sessions {
-            guard let started = CoachTime.parse(session.startedAt)
-                ?? CoachTime.parseDayPrefix(session.id) else {
+            // 「一场练习算在什么时候」全项目只有 PracticeSessionOrder 一份规则，
+            // 别在这里另写：少一次兜底，这里的「本周训练 N 次」就会和别处对不上。
+            guard let started = PracticeSessionOrder.startDate(of: session) else {
                 undated += 1
                 continue
             }

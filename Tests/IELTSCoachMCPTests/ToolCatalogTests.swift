@@ -40,15 +40,19 @@ final class ToolCatalogTests: XCTestCase {
         }
     }
 
-    func testRequiredParametersAreDeclaredForTheToolsThatHaveThem() {
-        func required(_ name: String) -> [String] {
-            let tool = tools.first { $0.name == name }
-            return (tool?.inputSchema["required"]?.arrayValue ?? []).compactMap(\.stringValue)
+    func testRequiredParametersAreDeclaredForTheToolsThatHaveThem() throws {
+        // 先 unwrap 出工具再断言。原来写成 `tool?.inputSchema[...] ?? []`，
+        // 工具压根不在目录里时也返回 []，于是「required 是空」这条断言永远成立。
+        func required(_ name: String) throws -> [String] {
+            let tool = try XCTUnwrap(tools.first { $0.name == name }, "工具目录里没有 \(name)")
+            return (tool.inputSchema["required"]?.arrayValue ?? []).compactMap(\.stringValue)
         }
         // schema 里不写 required，模型就会以为参数可省，然后收到一条本可以避免的错误。
-        XCTAssertEqual(required("set_training_selection"), ["questionId"])
-        XCTAssertEqual(required("save_session_review"), ["reviewText"])
-        XCTAssertEqual(required("get_dashboard_data"), [], "这个工具本来就不吃参数")
+        XCTAssertEqual(try required("set_training_selection"), ["questionId"])
+        XCTAssertEqual(try required("save_session_review"), ["reviewText"])
+        let dashboard = try XCTUnwrap(tools.first { $0.name == "get_dashboard_data" })
+        XCTAssertNil(dashboard.inputSchema["required"],
+                     "这个工具本来就不吃参数，schema 里不该出现 required 键")
     }
 
     func testToolNamesAreUnique() {

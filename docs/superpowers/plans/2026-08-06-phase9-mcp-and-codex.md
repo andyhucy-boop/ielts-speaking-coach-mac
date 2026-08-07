@@ -83,12 +83,15 @@ spec **没有**钉死每个 tool 的参数 schema 与返回负载。本计划里
 
 ```
 Sources/
-├── IELTSCoachCore/                      本阶段新增 5 个文件（两端共享的逻辑都放这里）
+├── IELTSCoachCore/                      本阶段新增 6 个文件（两端共享的逻辑都放这里）
 │   ├── CoachError.swift                 Modify：加 invalidSessionID
 │   ├── JSON/JSONValue.swift             Modify：加 intValue / doubleValue / boolValue
 │   ├── Model/CoachRoute.swift           新增：ieltscoach:// 的路由表（MCP 拼 URL、App 解析 URL）
 │   ├── Model/SessionID.swift            新增：会话编号生成与文件名安全校验
 │   ├── Policy/IssueRanking.swift        新增：错题按出现次数排序
+│   ├── Stats/PracticeSessionOrder.swift 新增（Task 9 复审）：「一场练习算在什么时候 + 从新到旧怎么排」的唯一一份规则
+│   ├── Stats/TrainingStats.swift        Modify：取时间改调 PracticeSessionOrder
+│   ├── Stats/SessionTimeline.swift      Modify：取时间改调 PracticeSessionOrder
 │   ├── Review/DashboardSummary.swift    新增：仪表盘聚合（get_dashboard_data 的全部逻辑）
 │   └── Storage/PendingReviewStore.swift 新增：复盘原文落盘（先落盘再解析）
 ├── IELTSCoachMCP/                       新增 library：协议层 + 7 个 tool
@@ -119,10 +122,11 @@ scripts/
 ├── install-codex-plugin.sh              新增：编译、安装到 ~/.local/bin、打印/写入 Codex 配置
 └── mcp-smoke.sh                         新增：对真实可执行文件的 stdio 冒烟测试
 Tests/
-├── IELTSCoachCoreTests/                 4 个新测试文件
+├── IELTSCoachCoreTests/                 5 个新测试文件
 │   ├── CoachRouteTests.swift
 │   ├── SessionIDTests.swift
 │   ├── DashboardSummaryTests.swift
+│   ├── PracticeSessionOrderTests.swift  Task 9 复审新增
 │   └── PendingReviewStoreTests.swift
 ├── IELTSCoachMCPTests/                  新增测试 target
 │   ├── TestSupport.swift
@@ -3285,6 +3289,15 @@ git commit -m "feat(mcp): save_session_review（先落盘再解析，归档 0 �
 
 **`transcriptTurns` 现在恒为 0**：逐字稿是 Phase 4 的事，`PracticeSession.transcript` 目前不会被填。字段先留着并如实返回 0，好过将来加字段改协议。
 
+**2026-08-07 第二次复审补入（`list_practice_history` 的排序）：** 本任务原稿里的 `state.sessions.sorted { $0.startedAt > $1.startedAt }` **是错的，别照抄**。它在 MCP 层重写了一份比 Core 弱的规则：没有 `CoachTime.parseDayPrefix(session.id)` 兜底，而「`startedAt` 空着、日期只剩在 id 里」是真实存在的数据（`TrainingStats` 与 `SessionTimeline` 都按这种数据处理）。后果是用户刚练完的那场被排到列表最后，传了 `limit` 就直接从返回里消失，而同一份 state 交给 `get_dashboard_data` 又把它算进「本周训练」——两个工具对同一份数据给出互相矛盾的答案，用户没有任何办法判断哪个是真的。
+
+修法：**规则加在 Core 里，两端共享**（Architecture 段的原则）。新增 `Sources/IELTSCoachCore/Stats/PracticeSessionOrder.swift`：
+
+- `startDate(of:) -> Date?`：`CoachTime.parse(startedAt) ?? CoachTime.parseDayPrefix(id)`。`TrainingStats.compute` 与 `SessionTimeline.build` 里原来各写一遍的那两行同时改成调它，全项目只留一份。
+- `newestFirst(_:) -> (ordered: [PracticeSession], undatedIDs: [String])`：按时间倒序，同一时刻按 id 倒序（与 `SessionTimeline` 同一条 tie-break，Swift 的 `sorted` 不保证稳定）；两处都读不出时间的场次**不许丢**，排在最后并由 `undatedIDs` 列出来。
+
+`list_practice_history` 的 payload 因此多两个字段：行内 `startTimeUnreadable: Bool`、顶层 `undatedSessionCount: Int`，且 `undatedSessionCount > 0` 时 `note` 必须说清是哪几个 id、补哪个字段能修好（铁律 7）。测试见 Step 1。
+
 - [ ] **Step 1: 写失败的测试**
 
 `Tests/IELTSCoachMCPTests/HistoryToolsTests.swift`：
@@ -3526,11 +3539,15 @@ enum ListPracticeHistoryTool {
         let reportPath: String
         let hasRecording: Bool
         let transcriptTurns: Int
+        /// startedAt 与场次 id 里都读不出时间。这种行排在最后，位置不代表它有多新。
+        let startTimeUnreadable: Bool
     }
 
     private struct Payload: Encodable {
         let total: Int
         let returned: Int
+        /// 读不出练习时间、排不进时间轴的场次数（按全量算）。非 0 时 note 里必须解释。
+        let undatedSessionCount: Int
         let sessions: [Row]
         let note: String
     }
@@ -3554,9 +3571,11 @@ enum ListPracticeHistoryTool {
                 hint: "limit 传 1–200 之间的整数；省略则返回最近 20 条。")
             let state = try environment.store.load()
 
-            // startedAt 全项目统一是 ISO8601 UTC 字符串，同格式下字符串倒序即时间倒序。
-            let ordered = state.sessions.sorted { $0.startedAt > $1.startedAt }
-            let rows = ordered.prefix(limit).map { session -> Row in
+            // 排序规则不在这里另写一份（原稿写的 `sorted { $0.startedAt > $1.startedAt }` 是错的，
+            // 见本任务开头 2026-08-07 那段复审补入）。
+            let ordering = PracticeSessionOrder.newestFirst(state.sessions)
+            let undated = Set(ordering.undatedIDs)
+            let rows = ordering.ordered.prefix(limit).map { session -> Row in
                 let question = state.questions.first { $0.id == session.questionId }
                 return Row(
                     sessionId: session.id,
@@ -3575,18 +3594,34 @@ enum ListPracticeHistoryTool {
                     reportPath: session.reportPath,
                     hasRecording: !session.recordingPath.isEmpty,
                     // 逐字稿是 Phase 4 的事，现在恒为 0，如实返回。
-                    transcriptTurns: session.transcript.count)
+                    transcriptTurns: session.transcript.count,
+                    startTimeUnreadable: undated.contains(session.id))
+            }
+
+            var note = state.sessions.isEmpty
+                ? "还没有任何练习记录。下一步：用 set_training_selection 选题、"
+                    + "get_training_context 取考官提示词，练完把复盘交给 save_session_review。"
+                : "按练习开始时间从新到旧排列（startedAt 空着时退回按场次 id 里的日期算）。"
+                    + "下一步：想看某一场的完整复盘，"
+                    + "打开对应的 reportPath 文件，或用 open_dashboard 打开复盘报告页。"
+            if !ordering.undatedIDs.isEmpty {
+                // 顺序对这几条是不可信的，不说等于给了一个用户无法核对的列表（铁律 6、7）。
+                let sample = ordering.undatedIDs.prefix(3).joined(separator: "、")
+                note += "另有 \(ordering.undatedIDs.count) 场练习读不出练习时间"
+                    + "（startedAt 空着或写坏了，场次 id 也不以 YYYY-MM-DD 开头），"
+                    + "它们排在列表最后、行内 startTimeUnreadable 为 true，"
+                    + "传了 limit 时可能根本没出现在这次返回里。"
+                    + "下一步：打开数据目录里的 state.json，在 sessions 里找到这几个 id：\(sample)，"
+                    + "把 startedAt 补成练习当天的时间戳（形如 2026-08-05T10:00:00Z），"
+                    + "补上它们就会回到正确的位置。"
             }
 
             return try ToolJSON.text(Payload(
                 total: state.sessions.count,
                 returned: rows.count,
+                undatedSessionCount: ordering.undatedIDs.count,
                 sessions: Array(rows),
-                note: state.sessions.isEmpty
-                    ? "还没有任何练习记录。下一步：用 set_training_selection 选题、"
-                        + "get_training_context 取考官提示词，练完把复盘交给 save_session_review。"
-                    : "按开始时间从新到旧排列。下一步：想看某一场的完整复盘，"
-                        + "打开对应的 reportPath 文件，或用 open_dashboard 打开复盘报告页。"))
+                note: note))
         }
     }
 }
@@ -3727,10 +3762,13 @@ enum GetDashboardDataTool {
 - [ ] **Step 4: 运行，确认通过**
 
 Run: `swift test --filter HistoryToolsTests`
-Expected: PASS（8 个测试）
+Expected: PASS（13 个测试）
 
 Run: `swift test --filter ToolCatalogTests`
 Expected: PASS（4 个测试）
+
+Run: `swift test --filter PracticeSessionOrderTests`
+Expected: PASS（5 个测试）
 
 Run: `swift test`
 Expected: 全绿
@@ -3739,14 +3777,18 @@ Expected: 全绿
 
 | 把这一行改成 | 哪条测试必须变红 |
 |---|---|
-| `sorted { $0.startedAt > $1.startedAt }` 改成 `sorted { $0.startedAt < $1.startedAt }` | `testNewestFirstAndLimitApplies` |
+| `PracticeSessionOrder.newestFirst(state.sessions)` 退回 `sorted { $0.startedAt > $1.startedAt }` | `testSessionWhoseTimeOnlyLivesInItsIDIsStillSortedNewestFirst` |
+| `PracticeSessionOrder.startDate` 去掉 `?? CoachTime.parseDayPrefix(id)` | `PracticeSessionOrderTests`、`TrainingStatsTests`、`SessionTimelineTests`、`DashboardSummaryTests`、`HistoryToolsTests` 一起红（证明兜底确实只有一份） |
+| `startTimeUnreadable` / `undatedSessionCount` / note 里那段警告一起去掉（排序仍正确） | `testSessionWithNoReadableTimeIsListedLastAndFlagged` |
 | `questionMissing: question == nil` 改成 `questionMissing: false` | `testDeletedQuestionIsMarkedInsteadOfSilentlyBlank` |
-| 从 `ToolCatalog.tools` 里删掉 `GetDashboardDataTool.make(...)` 那一行 | `testExposesExactlyTheSevenToolsNamedInSpec` |
+| `hasReport` / `hasRecording` 恒 true、`reportPath` / `focusPart` / `endedAt` / `goal` 恒空 | `testRowsCarryTheQuestionTextAndReportFlag`、`testSessionWithoutAReportIsNotReportedAsReviewed` |
+| 删掉 note 里空历史那个三元分支，只留非空分支 | `testEmptyHistoryExplainsHowToGetStarted` |
+| 从 `ToolCatalog.tools` 里删掉 `GetDashboardDataTool.make(...)` 那一行 | `testExposesExactlyTheSevenToolsNamedInSpec`、`testRequiredParametersAreDeclaredForTheToolsThatHaveThem` |
 
 - [ ] **Step 6: 提交**
 
 ```bash
-git add Sources/IELTSCoachMCP/Tools/ListPracticeHistoryTool.swift Sources/IELTSCoachMCP/Tools/GetDashboardDataTool.swift Sources/IELTSCoachMCP/ToolCatalog.swift Tests/IELTSCoachMCPTests/HistoryToolsTests.swift Tests/IELTSCoachMCPTests/ToolCatalogTests.swift
+git add Sources/IELTSCoachCore/Stats/PracticeSessionOrder.swift Sources/IELTSCoachCore/Stats/TrainingStats.swift Sources/IELTSCoachCore/Stats/SessionTimeline.swift Sources/IELTSCoachMCP/Tools/ListPracticeHistoryTool.swift Sources/IELTSCoachMCP/Tools/GetDashboardDataTool.swift Sources/IELTSCoachMCP/ToolCatalog.swift Tests/IELTSCoachCoreTests/PracticeSessionOrderTests.swift Tests/IELTSCoachMCPTests/HistoryToolsTests.swift Tests/IELTSCoachMCPTests/ToolCatalogTests.swift
 git commit -m "feat(mcp): list_practice_history、get_dashboard_data 与七个工具定稿"
 ```
 

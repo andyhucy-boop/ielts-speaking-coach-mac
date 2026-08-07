@@ -25,10 +25,10 @@ public struct SessionTimeline: Equatable, Sendable {
         var undated: [String] = []
         var unmatched: [String] = []
 
-        // ① 训练记录本身。优先用 startedAt，缺失时退回从 id 的日期前缀解析。
+        // ① 训练记录本身。优先用 startedAt，缺失时退回从 id 的日期前缀解析——
+        //    这条规则只有 PracticeSessionOrder 一份，别在这里另写。
         for session in state.sessions {
-            if let date = CoachTime.parse(session.startedAt)
-                ?? CoachTime.parseDayPrefix(session.id) {
+            if let date = PracticeSessionOrder.startDate(of: session) {
                 timestamps[session.id] = date
             } else if !undated.contains(session.id) {
                 undated.append(session.id)
