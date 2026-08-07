@@ -33,10 +33,6 @@ public enum PracticeRoute: String, CaseIterable, Identifiable, Sendable {
 /// 单独分出来是因为 `View` 几乎没法单元测试，而「把 `CoachState` 变成界面要显示的东西」
 /// 这段完全可测。判据是「把这里改成空实现，`TodayViewModelTests` 会不会红」。
 public struct TodayViewModel: Sendable {
-    /// 本周目标次数。写成常量而不是散在两处字面量：`weekProgress.goal` 和界面上那句
-    /// 「还差几次」必须是同一个数，否则会出现「3/5」旁边写着「还差 4 次」。
-    public static let weeklyGoal = 5
-
     /// 练完一场之后，有没有代码把这一场记进 `CoachState.sessions`。
     ///
     /// **2026-08-06 起是 `true`**：Phase 4 Task 6 把 `PracticeRunner.upsertSession` 接上了——
@@ -67,11 +63,23 @@ public struct TodayViewModel: Sendable {
 
     public let state: CoachState
     private let today: Date
+    /// 周历用 ISO 8601（周一起算），与国内习惯一致；用 `.gregorian` 的话一周从周日开始，
+    /// 周日练的那一次会被算进下一周。
+    ///
+    /// 可注入是为了让测试能钉住时区：`Calendar(identifier: .iso8601)` 用的是运行机器的时区，
+    /// 断言「本周有 2 次」在别的时区上会变成 1 次或 3 次。
+    private let calendar: Calendar
+    /// 在 init 里算一次就好。放成 computed var 的话，四格 + 进度条会重复算四五遍。
+    public let stats: TrainingStats
 
     /// `today` 可注入，测试才能钉住「本周」的边界；生产用默认值。
-    public init(state: CoachState, today: Date = Date()) {
+    public init(state: CoachState,
+                today: Date = Date(),
+                calendar: Calendar = Calendar(identifier: .iso8601)) {
         self.state = state
         self.today = today
+        self.calendar = calendar
+        self.stats = TrainingStats.compute(state: state, now: today, calendar: calendar)
     }
 
     /// 计划里第一个未完成的那天的题目。
@@ -174,21 +182,97 @@ public struct TodayViewModel: Sendable {
 
     /// 本周练了几次 / 目标几次。
     ///
-    /// 周历用 ISO 8601（周一起算），与国内习惯一致；用 `.gregorian` 的话一周从周日开始，
-    /// 周日练的那一次会被算进下一周。
-    public var weekProgress: (done: Int, goal: Int) {
-        let calendar = Calendar(identifier: .iso8601)
-        guard let week = calendar.dateInterval(of: .weekOfYear, for: today) else {
-            return (0, Self.weeklyGoal)
+    /// 目标次数来自 `settings.weeklyGoal`（ROADMAP 第 5 节：用户可配置，默认 5）。
+    /// **不许在这里写死 5**：写死之后用户改了目标，首页还按 5 算，
+    /// 「3/5」旁边的进度条与设置面板里说的目标对不上，而他没有任何办法知道哪个是真的。
+    public var weekProgress: (done: Int, goal: Int) { (stats.weeklyDone, stats.weeklyGoal) }
+
+    // MARK: - 首页四格
+
+    /// 首页四格。顺序与 id 固定，视图按顺序渲染即可。
+    ///
+    /// **四格里没有一格是分数、评级或水平判断**（DEFINITION-OF-DONE 第 4 节）。
+    /// `HomeStatsTests.testNoScorePredictionInAnyUserFacingText` 把这四格的每一个字段
+    /// 连同趋势文案一起扫一遍，命中禁用词就红。
+    public var statTiles: [StatTile] {
+        [weekTile, totalTile, minutesTile, improvingTile]
+    }
+
+    private var weekTile: StatTile {
+        var footnote: String
+        if stats.weeklyDone >= stats.weeklyGoal {
+            footnote = "本周目标已经完成。下一步：想继续练就继续，目标只是下限，不是上限。"
+        } else {
+            footnote = "离本周目标还差 \(stats.weeklyGoal - stats.weeklyDone) 次。"
+                + "下一步：回到上面点「开始练习」，再练一场。"
         }
-        let formatter = ISO8601DateFormatter()
-        let done = state.sessions.filter { session in
-            // 认不出的时间戳不计入。宁可少算也不能多算：把一条时间不明的记录算进本周，
-            // 进度条就成了一个说不清来历的数字。
-            guard let started = formatter.date(from: session.startedAt) else { return false }
-            return week.contains(started)
-        }.count
-        return (done, Self.weeklyGoal)
+        // 读不出时间的那几场不能悄悄消失：用户明明练过，本周次数却不动，
+        // 不说清楚他只会以为工具坏了（铁律 7）。
+        if stats.undatedSessionCount > 0 {
+            footnote += "另有 \(stats.undatedSessionCount) 场练习读不出时间，没能算进本周。"
+                + "下一步：到训练记录页核对这几场。"
+        }
+        return StatTile(id: StatTile.weekID, caption: "本周训练",
+                        value: "\(stats.weeklyDone)/\(stats.weeklyGoal)",
+                        unit: "次", footnote: footnote)
+    }
+
+    private var totalTile: StatTile {
+        let footnote = stats.totalSessions == 0
+            ? "还没有任何练习记录。下一步：回到上面点「开始练习」，练第一场。"
+            : "从第一场到现在的全部练习都算在里面。下一步：到训练记录页可以逐场回看。"
+        return StatTile(id: "total", caption: "累计训练",
+                        value: "\(stats.totalSessions)", unit: "次", footnote: footnote)
+    }
+
+    private var minutesTile: StatTile {
+        var footnote = "按每场练习的开始与结束时间统计。"
+        if stats.sessionsMissingDuration > 0 {
+            footnote += "有 \(stats.sessionsMissingDuration) 场没有结束时间，没算进去。"
+                + "下一步：练完记得点「我练完了」，时长才会被记上。"
+        }
+        if stats.cappedSessionCount > 0 {
+            let hours = TrainingStats.maxCountedMinutesPerSession / 60
+            footnote += "有 \(stats.cappedSessionCount) 场超过 \(hours) 小时，"
+                + "已按 \(hours) 小时计入（多半是忘了点结束）。"
+                + "下一步：到训练记录页核对这几场。"
+        }
+        if stats.sessionsMissingDuration == 0 && stats.cappedSessionCount == 0 {
+            footnote += "下一步：想让这个数字变大，就多练几场，不用刻意拉长单场时间。"
+        }
+        return StatTile(id: "minutes", caption: "本周开口时长",
+                        value: "\(stats.weeklySpokenMinutes)", unit: "分钟", footnote: footnote)
+    }
+
+    /// 第四格。**这里不是分数、不是评级。** 它是「问题档案里趋势为
+    /// 『最近没再出现』或『出现变少了』的毛病有几个」——一个用户能自己数出来核对的计数。
+    private var improvingTile: StatTile {
+        let footnote: String
+        if stats.trackedIssueCount == 0 {
+            footnote = "问题档案还是空的。"
+                + "下一步：练一场并让 ChatGPT 生成复盘，反复出现的毛病会自动记到这里。"
+        } else if stats.totalSessions < IssueTrendAnalyzer.minimumSessionsForTrend {
+            // 场次不够时说「0 个毛病在变少」会被误读成「一点没进步」。
+            // 必须说清是「还看不出来」，并给出还差几场。
+            let needed = IssueTrendAnalyzer.minimumSessionsForTrend - stats.totalSessions
+            footnote = "练习场次还不够，暂时看不出哪个毛病在变少。"
+                + "下一步：再练 \(needed) 次，这里会自动开始显示。"
+        } else {
+            footnote = "档案里一共 \(stats.trackedIssueCount) 个问题，这里只数「最近变少了」的那些。"
+                + "下一步：到问题档案页看每个毛病的具体变化。"
+        }
+        return StatTile(id: "improving", caption: "出现变少的毛病",
+                        value: "\(stats.improvingIssueCount)", unit: "个", footnote: footnote)
+    }
+
+    /// 首页的「你的问题正在怎么变化」列表：按出现次数取最要紧的五条。
+    /// 剩下的去问题档案页看——首页塞十几条只会让人不想看。
+    ///
+    /// 排序与趋势**原样**来自 `IssueArchiveViewModel`，这里不另排一份：
+    /// 首页和问题档案页给出两套顺序的话，用户不知道该信哪个，
+    /// 而只有视图模型那一处有测试守着。
+    public var issueChanges: [IssueArchiveRow] {
+        Array(IssueArchiveViewModel(state: state, calendar: calendar).rows.prefix(5))
     }
 
     /// 最近五次练习，最近的在最前面。

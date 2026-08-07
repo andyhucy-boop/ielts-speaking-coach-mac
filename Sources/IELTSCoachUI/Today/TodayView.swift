@@ -44,9 +44,14 @@ struct TodayView: View {
                 if app.state.questions.isEmpty {
                     emptyBank
                 } else {
+                    // 四格摆在这一支里而不是页头，是因为它们的脚注里写着
+                    // 「回到上面点「开始练习」」——题库空的时候那颗按钮根本不在页面上，
+                    // 照着做的人会一直找。同屏矛盾指令这个坑，本项目在权限页上踩过一次。
+                    statsRow
                     recordingNotice
                     routes
                     recentPractice
+                    issueTrends
                 }
             }
             .padding(Spacing.xl)
@@ -97,18 +102,14 @@ struct TodayView: View {
             runner: app.makePracticeRunner())
     }
 
-    // MARK: - 顶部：问候、日期、本周进度
+    // MARK: - 顶部：问候与日期
 
     private var header: some View {
-        HStack(alignment: .top, spacing: Spacing.xl) {
-            VStack(alignment: .leading, spacing: Spacing.sm) {
-                SectionHeader(number: 1, label: "TODAY", title: SidebarItem.today.title)
-                Text("\(greeting)。今天是 \(Self.dayDisplay.string(from: Date()))。")
-                    .font(Typography.body)
-                    .foregroundStyle(Palette.textSecondary)
-            }
-            Spacer(minLength: Spacing.md)
-            weekCard.frame(width: 240)
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            SectionHeader(number: 1, label: "TODAY", title: SidebarItem.today.title)
+            Text("\(greeting)。今天是 \(Self.dayDisplay.string(from: Date()))。")
+                .font(Typography.body)
+                .foregroundStyle(Palette.textSecondary)
         }
     }
 
@@ -125,35 +126,64 @@ struct TodayView: View {
         return name.isEmpty ? period : "\(period)，\(name)"
     }
 
-    private var weekCard: some View {
-        let progress = model.weekProgress
-        let remaining = max(progress.goal - progress.done, 0)
-        return CoachCard {
+    // MARK: - 四格统计
+
+    /// 首页四格。**内容一格不落地来自 `TodayViewModel.statTiles`**，这里不另算一份：
+    /// 视图里现拼的数字与文案没有任何测试管得住，而「绝不预测分数」那条红线
+    /// （`HomeStatsTests.testNoScorePredictionInAnyUserFacingText`）正是扫那四格的字符串。
+    ///
+    /// 窗口窄时自动折成两行（`.adaptive`）：四格挤成一条会把脚注压成一列单字，
+    /// 而脚注正是「下一步做什么」所在的地方，不能因为窗口小就读不了。
+    private var statsRow: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: Spacing.md)],
+                  alignment: .leading, spacing: Spacing.md) {
+            ForEach(model.statTiles) { tile in
+                statCard(tile)
+            }
+        }
+    }
+
+    private func statCard(_ tile: StatTile) -> some View {
+        CoachCard {
             VStack(alignment: .leading, spacing: Spacing.sm) {
-                Text("本周训练")
-                    .font(Typography.cardTitle)
-                    .foregroundStyle(Palette.textPrimary)
-                // 等宽数字由 `Typography.number` 带着（规范第 1 节最后一行）：
-                // 3/5 跳到 10/5 时整行不能横向抖一下。
-                Text("\(progress.done)/\(progress.goal) 次")
-                    .font(Typography.number)
-                    .foregroundStyle(Palette.textPrimary)
-                ProgressView(value: Double(min(progress.done, progress.goal)),
-                             total: Double(progress.goal))
-                    .tint(Palette.accent)
-                    .accessibilityLabel("本周训练进度")
-                    .accessibilityValue("\(progress.done) 次，共 \(progress.goal) 次")
-                if remaining == 0 {
-                    Text("本周目标已经达成，再练都是多赚的。")
-                        .font(Typography.secondary)
-                        .foregroundStyle(Palette.success)
-                } else {
-                    Text("还差 \(remaining) 次达成本周目标。")
+                Text(tile.caption)
+                    .font(Typography.label)
+                    .foregroundStyle(Palette.textSecondary)
+
+                HStack(alignment: .firstTextBaseline, spacing: Spacing.xs) {
+                    // 等宽数字（规范第 1 节末行、第 6 节最后一条）：「3/5」跳到「10/5」、
+                    // 「9」跳到「10」时整行不许横向抖一下。`Typography.number` 自带
+                    // `.monospacedDigit()`，这里再写一次是为了让这条要求在视图上看得见。
+                    Text(tile.value)
+                        .font(Typography.number)
+                        .monospacedDigit()
+                        .foregroundStyle(Palette.textPrimary)
+                    Text(tile.unit)
                         .font(Typography.secondary)
                         .foregroundStyle(Palette.textSecondary)
                 }
+
+                if tile.id == StatTile.weekID { weekProgressBar }
+
+                // **脚注不许因为「太长了不好看」就不显示**：它是这一格里唯一说清
+                // 「下一步做什么」的地方（铁律 6）。
+                Text(tile.footnote)
+                    .font(Typography.secondary)
+                    .foregroundStyle(Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    /// 「本周训练」那一格里的进度条。目标次数来自设置（`weekProgress.goal`），不是写死的 5。
+    private var weekProgressBar: some View {
+        let progress = model.weekProgress
+        return ProgressView(value: Double(min(progress.done, progress.goal)),
+                            total: Double(max(progress.goal, 1)))
+            .tint(Palette.accent)
+            .accessibilityLabel("本周训练进度")
+            .accessibilityValue("\(progress.done) 次，共 \(progress.goal) 次")
     }
 
     // MARK: - 训练记录还没接上，这件事得说出来
@@ -390,6 +420,94 @@ struct TodayView: View {
         return "练完第一场之后，这里会按时间倒序列出最近五次：练的哪道题、当时定的目标、"
             + "复盘有没有存下来。下一步：用上面那张紫色卡片开始第一场；"
             + "想先看看有哪些题可以练，就去「训练题库」翻一翻。"
+    }
+
+    // MARK: - 你的问题正在怎么变化
+
+    /// 首页只放最要紧的五条，剩下的去问题档案页看（`TodayViewModel.issueChanges`）。
+    ///
+    /// **这一块不出现任何分数、评级或水平判断**（成品标准第 4 节第一条）：
+    /// 每条只说「这个毛病在几场练习里犯过、最近有没有变少」。
+    /// 顺序与趋势原样来自视图模型，这一页不排、不筛、不藏——
+    /// 首页和问题档案页给出两套顺序的话，用户不知道该信哪个。
+    private var issueTrends: some View {
+        let rows = model.issueChanges
+        return VStack(alignment: .leading, spacing: Spacing.md) {
+            SectionHeader(number: 4, label: "ISSUE TRENDS", title: "你的问题正在怎么变化")
+            if rows.isEmpty {
+                noIssueCard
+            } else {
+                CoachCard {
+                    VStack(alignment: .leading, spacing: Spacing.md) {
+                        // 用下标做身份：state.json 被外部工具改坏时会出现重复的错题 id，
+                        // 而 ForEach 遇到重复 id 会错乱地复用行。
+                        ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                            if index > 0 { Divider() }
+                            issueRow(row)
+                        }
+                    }
+                }
+                Button("查看全部问题") { onGo(.issues) }
+                    .buttonStyle(.bordered)
+            }
+        }
+    }
+
+    /// 一条 = 一个毛病。**趋势的颜色只是辅助，`badge` 那几个字始终在**——
+    /// 只靠颜色区分，对色觉障碍用户等于没有标记（规范第 4 节）。
+    /// 颜色取 `IssueArchiveView.trendColor`，两页共用一处，不各画各的。
+    private func issueRow(_ row: IssueArchiveRow) -> some View {
+        HStack(alignment: .top, spacing: Spacing.md) {
+            VStack(alignment: .leading, spacing: Spacing.xs) {
+                Text("当时说的：\(row.learnerSaid)")
+                    .font(Typography.body)
+                    .foregroundStyle(Palette.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(row.detail)
+                    .font(Typography.secondary)
+                    .monospacedDigit()
+                    .foregroundStyle(Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: Spacing.sm)
+            VStack(alignment: .trailing, spacing: Spacing.xs) {
+                Text(row.trend.badge)
+                    .font(Typography.label)
+                    .foregroundStyle(IssueArchiveView.trendColor(row.trend))
+                // 等宽数字：从 9 跳到 10 时这一列不许横向抖（规范第 6 节最后一条）。
+                Text("\(row.occurrences) 次")
+                    .font(Typography.label)
+                    .monospacedDigit()
+                    .foregroundStyle(Palette.textSecondary)
+            }
+        }
+    }
+
+    /// 还没记到任何反复出现的问题。
+    ///
+    /// 与 `noSessionCard` 同一个理由，这里刻意**不用** `EmptyStateView`：
+    /// 它的按钮是紫色实心，而这一页上方已经有一张紫色的主行动卡片了
+    /// （规范第 4 节：每页最多一个主行动）。三样一个不少：说明现状、说明下一步、
+    /// 一个能直接点的按钮。
+    private var noIssueCard: some View {
+        CoachCard {
+            VStack(alignment: .leading, spacing: Spacing.sm) {
+                Text("还没有记录到反复出现的问题")
+                    .font(Typography.cardTitle)
+                    .foregroundStyle(Palette.textPrimary)
+                Text("练一场并让 ChatGPT 生成复盘，这里就会开始积累：哪个毛病犯过几场、"
+                     + "最近有没有变少。下一步：点下面的「开始练习」，练一场。")
+                    .font(Typography.secondary)
+                    .foregroundStyle(Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                // 走 `act` 而不是直接开练：排在第一位的那条就是这一页的主行动，
+                // 两处各挑各的会给出两套说法。`?? .freePick` 只是兜底——
+                // 这一整块只在题库非空时才渲染，那时 `availableRoutes` 至少有「从题库自由选题」。
+                Button("开始练习") { act(model.availableRoutes.first ?? .freePick) }
+                    .buttonStyle(.bordered)
+                    .padding(.top, Spacing.xs)
+            }
+        }
     }
 
     // MARK: - 题库还是空的
