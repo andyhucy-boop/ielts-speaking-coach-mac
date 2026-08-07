@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftUI
 import XCTest
@@ -10,10 +11,16 @@ import XCTest
 /// 都是深色下的一个洞。深色下最典型的失败不是「难看」，是「那行字直接看不见了」，
 /// 而写这行字的人多半用浅色开发，永远撞不上。
 ///
-/// **这里只认 `Palette.light` / `Palette.dark` 这两套静态取值。**
+/// **算对比度只认 `Palette.light` / `Palette.dark` 这两套静态取值。**
 /// `Palette.accent` 那一组是随系统外观解析的动态颜色，拿它去算对比度，
 /// 算到的是「跑测试那一刻恰好是什么外观」——开发者的机器是浅色，
 /// 于是「深色的对比度测试」实际测的是浅色，永远绿。
+///
+/// **但「动态令牌解析到哪一套」本身必须验，而且只能在显式指定的外观下验。**
+/// 那是本任务的核心产出：视图一行没改，颜色跟着系统外观走。
+/// `testDynamicTokensResolveToTheAppearanceTheyAreDrawnIn` 用
+/// `NSAppearance.performAsCurrentDrawingAppearance` 把外观钉死再解析，
+/// 所以它不受跑测试那台机器的外观影响。
 final class AppearanceContrastTests: XCTestCase {
 
     private struct Pair {
@@ -44,6 +51,33 @@ final class AppearanceContrastTests: XCTestCase {
         "warning": \.warning,
         "danger": \.danger
     ] }
+
+    /// 名字 → 视图真正引用的那个**动态**令牌。
+    ///
+    /// 上面那张 `accessors` 给的是两套静态取值，够算对比度，但拿不到 `Palette.accent`
+    /// 这一层——而视图引用的恰恰是这一层。两张表都对着源码校验（见完整性那条测试），
+    /// 所以「加了 `PaletteTokens` 属性却忘了加动态别名」也会红。
+    private static var dynamicTokens: [String: Color] { [
+        "accent": Palette.accent,
+        "sidebarBackground": Palette.sidebarBackground,
+        "sidebarText": Palette.sidebarText,
+        "sidebarTextSelected": Palette.sidebarTextSelected,
+        "canvas": Palette.canvas,
+        "card": Palette.card,
+        "cardBorder": Palette.cardBorder,
+        "textPrimary": Palette.textPrimary,
+        "textSecondary": Palette.textSecondary,
+        "textOnAccent": Palette.textOnAccent,
+        "success": Palette.success,
+        "warning": Palette.warning,
+        "danger": Palette.danger
+    ] }
+
+    /// `Palette` 这个 enum 里不是颜色令牌的那两个 `public static let`。
+    /// 它们是整套静态取值（`PaletteTokens`），是对比度矩阵的输入，不是拿来画界面的颜色。
+    /// 写死在这里是一次显式判断：以后再多一个非颜色的 `public static let`，
+    /// 下面那条完整性断言会当场红，逼人来这儿说清它是什么。
+    private static let nonColorMembersOfPalette: Set<String> = ["light", "dark"]
 
     /// 会被当成文字画出来的令牌 → 它会压在哪些底色上。每一对、每套外观都得过 4.5:1。
     ///
@@ -150,13 +184,19 @@ final class AppearanceContrastTests: XCTestCase {
 
     /// **上面那张配对表是手写的，这条守的是它的完整性。**
     ///
-    /// Phase 3 实测过：往 `Palette` 里加一个 `subtle = Color.black.opacity(0.28)`（约 2.3:1）
-    /// 并在 `EmptyStateView` 上用它 —— 全套一条不红。铁律 8 只要求「视图走令牌」，
-    /// 而这个新令牌确实是令牌，于是扫描放行；对比度那几条又只认名字写死的那几个。
-    /// 「灰上加灰」就这么从正门走进来了。
+    /// Phase 3 实测过、2026-08-08 复审又实测过一次：往 `Palette` 里加一个
+    /// `subtle = Color.black.opacity(0.28)`（对白卡约 2.3:1）并在 `EmptyStateView` 上用它
+    /// —— 全套 1621 条一条不红。铁律 8 只要求「视图走令牌」，而这个新令牌确实是令牌，
+    /// 于是扫描放行；对比度那几条又只认名字写死的那几个。「灰上加灰」就这么从正门走进来了。
     ///
-    /// 所以：`PaletteTokens` 里声明的每一个令牌，都必须在这里被显式归类，
-    /// 归成文字色的就当场量两套外观的对比度。新增一个令牌 → 名单对不上 → 红，逼人做这个判断。
+    /// **所以这条必须同时盯住两面**，少一面就是留了那个洞：
+    ///   · `PaletteTokens` 里的 `public let` —— 对比度矩阵的输入；
+    ///   · `enum Palette` 里的 `public static let` —— **视图真正引用的那一面**。
+    ///     只盯前者的话，上面那个 `subtle` 加在后者上，前者的名单纹丝不动。
+    ///
+    /// 两面还必须**互相相等**：这样「加了 `PaletteTokens` 属性却忘了加动态别名」
+    /// （那个属性在深色下永远拿不到）与「只加了动态别名」（那个颜色没有任何对比度断言管得着）
+    /// 都会红。归成文字色的当场量两套外观的对比度。
     func testEveryPaletteTokenIsClassifiedInBothAppearances() throws {
         let code = try SourceGuard.code("DesignSystem/Palette.swift")
         let body = try SourceGuard.memberBody(of: "public struct PaletteTokens", in: code)
@@ -165,6 +205,34 @@ final class AppearanceContrastTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(declared.count, 13,
                                     "只解析到 \(declared.count) 个颜色令牌，疑似空转。"
                                         + "下一步：确认 `PaletteTokens` 里还是 `public let` 声明。")
+
+        // 视图引用的那一面。`dynamic(_:)` 是 private func，不会被这条正则算进来。
+        let staticMembers = Set(try SourceGuard.declaredTokenNames(inEnum: "Palette", of: code))
+        XCTAssertGreaterThanOrEqual(
+            staticMembers.count, 15,
+            "只解析到 \(staticMembers.count) 个 `Palette` 成员，疑似空转。"
+                + "下一步：确认 `Palette` 里还是 `public static let` 声明。")
+        XCTAssertTrue(
+            Self.nonColorMembersOfPalette.isSubset(of: staticMembers),
+            "`Palette` 里少了 \(Self.nonColorMembersOfPalette.subtracting(staticMembers).sorted())"
+                + "——那是对比度矩阵的输入。下一步：确认这两套静态取值还在，"
+                + "不要把矩阵的输入换成动态颜色（动态颜色会按跑测试那一刻的外观解析，永远绿）。")
+        let colorMembers = staticMembers.subtracting(Self.nonColorMembersOfPalette)
+        let onlyOnPalette = colorMembers.subtracting(declared).sorted()
+        let onlyOnTokens = declared.subtracting(colorMembers).sorted()
+        XCTAssertEqual(
+            colorMembers, declared,
+            "`Palette` 里的颜色令牌和 `PaletteTokens` 里声明的对不上。"
+                + "只在 `Palette` 上的 \(onlyOnPalette)：没有任何对比度断言管得着它，"
+                + "而且这样加进来的多半是写死的静态色，深色下根本不跟随外观。"
+                + "只在 `PaletteTokens` 上的 \(onlyOnTokens)：视图根本引用不到。"
+                + "下一步：两边都补齐——`PaletteTokens` 里加 `public let` 并给两套取值各一个值，"
+                + "`Palette` 里加 `public static let x = dynamic(\\.x)`。")
+
+        XCTAssertEqual(
+            declared, Set(Self.dynamicTokens.keys),
+            "这个测试文件里的 `dynamicTokens` 映射和 `PaletteTokens` 的声明对不上，"
+                + "漏掉的那个令牌没人验过它跟不跟随外观。下一步：同步 `dynamicTokens`。")
         XCTAssertEqual(
             declared, Set(Self.accessors.keys),
             "`PaletteTokens` 里声明的令牌和这个测试文件里的映射对不上（多出来或少掉的那个"
@@ -186,6 +254,80 @@ final class AppearanceContrastTests: XCTestCase {
             pattern: #"public\s+let\s+([A-Za-z_][A-Za-z0-9_]*)"#) else { return [] }
         return regex.matches(in: body, range: NSRange(location: 0, length: text.length))
             .compactMap { $0.numberOfRanges > 1 ? text.substring(with: $0.range(at: 1)) : nil }
+    }
+
+    // MARK: - 动态令牌真的跟着系统外观走
+
+    /// 把一个动态令牌按指定外观解析出来。
+    ///
+    /// 这是**唯一**能验到 `Palette.dynamic(_:)` 那个闭包的办法：上面所有测试拿的都是
+    /// `Palette.tokens(for:)` 的静态取值，一次都不经过动态解析这条路。
+    /// 不在测试里显式指定外观的话，`NSColor(…).usingColorSpace(.sRGB)` 解析到的是
+    /// 「跑测试那台机器此刻是什么外观」——开发者的机器是浅色，深色那一半永远绿。
+    private func resolve(_ token: Color, as appearance: Appearance) -> ContrastMath.Components {
+        let missing = ContrastMath.Components(red: .nan, green: .nan, blue: .nan, alpha: .nan)
+        let name: NSAppearance.Name = appearance == .dark ? .darkAqua : .aqua
+        guard let nsAppearance = NSAppearance(named: name) else {
+            XCTFail("取不到 \(name.rawValue) 外观，这条测试没法验任何东西。"
+                        + "下一步：确认跑测试的是 macOS，且 AppKit 可用。")
+            return missing
+        }
+        var resolved = missing
+        nsAppearance.performAsCurrentDrawingAppearance {
+            resolved = ContrastMath.components(token)
+        }
+        return resolved
+    }
+
+    /// **这条守的是本任务的核心产出：视图一行没改，颜色却跟着系统外观走。**
+    ///
+    /// 少了它，`dynamic(_:)` 里的映射写反（浅色系统显示深色盘）或者永远返回 `light`
+    /// （等于深色模式在真机上压根不存在）都是全绿的——两种都实测过。
+    /// 上面那些矩阵拦不住，因为它们一次都不碰动态解析这条路。
+    ///
+    /// 顺带钉住半透明令牌的 alpha 不会在动态包装里丢掉：丢了的话
+    /// `textSecondary` 会从 70% 白变成实心白，深色下的层次全平掉。
+    func testDynamicTokensResolveToTheAppearanceTheyAreDrawnIn() {
+        var checked = 0
+        for appearance in Appearance.allCases {
+            let expected = Palette.tokens(for: appearance)
+            for (name, token) in Self.dynamicTokens.sorted(by: { $0.key < $1.key }) {
+                guard let path = Self.accessors[name] else {
+                    XCTFail("`\(name)` 不在 accessors 里，取不到该比对的静态值")
+                    continue
+                }
+                let actual = resolve(token, as: appearance)
+                let want = ContrastMath.components(expected[keyPath: path])
+                let hint = "`Palette.\(name)` 在 \(appearance.rawValue) 外观下解析成了别的值。"
+                    + "下一步：检查 `Palette.dynamic(_:)` 里 `isDark` 到 `Appearance` 的映射"
+                    + "有没有写反，以及 `\(name)` 是不是漏写成了不跟随外观的静态色。"
+                XCTAssertEqual(actual.red, want.red, accuracy: 0.002, "红通道：" + hint)
+                XCTAssertEqual(actual.green, want.green, accuracy: 0.002, "绿通道：" + hint)
+                XCTAssertEqual(actual.blue, want.blue, accuracy: 0.002, "蓝通道：" + hint)
+                XCTAssertEqual(actual.alpha, want.alpha, accuracy: 0.002, "不透明度：" + hint)
+                checked += 1
+            }
+        }
+        // 防空转：映射表被清空、或 guard 每次都走了 continue，上面那圈一次都不跑也是全绿。
+        XCTAssertGreaterThanOrEqual(
+            checked, 26,
+            "只验了 \(checked) 个令牌×外观的组合（应为 13×2），这条测试很可能在空转。"
+                + "下一步：确认 `dynamicTokens` 与 `accessors` 还对得上号。")
+    }
+
+    /// 同一个令牌，在两套外观下必须解析成**不同**的颜色。
+    ///
+    /// 这是上面那句话的最小版本，故意**不经过 `dynamicTokens` / `accessors` 这两张手写表**：
+    /// 上面那条循环再严，它的覆盖面也系在这两张表上；表本身出了错（比如被谁改窄了），
+    /// 「深色下真的换了一套颜色」这个最核心的结论就跟着一起失守。
+    /// 这条只认死了 `Palette.canvas` 一个令牌，任何时候都还在。
+    func testTheSameTokenResolvesDifferentlyInTheTwoAppearances() {
+        let light = resolve(Palette.canvas, as: .light)
+        let dark = resolve(Palette.canvas, as: .dark)
+        XCTAssertGreaterThan(
+            light.red - dark.red, 0.5,
+            "`Palette.canvas` 在深色外观下没有解析成深色（浅色 \(light.red)、深色 \(dark.red)）。"
+                + "下一步：确认动态令牌确实按绘制时的外观解析，而不是被固定成了一套。")
     }
 
     // MARK: - 深色是真的深色，不是浅色的别名
@@ -242,6 +384,18 @@ final class AppearanceContrastTests: XCTestCase {
         // 两个已知值，钉住这把尺子的刻度本身（不透明色不受合成影响）
         XCTAssertEqual(ContrastMath.ratio(.black, over: .white), 21, accuracy: 0.01)
         XCTAssertEqual(ContrastMath.ratio(.white, over: .white), 1, accuracy: 0.01)
+
+        // `alpha(_:)` 也是一把量具，而且是 `testEveryBackgroundTokenIsOpaque` 唯一的输入。
+        // 把它写死成 `{ 1.0 }`（「全都不透明」）之后那条守卫就只剩形状——实测全绿。
+        // `testComponentsKeepAlphaSeparateFromTheColorItself` 盖不住它：那条测的是
+        // `components(_:)`，不经过 `alpha(_:)`。
+        XCTAssertEqual(
+            ContrastMath.alpha(Color.black.opacity(0.56)), 0.56, accuracy: 0.01,
+            "`alpha(_:)` 没有读出真正的不透明度。下一步：让它回到 `components(color).alpha`，"
+                + "否则 `testEveryBackgroundTokenIsOpaque` 就只剩形状——半透明底色会一路放行。")
+        XCTAssertEqual(
+            ContrastMath.alpha(.black), 1.0, accuracy: 0.001,
+            "`alpha(_:)` 把不透明色也读错了。下一步：确认它读的是 sRGB 的 alpha 分量。")
     }
 
     func testComponentsKeepAlphaSeparateFromTheColorItself() {
