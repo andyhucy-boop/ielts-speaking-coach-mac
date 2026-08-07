@@ -70,12 +70,20 @@ final class PlanScopeTests: XCTestCase {
         XCTAssertTrue(reason.contains("下一步"))
     }
 
+    /// 这个 Part 一道题都没有，是唯一一个「换个重点 Part 就立刻解决」的情形，
+    /// 所以必须走专属文案而不是通用的「分不满几天」那条：
+    /// 后者会说出「只有 0 道题」这种病句，更要命的是只剩「去导入更多题目」这一条建议——
+    /// Part 2 没题时导入一批 Part 1 的题根本解决不了问题（铁律 6：下一步必须真的办得到）。
     func testBlockingReasonWhenThatPartHasNoQuestionsAtAll() throws {
         let reason = try XCTUnwrap(
             PlanScope.blockingReason(questionCount: 0, lengthDays: 7, focusPart: .part2))
         XCTAssertTrue(reason.contains("Part 2"), "要说清是哪个 Part 没题")
         XCTAssertTrue(reason.contains("训练题库"), "要指出去哪儿解决")
         XCTAssertTrue(reason.contains("下一步"))
+        XCTAssertTrue(reason.contains("换一个重点 Part"),
+                      "一道题都没有时，唯一一键可解的下一步就是换个重点 Part，不能只让用户去导入")
+        XCTAssertFalse(reason.contains("分不满"),
+                       "一道题都没有时不该落进「分不满几天」那条通用文案")
     }
 
     func testLabelsAreChineseAndDistinct() {
