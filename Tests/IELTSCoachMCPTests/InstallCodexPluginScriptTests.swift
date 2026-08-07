@@ -106,6 +106,43 @@ final class InstallCodexPluginScriptTests: XCTestCase {
                       "拒绝的时候要告诉用户那一段的 command 应该指向哪。输出=\(run.output)")
     }
 
+    /// TOML 里 `[mcp_servers."ielts_speaking"]`、`[mcp_servers.'ielts_speaking']`、
+    /// `[ mcp_servers . ielts_speaking ]` 与不加引号的写法指的是**同一张表**。
+    /// 守卫只认逐字相同的那一种时，用户手写成别的形状，脚本就照样往下追加，
+    /// 配置里出现两个指向同一张表的段落头——Codex 报重复键，整份配置读不下去，
+    /// 连他原本配好的别的 MCP server 一起失效。而这恰恰是这道守卫存在的唯一理由。
+    func testWriteRefusesEveryTomlSpellingOfTheSameSection() throws {
+        let spellings = [
+            "[mcp_servers.\"ielts_speaking\"]",
+            "[mcp_servers.'ielts_speaking']",
+            "[ mcp_servers . ielts_speaking ]",
+            "[\"mcp_servers\".ielts_speaking]",
+        ]
+        for spelling in spellings {
+            let existing = """
+            \(spelling)
+            command = "/somewhere/else/ielts-speaking-mcp"
+
+            """
+            let home = try FakeHome(config: existing)
+            let run = try InstallCodexPluginScript.run(arguments: ["--write"], home: home)
+
+            XCTAssertEqual(home.configContents(), existing,
+                           "配置里已经有 \(spelling)（和脚本要写的是同一张 TOML 表），脚本还是往里追加了一段——"
+                           + "Codex 会因为重复的表定义读不下去整份配置")
+            XCTAssertEqual(home.backupFiles(), [], "什么都没改，却留了个备份文件下来（\(spelling)）")
+            XCTAssertFalse(run.output.contains("已把配置追加"),
+                           "没写却声称写了（\(spelling)）。输出=\(run.output)")
+            XCTAssertTrue(run.output.contains("下一步"),
+                          "拒绝的时候没说下一步做什么（\(spelling)）。输出=\(run.output)")
+            // 守卫认了好几种写法之后，光报「已经有 [mcp_servers.ielts_speaking] 了」就成了句半真话：
+            // 用户拿这个字符串去自己的配置里搜，搜不到。得把命中的那一行原样报出来。
+            XCTAssertTrue(run.output.contains(spelling),
+                          "拒绝的理由里没有指出配置里真正长成什么样（\(spelling)）——"
+                          + "用户照着脚本打印的字符串去文件里找，会找不到。输出=\(run.output)")
+        }
+    }
+
     func testWriteIsNotBlockedByACommentThatMerelyMentionsTheSection() throws {
         // 一句提到段落名的中文注释不等于「已经配好了」。若把它也当成已存在，
         // 用户会永远被拒，而且拒绝理由是假的——他的配置里根本没有那一段。
@@ -152,6 +189,57 @@ final class InstallCodexPluginScriptTests: XCTestCase {
                       "报错里没说是哪个路径找不到。输出=\(run.output)")
         XCTAssertTrue(run.output.contains("下一步"), "报错没说下一步做什么。输出=\(run.output)")
         XCTAssertEqual(home.configContents(), FakeHome.foreignConfig)
+    }
+
+    // MARK: - locale：中文文案不许把变量展开炸掉
+
+    /// 这个测试是在一次真实事故之后补的。
+    ///
+    /// 脚本里写过 `echo "…（不会动 $CONFIG）；"`——`$CONFIG` 后面紧跟一个全角右括号。
+    /// bash 判断「变量名到哪结束」用的是当前 locale 下的 `isalnum`：
+    /// `LC_CTYPE=C` 时 0xEF 不是字母，变量名就是 `CONFIG`，一切正常；
+    /// 而在 `en_US.UTF-8`（真实 macOS 终端的默认）下 0xEF 被当成字母 `ï`，
+    /// 变量名变成 `CONFIG<0xEF>`，撞上 `set -u` 直接 `unbound variable` 退出。
+    /// 于是同一份脚本在开发机上是绿的，到用户手里是一句英文报错加退出码 1。
+    ///
+    /// 所以这里不去跑脚本，而是直接看脚本的字面：**任何 `$名字` 后面都不许紧跟非 ASCII 字节**。
+    /// 这条比「跑一遍看它崩不崩」更值钱——它拦的是下一个往这些 echo 里加中文的人，
+    /// 而不只是当时炸掉的那两行。
+    ///
+    /// 它连注释里的写法一起管，这是故意的：脚本里有 `cat <<EOF` 这样的 heredoc，
+    /// 里面以 `#` 开头的行照样会被展开，「看见 # 就跳过」会留下一个盲区。
+    /// 代价是写注释解释这个 bug 时不能把出事的原样贴进去——换成加花括号的写法，或者描述它。
+    func testNoShellVariableIsFollowedByANonASCIIByte() throws {
+        for script in InstallCodexPluginScript.shellScriptsUnderTest {
+            let text = try String(contentsOf: script, encoding: .utf8)
+            var offenders: [String] = []
+            for (index, line) in text.split(separator: "\n", omittingEmptySubsequences: false)
+                .enumerated() {
+                for name in InstallCodexPluginScript.variablesFollowedByANonASCIIByte(in: String(line)) {
+                    offenders.append("\(script.lastPathComponent) 第 \(index + 1) 行的 $\(name)：\(line)")
+                }
+            }
+            XCTAssertEqual(offenders, [],
+                           "`$名字` 后面紧跟着非 ASCII 字符（多半是中文标点）。"
+                           + "在 UTF-8 locale 下 bash 会把那个字符的首字节吃进变量名，"
+                           + "配上 set -u 就是 unbound variable，用户看到的是英文报错加非零退出。"
+                           + "下一步：把这些地方写成 ${名字}，或者在变量和中文标点之间加个空格。")
+        }
+    }
+
+    /// 上面那条只看脚本的字面。真去跑脚本的那些用例（比如「参数敲错了要说下一步」）
+    /// 能不能抓到同一个 bug，取决于子进程拿到的是什么 locale——
+    /// 而这正是那次事故里唯一没成立的前提：当时的 shell 里 `LANG`/`LC_ALL`/`LC_CTYPE`
+    /// 一个都没设，`LC_CTYPE=C`，两条早就写好的断言就这么被绕了过去。
+    ///
+    /// 所以 `InstallCodexPluginScript.run` 把 locale 钉死成 UTF-8。这条测试守着那个钉子：
+    /// 钉子被拔掉、或者本机压根没有这个 locale（bash 会悄悄退回 C），
+    /// 「跑脚本」那一批用例就全部退化成空转，而这条会先红出来告诉你。
+    func testTheHarnessRunsTheScriptInAUTF8Locale() throws {
+        XCTAssertEqual(try InstallCodexPluginScript.charmapSeenByTheScript(), "UTF-8",
+                       "测试跑脚本时用的不是 UTF-8 locale，于是「中文文案会不会把脚本炸掉」这类断言全是空转。"
+                       + "下一步：确认 InstallCodexPluginScript.locale（\(InstallCodexPluginScript.locale)）"
+                       + "还写在 run() 构造的环境变量里，且本机装了这个 locale（locale -a 里能找到）。")
     }
 
     // MARK: - 给人抄的那份配置，必须和脚本写出来的一致
@@ -203,6 +291,12 @@ enum InstallCodexPluginScript {
     /// 脚本写进配置文件的段落头。测试与脚本各写一份，对不上就说明有一边改漏了。
     static let sectionHeader = "[mcp_servers.ielts_speaking]"
 
+    /// 跑脚本时钉死的 locale。真实 macOS 终端默认就是 UTF-8，
+    /// 而开发/CI 的 shell 里 `LC_CTYPE` 很可能是 `C`——两者对「`$VAR` 后面紧跟一个中文标点」
+    /// 的解释不一样（见 `testNoShellVariableIsFollowedByANonASCIIByte` 的注释）。
+    /// 不钉死的话，这一批用例红不红取决于谁在哪台机器上跑，而不取决于脚本对不对。
+    static let locale = "en_US.UTF-8"
+
     struct Run {
         var status: Int32
         var stdout: String
@@ -220,6 +314,73 @@ enum InstallCodexPluginScript {
 
     static var scriptURL: URL { repositoryRoot.appending(path: "scripts/install-codex-plugin.sh") }
 
+    /// 被 `testNoShellVariableIsFollowedByANonASCIIByte` 扫描的脚本。
+    /// **只有这一个**：那条测试守的是 Task 12 自己的脚本。仓库里别的 `.sh` 也有同样形状的写法，
+    /// 但它们属于别的任务，不由这里代管——别看见这个数组就以为全仓库都被守住了。
+    static var shellScriptsUnderTest: [URL] { [scriptURL] }
+
+    /// 脚本子进程实际拿到的环境。跑脚本和自检 locale 都走这里，
+    /// 免得「自检的是一套环境、真跑的是另一套」。
+    static func scriptEnvironment(home: FakeHome, source: URL) -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        environment["HOME"] = home.root.path
+        environment["IELTS_MCP_SOURCE_BIN"] = source.path
+        // 用户真实终端里是 UTF-8，就照 UTF-8 跑。`LC_ALL` 压过 `LC_CTYPE` 等各项，
+        // 但继承来的 `LC_CTYPE=C` 留在环境里只会让人读着犯迷糊，一并删掉。
+        environment["LANG"] = locale
+        environment["LC_ALL"] = locale
+        for key in ["LC_CTYPE", "LC_COLLATE", "LC_MESSAGES"] { environment.removeValue(forKey: key) }
+        return environment
+    }
+
+    /// 脚本子进程眼里的字符集，例如 `UTF-8` / `US-ASCII`。
+    /// 用的是与 `run` 完全相同的一套环境变量，所以它自检的确实是真跑脚本时的 locale。
+    static func charmapSeenByTheScript() throws -> String {
+        let home = try FakeHome(config: nil)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/locale")
+        process.arguments = ["charmap"]
+        process.environment = scriptEnvironment(home: home, source: try home.makeStubBinary())
+        let out = Pipe()
+        process.standardOutput = out
+        try process.run()
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// 一行 shell 里，所有「`$名字` 后面紧跟着一个非 ASCII 字节」的变量名。
+    /// 只认 `$名字` 这一种形状：`${名字}` 有右花括号收尾，`$1` `$*` `$#` 这些
+    /// bash 只吃一个字符，都不受 locale 影响，不是这个 bug 的形状。
+    static func variablesFollowedByANonASCIIByte(in line: String) -> [String] {
+        func isNameStart(_ byte: UInt8) -> Bool {
+            (byte >= UInt8(ascii: "a") && byte <= UInt8(ascii: "z"))
+                || (byte >= UInt8(ascii: "A") && byte <= UInt8(ascii: "Z"))
+                || byte == UInt8(ascii: "_")
+        }
+        func isNameByte(_ byte: UInt8) -> Bool {
+            isNameStart(byte) || (byte >= UInt8(ascii: "0") && byte <= UInt8(ascii: "9"))
+        }
+
+        let bytes = Array(line.utf8)
+        var found: [String] = []
+        var index = 0
+        while index < bytes.count {
+            guard bytes[index] == UInt8(ascii: "$"), index + 1 < bytes.count,
+                  isNameStart(bytes[index + 1]) else {
+                index += 1
+                continue
+            }
+            var end = index + 1
+            while end < bytes.count, isNameByte(bytes[end]) { end += 1 }
+            if end < bytes.count, bytes[end] >= 0x80 {
+                found.append(String(decoding: bytes[(index + 1)..<end], as: UTF8.self))
+            }
+            index = end
+        }
+        return found
+    }
+
     /// 直接执行脚本本身（不是 `bash 脚本`），这样「忘了 chmod +x」也会让测试变红。
     static func run(arguments: [String] = [], home: FakeHome,
                     sourceBinary: URL? = nil) throws -> Run {
@@ -229,11 +390,7 @@ enum InstallCodexPluginScript {
         process.executableURL = scriptURL
         process.arguments = arguments
         process.currentDirectoryURL = home.root
-
-        var environment = ProcessInfo.processInfo.environment
-        environment["HOME"] = home.root.path
-        environment["IELTS_MCP_SOURCE_BIN"] = source.path
-        process.environment = environment
+        process.environment = scriptEnvironment(home: home, source: source)
 
         let out = Pipe(), err = Pipe()
         process.standardOutput = out

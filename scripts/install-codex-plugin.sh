@@ -22,15 +22,30 @@ CONFIG="$HOME/.codex/config.toml"
 SECTION="[mcp_servers.ielts_speaking]"
 # 认「行首（可缩进）的段落头」，不认注释里顺嘴提到的同名段落。
 # 认宽了的代价是用户被永远拒绝、而且拒绝理由是假的；
-# 认窄了的代价是往配置里追加出一个重复的 TOML 表，Codex 直接读不下去——
-# 所以只放过 # 开头的行，别的形状（带引号的键名之类）一律当成「已经有了」。
-SECTION_PATTERN='^[[:space:]]*\[[[:space:]]*mcp_servers\.ielts_speaking[[:space:]]*\]'
+# 认窄了的代价是往配置里追加出一个重复的 TOML 表，Codex 直接读不下去。
+#
+# 下面这个 pattern 认得的，是同一张表在 TOML 里的这几种等价写法：
+#   [mcp_servers.ielts_speaking]  ["mcp_servers".ielts_speaking]
+#   [mcp_servers."ielts_speaking"]  [mcp_servers.'ielts_speaking']  [ mcp_servers . ielts_speaking ]
+#
+# 它认不得的（说清楚，别让下一个人照着注释推理）：
+#   - [mcp_servers] 底下用行内表写的 ielts_speaking = { command = "…" }。
+#     这种配置追加进去同样会让 Codex 报重复键，但本脚本认不出来。
+#     真要覆盖这一类，得上一个 TOML 解析器，而不是再往正则里塞形状。
+#   - 引号配不齐的写法（["mcp_servers'.ielts_speaking] 之类）会被算作「已经有了」。
+#     那种行本来就不是合法 TOML，此时宁可拒绝也不要往一个坏文件后面追加。
+QUOTE="['\"]?"
+SECTION_PATTERN="^[[:space:]]*\[[[:space:]]*${QUOTE}mcp_servers${QUOTE}[[:space:]]*\.[[:space:]]*${QUOTE}ielts_speaking${QUOTE}[[:space:]]*\]"
 WRITE=0
 
 usage_error() {
     echo "❌ $1" >&2
     echo "   本脚本只接受一个可选参数：--write。" >&2
-    echo "   下一步：不带参数运行，它只把配置打印出来给你自己粘贴（不会动 $CONFIG）；" >&2
+    # 花括号不是装饰。这一行原本写的是不带花括号的 $CONFIG 紧接一个全角右括号，
+    # 而那个括号的首字节 0xEF 在 UTF-8 locale 下会被 bash 当成字母、吃进变量名，
+    # 于是 set -u 判定「变量没定义」直接退出——用户拿到的是一句英文报错加退出码 1，
+    # 下面那行「确实想让脚本代劳」根本印不出来。凡是变量后面紧跟中文标点，一律加花括号。
+    echo "   下一步：不带参数运行，它只把配置打印出来给你自己粘贴（不会动 ${CONFIG}）；" >&2
     echo "   确实想让脚本代劳，运行：$0 --write" >&2
     exit 2
 }
@@ -91,9 +106,15 @@ fi
 mkdir -p "$(dirname "$CONFIG")"
 touch "$CONFIG"
 
-if grep -qE "$SECTION_PATTERN" "$CONFIG"; then
-    echo "ℹ️  $CONFIG 里已经有 $SECTION 段落了，本脚本不会去改它。"
-    echo "   下一步：手动确认那一段的 command 指向 $BIN；若不是，自己改过来。"
+EXISTING="$(grep -nE "$SECTION_PATTERN" "$CONFIG" | head -1 || true)"
+if [ -n "$EXISTING" ]; then
+    # 报的是命中的那一行原文，不是模板里的 ${SECTION} 那个字符串。
+    # 上面的 pattern 认好几种等价写法，用户文件里可能写成 [mcp_servers."ielts_speaking"]；
+    # 这时只说「已经有 [mcp_servers.ielts_speaking] 了」，他拿去搜是搜不到的。
+    echo "ℹ️  $CONFIG 第 ${EXISTING%%:*} 行已经有 $SECTION 这张表了，本脚本不会去改它。"
+    echo "   那一行是：${EXISTING#*:}"
+    # 花括号的理由同上：后面紧跟的是全角分号。
+    echo "   下一步：手动确认那一段的 command 指向 ${BIN}；若不是，自己改过来。"
     echo "   （不自动覆盖是刻意的：那是你的配置文件，里面可能还有别的服务器。）"
     exit 0
 fi
