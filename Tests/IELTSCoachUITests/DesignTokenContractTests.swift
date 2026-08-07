@@ -37,9 +37,19 @@ final class DesignTokenContractTests: XCTestCase {
     ///
     /// **刻意复用 `DesignTokenSweepTests.tokenDefinitions` 而不是再抄一份**——
     /// 两份名单迟早会不一致，而不一致的那一天，宽的那一份说了算。
+    ///
+    /// 这份名单就是下面 `scannedPaths()` 的 filter，也就是**整文件豁免的口子本身**。
+    /// 拦住它变长的不是这个文件里的任何一条断言，而是
+    /// `DesignTokenSweepTests.testTheWholeFileExemptionListIsExactlyTheThreeTokenTables`
+    /// ——那条逐字钉死了这三项。改名单必须先改那条断言。
     private var tokenDefinitions: Set<String> { Set(DesignTokenSweepTests.tokenDefinitions) }
 
     /// Task 13 收编的两页。它们曾经被整文件豁免，是这条契约最该盯住的两个名字。
+    ///
+    /// **注意这只是两个名字，不是「没有整文件豁免」的证明。** 复审实测过：
+    /// 往 `tokenDefinitions` 加一行 `"Review/ReviewReportView.swift"` 再往那页插两处
+    /// 写死的样式，这两个名字都还在扫描范围里、文件数也远在下限之上，于是全绿。
+    /// 名单不许变长这件事由上面那条钉子管，这里只管这两页没有被重新豁免回去。
     private static let previouslyExempt = ["RootView.swift", "Onboarding/PermissionGateView.swift"]
 
     /// 这一趟真正扫过的文件（模块内相对路径）。
@@ -52,8 +62,12 @@ final class DesignTokenContractTests: XCTestCase {
     /// 防空转：路径写错、过滤条件写反时，下面那条禁令会一个文件都扫不到，
     /// 然后**全绿**——那是最坏的一种绿，它对任何实现都亮。
     ///
-    /// 除了数个数，还点名要求那两页在扫描范围里：整文件豁免正是 Task 13 拆掉的东西，
-    /// 谁把它装回去，这一条当场变红。
+    /// 除了数个数，还点名要求那两页在扫描范围里：它们是曾经被整文件豁免的两页，
+    /// 谁把这两个名字重新塞回豁免名单，这一条当场变红。
+    ///
+    /// **它只认这两个名字。** 换个文件名豁免它拦不住，40 这个下限也拦不住
+    /// （实际扫到 58 个，还有十几个文件的余量）。「名单只能是那三张令牌表」
+    /// 由 `DesignTokenSweepTests.testTheWholeFileExemptionListIsExactlyTheThreeTokenTables` 钉住。
     func testThereAreActuallyFilesToScanAndNoWholeFileEscapeHatch() throws {
         let scanned = try scannedPaths()
         XCTAssertGreaterThanOrEqual(

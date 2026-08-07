@@ -25,10 +25,35 @@ final class DesignTokenSweepTests: XCTestCase {
     ///
     /// `DesignTokenContractTests` 也读这一份，**刻意不各存一份**：
     /// 两份名单迟早会不一致，而不一致的那一天，宽的那一份说了算。
+    ///
+    /// ## 这份名单就是整个契约里唯一的整文件豁免口子
+    ///
+    /// 往这里加一行，那个文件**同时**脱离两条守卫：`DesignTokenContractTests` 的
+    /// 「除三张表外一处字面样式都不许有」（那边用它做 filter），
+    /// 和下面 `testEveryViewActuallyReachesForTheTokens`（这边用它做 exempt）。
+    /// 复审实测过这条路走得通：加一行 `"Review/ReviewReportView.swift"`，
+    /// 再往那个文件里插一句写死的红色和一句 `.font(.system(size: 13))`，
+    /// `swift test` 是 **1623 条全绿**——正是深色下「一行看不见的字」那种失败形态。
+    ///
+    /// 所以这份名单**自己也被钉住**：`testTheWholeFileExemptionListIsExactlyTheThreeTokenTables`
+    /// 断言它恰好是这三项，`testTokenDefinitionFilesAreTheOnlyPlaceLiteralValuesLive`
+    /// 要求每一项都在下面那张 marker 表里说得出「凭什么算令牌表」。
+    /// 名单要变长，就得同时改这两处——那是一次显式的、复审看得见的动作。
     static let tokenDefinitions = [
         "DesignSystem/Typography.swift",
         "DesignSystem/Palette.swift",
         "DesignSystem/Metrics.swift"
+    ]
+
+    /// 每个豁免文件**凭什么算令牌表**：里面必须有这段声明。
+    ///
+    /// 写成查表而不是 `zip(tokenDefinitions, [...])`。`zip` 以短的一边为准，
+    /// 名单第 4 项起就一次都不会被检查——复审实测的那次越狱正是从这个缝里溜过去的
+    /// （`ReviewReportView.swift` 当然没有 `public enum Spacing`，但 `zip` 根本没走到它）。
+    static let tokenDefinitionMarkers = [
+        "DesignSystem/Typography.swift": "public enum Typography",
+        "DesignSystem/Palette.swift": "public enum Palette",
+        "DesignSystem/Metrics.swift": "public enum Spacing"
     ]
 
     /// 「一处字面样式都不许有」那条只说「没有字面值」，
@@ -84,18 +109,74 @@ final class DesignTokenSweepTests: XCTestCase {
     // 同样搬走的还有「一处字面样式都不许有」那条全模块扫描，以及 `literalCeiling`：
     // 后者是给整文件豁免记账用的，豁免拆了，账也就没有了。
 
+    /// **整文件豁免的名单自己被钉在这里。**
+    ///
+    /// 上面那份 `tokenDefinitions` 是两条守卫共用的 exempt/filter 名单，
+    /// 而在这条断言之前，**没有任何测试拦得住它变长**：
+    /// `DesignTokenContractTests` 那条防空转只点名了两个历史文件名，外加一个 40 的下限，
+    /// 而实际扫到 58 个——还剩 18 个文件的余量可以偷偷豁免掉。
+    /// 复审实测：加一行 `"Review/ReviewReportView.swift"` 再往那页插两处写死的样式，
+    /// 1623 条全绿。而那条测试的名字（NoWholeFileEscapeHatch）和 commit message
+    /// 都在声称「没有整文件豁免这个口子」。
+    ///
+    /// 所以这里逐字钉死：**名单要变长，必须先把这条断言改掉**——
+    /// 那是一次显式的、复审一眼看得见的动作，而不是往数组里加一行就把守卫关了。
+    ///
+    /// 第二条（每一项都在 `DesignSystem/` 下）是给「就算真要加第四张表」留的边界：
+    /// 令牌表只能住在设计系统目录里，任何一个画界面的文件都不可能满足它。
+    func testTheWholeFileExemptionListIsExactlyTheThreeTokenTables() throws {
+        XCTAssertEqual(
+            Self.tokenDefinitions,
+            ["DesignSystem/Typography.swift",
+             "DesignSystem/Palette.swift",
+             "DesignSystem/Metrics.swift"],
+            "整文件豁免名单变成了 \(Self.tokenDefinitions)。这份名单里的文件"
+                + "**同时**脱离「一处字面样式都不许有」和「每个视图真的取过令牌」两条守卫——"
+                + "往里加一个视图文件，它写死的颜色在深色下就是一行看不见的字，而测试全绿。"
+                + "下一步：想加的那个文件如果是视图，改用逐行的"
+                + "「\(SourceGuard.exemptionMarker)」注释（那是有人数着的）；"
+                + "确实新增了第四张令牌表，就连同 `tokenDefinitionMarkers` 一起改，"
+                + "并在复审里说清它为什么必须能写字面取值。")
+        for path in Self.tokenDefinitions {
+            XCTAssertTrue(
+                path.hasPrefix("DesignSystem/"),
+                "豁免名单里的「\(path)」不在 DesignSystem/ 目录下。"
+                    + "能写字面取值的只有令牌表本身，而令牌表只住在设计系统目录里。"
+                    + "下一步：把它挪出名单——画界面的文件一律走令牌。")
+        }
+    }
+
     /// 令牌定义文件必须真的在，而且真的在定义令牌。
     ///
     /// 它们是唯一被允许写字面取值的地方，名单一旦指错文件，整条豁免就变成一个洞。
+    ///
+    /// **逐项查表，不用 `zip`。** 原来写的是
+    /// `zip(tokenDefinitions, ["public enum Typography", …])`，而 `zip` 以短的一边为准——
+    /// 名单第 4 项及以后一次都不会被检查，这条测试对它们**恒真**。
+    /// 复审实测的越狱（往名单里加 `"Review/ReviewReportView.swift"`）正是从这个缝里溜过去的：
+    /// 那个文件里当然没有 `public enum Spacing`，但 `zip` 根本没走到它。
+    /// 现在名单里出现表外的路径就当场变红。
     func testTokenDefinitionFilesAreTheOnlyPlaceLiteralValuesLive() throws {
-        for (path, marker) in zip(Self.tokenDefinitions,
-                                  ["public enum Typography", "public enum Palette",
-                                   "public enum Spacing"]) {
+        for path in Self.tokenDefinitions {
+            guard let marker = Self.tokenDefinitionMarkers[path] else {
+                XCTFail("豁免名单里的「\(path)」在 `tokenDefinitionMarkers` 里没有对应条目，"
+                        + "也就没人问过它凭什么算令牌表——这一项是被白白豁免掉的。"
+                        + "下一步：要么把它从名单里去掉，要么在 marker 表里写上"
+                        + "它必须包含的那段令牌声明。")
+                continue
+            }
             let code = try SourceGuard.code(path)
             XCTAssertTrue(
                 code.contains(marker),
                 "\(path) 里没有「\(marker)」。豁免名单指着一个不再定义令牌的文件，"
                     + "等于在扫描上开了个洞。下一步：确认令牌是不是搬了家，名单要跟着改。")
+        }
+        // 反过来也要对得上：marker 表里躺着一条名单上没有的路径，
+        // 说明两张表已经错位，而错位时宽的那一张（名单）说了算。
+        for path in Self.tokenDefinitionMarkers.keys where !Self.tokenDefinitions.contains(path) {
+            XCTFail("`tokenDefinitionMarkers` 里有「\(path)」，但它不在 `tokenDefinitions` 名单上。"
+                    + "两张表错位了，这条检查就检查不到真正被豁免的那些文件。"
+                    + "下一步：把两张表对齐——名单是唯一的豁免依据，marker 表只是给它作注。")
         }
     }
 
