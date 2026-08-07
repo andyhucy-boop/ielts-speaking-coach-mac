@@ -6,7 +6,9 @@ public enum ToolCatalog {
     public static func tools(environment: MCPEnvironment) -> [MCPTool] {
         [
             InitializeWorkspaceTool.make(environment: environment),
-            OpenDashboardTool.make(environment: environment)
+            OpenDashboardTool.make(environment: environment),
+            SetTrainingSelectionTool.make(environment: environment),
+            GetTrainingContextTool.make(environment: environment)
         ]
     }
 }
