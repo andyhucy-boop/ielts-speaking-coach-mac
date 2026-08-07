@@ -126,23 +126,244 @@ final class WeeklyGoalPersistenceTests: XCTestCase {
         XCTAssertTrue(message.contains("每周训练目标"), "得说清是哪件事没成：" + message)
     }
 
+    /// 失败一次之后再成功，那条错误必须消失。
+    ///
+    /// **必须在同一台 `AppState` 上先失败再成功。** 上一版开了两台——错误设在「目录被占」
+    /// 那台上，而「已被清空」这条断言查的是另一台从头到尾没失败过的，它的 `settingsError`
+    /// 本来就是 nil，断言恒真。实测：把 `AppState.setWeeklyGoal` 里那句 `settingsError = nil`
+    /// 整行删掉，1171 条全绿——也就是「成功一次就把上一次的错误擦掉」这件事根本没人守。
+    ///
+    /// 做法：数据目录的位置先被一个同名文件占着（第一次必然失败），再把那个文件删掉
+    /// （相当于用户照提示把目录修好），用**同一台** app 再存一次。
     func testASuccessfulSaveClearsTheEarlierFailureMessage() throws {
-        let app = makeApp(directory)
-        // 先制造一次失败：把数据目录整个换掉是做不到的，所以直接走「目录被占」那台 app
-        // 拿不到，这里换个办法——先让它失败一次再修好，用的是同一台 AppState。
-        let blockedRoot = URL(fileURLWithPath: NSTemporaryDirectory())
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appending(path: "ielts-weekly-goal-recover-\(UUID().uuidString)")
-        try Data("这是个文件，不是目录".utf8).write(to: blockedRoot)
-        defer { try? FileManager.default.removeItem(at: blockedRoot) }
-        let blocked = makeApp(DataDirectory(root: blockedRoot))
-        XCTAssertFalse(blocked.setWeeklyGoal(4))
-        XCTAssertNotNil(blocked.settingsError)
+        try Data("这是个文件，不是目录".utf8).write(to: root)
+        defer { try? FileManager.default.removeItem(at: root) }
 
-        // 换一台指向正常目录的：成功那一次必须把上一次的错误擦掉，
-        // 否则面板会一直挂着一条已经不成立的红字，且按验收要求第 5 条永远关不上。
-        XCTAssertTrue(app.setWeeklyGoal(4))
-        XCTAssertNil(app.settingsError, "成功之后还挂着旧错误，面板就再也关不掉了")
+        let app = makeApp(DataDirectory(root: root))
+        XCTAssertFalse(app.setWeeklyGoal(4),
+                       "第一次就该失败——它不失败的话，下面「成功之后旧错误没了」问的是一件"
+                           + "从来没发生过的事，这条测试当场变成空转")
+        XCTAssertNotNil(app.settingsError, "失败了却没有留下给用户看的说明（铁律 7）")
+
+        // 障碍拿掉：`StateStore.mutate` 会自己 `createIfNeeded()` 把目录建起来。
+        try FileManager.default.removeItem(at: root)
+
+        XCTAssertTrue(app.setWeeklyGoal(4), "目录已经修好了，这一次该存得下来")
+        XCTAssertEqual(try StateStore(directory: DataDirectory(root: root)).load()
+            .settings.weeklyGoal, 4,
+                       "返回了 true，磁盘上却不是新目标——那是最坏的一种静默失败")
+        XCTAssertNil(app.settingsError,
+                     "这一次存成功了，上一次那条错误却还挂着。面板本身照样会关"
+                         + "（`WeeklyGoalSheet.save()` 只看返回值），"
+                         + "但用户下次打开「每周训练目标」时，顶上会摆着一条"
+                         + "「这次没能存下来」——说的是一件早就修好的事，"
+                         + "他会以为刚改的目标又没存上，然后再改一遍。")
     }
+}
+
+// MARK: - 面板本身：八条验收要求，之前一条视图层测试都没有
+//
+// **这一组补的是和上一个提交（5f09fb7「首页四格补上视图层测试」）同一类的窟窿。**
+// `WeeklyGoalSheet.swift` 新写了约 110 行视图代码、八条「必须做到」的验收要求，
+// 却没有任何一条测试扫得到它——`WeeklyGoalEntryPointTests` 扫的是 `RootView.swift`
+// 和 `Today/TodayView.swift`，`RenderReachabilitySweepTests` 只问「成员从 body 走不走得到」。
+// 实测把下面四处**同时**改掉，1171 条一条不红：
+//
+// - 验收 5「写盘失败就不许关面板」：`guard app.setWeeklyGoal(draft) else { return }`
+//   换成 `_ = app.setWeeklyGoal(draft)` → 存不下来也照关，用户以为改好了，
+//   下次打开发现又变回去，而且永远不知道为什么（铁律 7 点名的那一种）；
+// - 验收 5「错误全文显示 + 可选中」：`Text(message)` 换成 `Text("操作失败")`
+//   并去掉 `.textSelection(.enabled)` → 一条没有「下一步」的文案，铁律 6 明令不合格，
+//   而且系统给的原始报错再也复制不走；
+// - 验收 7「打开时 Stepper 初值取当前目标」：`State(initialValue: 5)` →
+//   用户把目标定成 12，打开面板显示 5，随手一按「保存」就把 12 改成了 5；
+// - 验收 2「等宽数字」：删掉 Stepper 标签那一行的 `.monospacedDigit()` →
+//   从 9 调到 10 时那一行横向抖一下（DESIGN-SYSTEM 第 6 节最后一条）。
+//
+// 边界与本项目其余视图层测试一致（见 `TodayViewTests` 开头）：扫源码不执行代码，
+// 「调用还在但条件永远为假」拦不住，排版好不好看归人工验收。
+final class WeeklyGoalSheetTests: XCTestCase {
+
+    // MARK: - 验收 5：存不下来就不许关面板
+
+    /// 关掉面板等于告诉用户「改好了」。`setWeeklyGoal` 的返回值必须真的挡住那一步——
+    /// 把返回值丢掉（`_ = app.setWeeklyGoal(draft)`）编得过、跑得动，只是失败时也照关。
+    func testSavingClosesThePanelOnlyWhenTheGoalActuallyReachedTheDisk() throws {
+        let save = try SourceGuard.functionBody(named: "save", in: try Self.sheetCode())
+
+        XCTAssertTrue(
+            save.contains("app.setWeeklyGoal(draft)"),
+            "「保存」没有把面板里正在编辑的那个值（`draft`）交给 `AppState.setWeeklyGoal`。"
+                + "下一步：确认写盘走的是 `app.setWeeklyGoal(draft)`——"
+                + "存别的值等于用户改了 A、存进去 B。实际取到的是：\n\(save)")
+
+        let gated = save.contains("guard app.setWeeklyGoal(draft)")
+            || save.contains("if app.setWeeklyGoal(draft)")
+        XCTAssertTrue(
+            gated,
+            "`setWeeklyGoal` 的返回值没有挡住关面板那一步（找不到 `guard app.setWeeklyGoal(draft)` "
+                + "或 `if app.setWeeklyGoal(draft)`）。写盘失败也照关的话，用户以为目标改好了，"
+                + "下次打开发现又变回去，而且永远不知道为什么——铁律 7 点名的那种静默失败，"
+                + "而验收要求第 5 条原话是「面板不关闭」。"
+                + "下一步：写回 `guard app.setWeeklyGoal(draft) else { return }`；"
+                + "换一种同样能挡住的写法，就同步改这条测试。实际取到的是：\n\(save)")
+
+        XCTAssertTrue(
+            save.contains("isPresented = false"),
+            "存成功了面板也不关，用户点完「保存」什么都没发生，只会再点几下"
+                + "（每点一次就多写一次盘）。实际取到的是：\n\(save)")
+    }
+
+    // MARK: - 验收 5 的另一半：失败时错误全文摆在面板上，而且复制得走
+
+    func testTheFailureIsShownInFullAndCanBeCopied() throws {
+        let code = try Self.sheetCode()
+
+        XCTAssertTrue(
+            code.contains("app.settingsError"),
+            "面板压根没读 `app.settingsError`，写盘失败时它一个字都不显示——"
+                + "用户只看到面板不肯关，却不知道为什么（铁律 7）。实际扫的是 "
+                + Self.viewRelativePath)
+        SourceGuard.assertRenders(
+            "failureCard", inBodyOf: "var body: some View", of: Self.viewRelativePath,
+            because: "失败说明写好了却没摆进 `body`，面板上是一片空白。")
+
+        let card = try SourceGuard.memberBody(of: "private func failureCard", in: code)
+        XCTAssertTrue(
+            card.contains("Text(message)"),
+            "失败说明没有原样显示出来。`AppState.setWeeklyGoal` 给的那句话里带着系统的原始报错"
+                + "和「下一步确认数据目录可写」，换成一句自拟的「操作失败」就是铁律 6 明令不合格的"
+                + "那一种——用户读完不知道该做什么。实际取到的是：\n\(card)")
+        XCTAssertTrue(
+            card.contains(".textSelection(.enabled)"),
+            "失败说明选不中。里面那段系统原始报错是用户去搜、去问、去贴给别人的唯一线索，"
+                + "不让复制等于让他照着屏幕手抄。实际取到的是：\n\(card)")
+        XCTAssertTrue(
+            card.contains(".fixedSize(horizontal: false, vertical: true)"),
+            "失败说明没有允许换行，长句会被截成一行「每周训练目标没能存下来：The file …」，"
+                + "而「下一步」正好在被截掉的后半截（验收要求第 5 条：**全文**显示）。"
+                + "实际取到的是：\n\(card)")
+        XCTAssertFalse(
+            card.contains(".lineLimit("),
+            "失败说明加了行数限制，等于把「下一步」那半句藏起来。实际取到的是：\n\(card)")
+    }
+
+    // MARK: - 验收 7：打开面板时显示的是用户现在的目标
+
+    func testTheStepperOpensOnTheGoalTheUserActuallyHasAndCannotLeaveTheSavedRange() throws {
+        let code = try Self.sheetCode()
+
+        let initializer = try SourceGuard.memberBody(of: "public init(app: AppState", in: code)
+        XCTAssertTrue(
+            initializer.contains("State(initialValue: app.state.settings.weeklyGoal)"),
+            "Stepper 的初值不是当前已保存的目标。写死一个数字的话，用户把目标定成 12、"
+                + "打开面板看到的却是那个写死的数——他随手一按「保存」就把 12 改没了，"
+                + "而且会以为「上次那 12 根本没存上」（验收要求第 7 条）。"
+                + "实际取到的是：\n\(initializer)")
+
+        let goalCard = try SourceGuard.memberBody(of: "private var goalCard", in: code)
+        XCTAssertTrue(
+            goalCard.contains("in: WeeklyGoalEditor.range"),
+            "Stepper 的范围不是 `WeeklyGoalEditor.range`。另写一个范围的话，"
+                + "`testRangeMatchesTheSettingsModel` 那条「界面范围 = 落盘归一范围」当场退化成"
+                + "在测一段没人用的常量——界面让你选 30、存下去变成 5，用户会以为设置没生效。"
+                + "实际取到的是：\n\(goalCard)")
+    }
+
+    // MARK: - 验收 2：那一行数字不许抖
+
+    func testTheGoalLineShowsTheDraftInMonospacedDigits() throws {
+        let goalCard = try SourceGuard.memberBody(of: "private var goalCard", in: try Self.sheetCode())
+        let stepperLabel = try SourceGuard.memberBody(of: "Stepper(", in: goalCard)
+
+        XCTAssertTrue(
+            stepperLabel.contains("WeeklyGoalEditor.label(for: draft)"),
+            "Stepper 那一行显示的不是正在编辑的 `draft`。显示已保存的那个值的话，"
+                + "按加号数字纹丝不动，用户会以为这个 Stepper 是坏的。实际取到的是：\n\(stepperLabel)")
+        XCTAssertTrue(
+            stepperLabel.contains(".monospacedDigit()"),
+            "Stepper 那一行的数字没用等宽数字：从「每周练 9 次」按到「每周练 10 次」时整行会横向"
+                + "抖一下，而这恰恰是用户唯一会反复来回按的地方"
+                + "（DESIGN-SYSTEM 第 1 节与第 6 节最后一条，本阶段完成标准也单列了一条）。"
+                + "实际取到的是：\n\(stepperLabel)")
+    }
+
+    // MARK: - 验收 3：面板里的「本周练了几次」必须和首页那一格是同一个数
+
+    func testTheHintCountsTheWeekTheSameWayTheHomePageDoes() throws {
+        let code = try Self.sheetCode()
+
+        let goalCard = try SourceGuard.memberBody(of: "private var goalCard", in: code)
+        XCTAssertTrue(
+            goalCard.contains("WeeklyGoalEditor.hint(done: weeklyDone, goal: draft)"),
+            "面板上没有那句「现在什么情况 + 下一步做什么」（铁律 6），"
+                + "或者它算的不是「本周已练 `weeklyDone` 次、目标是正在编辑的 `draft`」。"
+                + "拿已保存的目标去算的话，用户把目标从 5 拖到 12，那句话还在说「离目标还差 3 次」。"
+                + "实际取到的是：\n\(goalCard)")
+
+        let weeklyDone = try SourceGuard.memberBody(of: "private var weeklyDone", in: code)
+        XCTAssertTrue(
+            weeklyDone.contains("TodayViewModel(state: app.state).weekProgress.done"),
+            "「本周练了几次」不是从 `TodayViewModel.weekProgress` 来的。面板里另算一份的话，"
+                + "首页那一格说「本周 2/5」、面板里说「本周已经练了 3 次」，"
+                + "用户没有任何办法知道哪个是真的，而只有视图模型那一处有测试守着。"
+                + "实际取到的是：\n\(weeklyDone)")
+    }
+
+    // MARK: - 验收 6：「取消」一个字都不写盘
+
+    func testCancelClosesWithoutWritingAnything() throws {
+        let actions = try SourceGuard.memberBody(of: "private var actions",
+                                                 in: try Self.sheetCode())
+
+        XCTAssertTrue(
+            actions.contains("Button(\"取消\")"),
+            "面板上没有「取消」。改了一半又不想改的人只能按 Esc 猜，"
+                + "或者被迫存一个他并不想要的数（验收要求第 6 条）。实际取到的是：\n\(actions)")
+        XCTAssertTrue(
+            actions.contains("Button(\"保存\")") && actions.contains("save()"),
+            "面板上没有「保存」，或者它没接上 `save()`——按钮点了什么都不发生，"
+                + "是本项目最不能接受的那一类。实际取到的是：\n\(actions)")
+        XCTAssertEqual(
+            SourceGuard.occurrences(of: "setWeeklyGoal", in: actions), 0,
+            "两颗按钮那一段里直接出现了 `setWeeklyGoal`。「取消」必须一个字都不写盘，"
+                + "而「保存」该走 `save()`——那儿才有「失败就不关面板」那道闸。"
+                + "实际取到的是：\n\(actions)")
+    }
+
+    // MARK: - 整个面板不许出现分数、评级、水平判断
+
+    /// `testNoScorePredictionInTheSettingsCopy` 扫的是 `WeeklyGoalEditor` 给出的那几句话，
+    /// 而面板里还有一批**硬写在视图里**的中文（标题、那句「改它不会动到任何已经练过的记录」、
+    /// 失败卡片的抬头），它们不归那条测试管——顺手在标题下面写一句
+    /// 「每周练 5 次，大概三个月能到 6.5 分」，那边照样全绿。做法与
+    /// `TodayViewTests.testThisPageNeverPredictsABandScore` 一致。
+    func testThisPanelNeverPredictsABandScore() throws {
+        let code = try Self.sheetCode()
+        XCTAssertTrue(
+            code.contains("struct WeeklyGoalSheet"),
+            "没扫到 WeeklyGoalSheet 的源码，这条测试等于空转。下一步：确认文件还在——"
+                + Self.viewRelativePath)
+        for banned in ["band", "Band", "BAND", "score", "Score",
+                       "分数", "评分", "打分", "得分", "几分", "水平分", "评级", "水平判断", "预测"] {
+            XCTAssertFalse(
+                code.contains(banned),
+                "每周训练目标面板里出现了「\(banned)」。本阶段不得出现任何形式的雅思分数预测或"
+                    + "水平判断（DEFINITION-OF-DONE 第 4 节）——而「每周练几次能到几分」"
+                    + "这种话在设置目标的地方最容易被顺手写上。"
+                    + "下一步：改成只说「练了几次、离目标还差几次」。")
+        }
+    }
+
+    // MARK: - 扫源码用的小工具
+
+    static let viewRelativePath = "Settings/WeeklyGoalSheet.swift"
+
+    /// 注释里必然要解释「为什么这么写」，连注释一起扫的话这些测试会被自己的说明绊倒。
+    /// 走 `SourceGuard`：文件挪了位置或改了名会**抛错**，而不是拿一段空串继续跑。
+    static func sheetCode() throws -> String { try SourceGuard.code(viewRelativePath) }
 }
 
 // MARK: - 两个入口必须真的接上
