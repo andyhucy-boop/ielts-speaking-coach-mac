@@ -36,7 +36,8 @@ enum SaveSessionReviewTool {
                     ]),
                     "questionId": .object([
                         "type": .string("string"),
-                        "description": .string("这一场练的题号。省略时用当前选题的题号。")
+                        "description": .string("这一场练的题号。省略时用当前选题的题号；"
+                            + "传了就必须和这一场在案的题号一致，对不上会被拒绝而不是二选一。")
                     ])
                 ]),
                 "required": .array([.string("reviewText")]),
@@ -63,8 +64,28 @@ enum SaveSessionReviewTool {
                 sessionID = SessionID.next(existing: state.sessions, now: environment.now(),
                                            timeZone: environment.timeZone)
             }
-            let questionID = try arguments.optionalString("questionId")
-                ?? state.currentSession?.questionId ?? ""
+            // 显式传的题号与这一场已经在案的题号对不上时，直接停下来问清楚。
+            // 让任何一方「赢」都会造出三份互相矛盾的记录：`ReviewArchiver` 照显式题号
+            // 推进计划、把它标成 practiced，而这条练习记录（focusPart、goal 都是照
+            // 原来那道题定的）写着另一道题，返回负载报的又是第三种说法。Task 9 的
+            // `list_practice_history` 照 `state.sessions` 显示，用户看到的历史与题库状态
+            // 永远对不上，全程没有任何提示——正是铁律 7 说的静默失败。
+            // 检查刻意放在所有落盘之前：错的是参数不是复盘内容，模型手里还拿着原文，
+            // 改好参数原样再传一次即可，不该先在 pending-reviews 里留下一份让人事后收拾。
+            let explicitQuestionID = try arguments.optionalString("questionId")
+            let recordInFlight = state.currentSession.flatMap { $0.id == sessionID ? $0 : nil }
+                ?? state.sessions.first { $0.id == sessionID }
+            if let explicitQuestionID, let recorded = recordInFlight?.questionId,
+               !recorded.isEmpty, recorded != explicitQuestionID {
+                throw ToolInputError(message:
+                    "参数「questionId」传的是「\(explicitQuestionID)」，"
+                    + "但这一场（\(sessionID)）在案的题号是「\(recorded)」，两者对不上，"
+                    + "没法确定这场练的到底是哪道题，所以什么都没存，复盘原文也还没落盘。"
+                    + "下一步：这场练的确实是「\(explicitQuestionID)」的话，"
+                    + "先用 set_training_selection 把它选上，再把整段复盘原样传一次；"
+                    + "练的是「\(recorded)」的话，把 questionId 整个省掉再传一次即可。")
+            }
+            let questionID = explicitQuestionID ?? state.currentSession?.questionId ?? ""
 
             // ⚠️ 顺序不能改：先落盘，再解析。
             // 反过来写的话，解析一抛错，用户练了一整场换来的复盘原文就没了
@@ -111,6 +132,11 @@ enum SaveSessionReviewTool {
                                        transcript: [], reportPath: "", recordingPath: "")
                 session.endedAt = timestamp
                 session.reportPath = reportRelativePath
+                // 只在记录里还没有题号时才补：同一场存第二次时 questionID 可能是空的
+                //（这次没传 questionId，currentSession 又已经在第一次存完时清掉了），
+                // 无条件赋值会把第一次记好的题号抹成空。
+                // 「显式题号与在案题号不一致」那种情况上面已经拦掉了，
+                // 所以走到这里两者要么相等、要么在案的那个本来就是空的。
                 if session.questionId.isEmpty { session.questionId = questionID }
 
                 if let index = state.sessions.firstIndex(where: { $0.id == sessionID }) {

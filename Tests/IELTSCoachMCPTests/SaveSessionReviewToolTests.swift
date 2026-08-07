@@ -137,6 +137,75 @@ final class SaveSessionReviewToolTests: XCTestCase {
         let result = try harness.callTool("save_session_review", ["reviewText": .string("   ")])
         XCTAssertTrue(result.isError)
         XCTAssertTrue(result.text.contains("下一步"))
+
+        // 断言必须能把「参数校验拦住了」与「落到下面 ReviewParser 才失败」分开：
+        // 后者的文案是「没有返回可识别的标准复盘JSON」，既不含 reviewText 也不含「空」。
+        // 只断言 isError + 「下一步」的话，把必填校验整个删掉这条测试照样是绿的。
+        XCTAssertTrue(result.text.contains("reviewText"),
+                      "要说清是哪个参数不对，否则和解析失败的报错分不开：\(result.text)")
+        XCTAssertTrue(result.text.contains("空"),
+                      "要说清这个参数是空的，而不是内容看不懂：\(result.text)")
+
+        // 更要命的是：校验没拦住的话，一段纯空白会被当成复盘原文真的写进 pending-reviews，
+        // 变成一个谁也导不进去的垃圾文件。
+        let pending = directory.pendingReviewsDirectory.appending(path: "2026-08-06-001.txt")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: pending.path),
+                       "一段纯空白不该落盘成待处理的复盘")
+    }
+
+    func testExplicitQuestionIdThatContradictsTheCurrentSelectionIsRejected() throws {
+        // 显式题号与当前选题对不上时，让谁赢都会造出互相矛盾的三份记录：
+        // 归档按一道题推进计划、练习记录写着另一道题、返回负载报的是第三种说法。
+        // 唯一诚实的做法是停下来问清楚（铁律 7）。
+        try StateStore(directory: directory).mutate { state in
+            state.questions.append(Question(id: "p3-work", part: 3, topic: "Work", prompt: "Q?"))
+        }
+        try selectQuestion()                                  // 选的是 p1-home
+
+        let result = try harness.callTool("save_session_review", [
+            "reviewText": .string(Self.goodReview),
+            "questionId": .string("p3-work")
+        ])
+
+        XCTAssertTrue(result.isError, "题号对不上不能当作成功")
+        XCTAssertTrue(result.text.contains("p3-work"), "要说清传进来的是哪个：\(result.text)")
+        XCTAssertTrue(result.text.contains("p1-home"), "也要说清在案的是哪个：\(result.text)")
+        XCTAssertTrue(result.text.contains("下一步"))
+
+        // 拦下来就什么都不能改：两道题谁被练过还没定，磁盘上更不能留下半份记录。
+        let state = try StateStore(directory: directory).load()
+        XCTAssertTrue(state.sessions.isEmpty, "没存成就不该留下练习记录")
+        XCTAssertTrue(state.issues.isEmpty, "没存成就不该往错题本里并东西")
+        XCTAssertEqual(state.questions.first(where: { $0.id == "p3-work" })?.status, "new",
+                       "没被认定练过的题不许标记成 practiced")
+        XCTAssertEqual(state.questions.first(where: { $0.id == "p1-home" })?.status, "new")
+        XCTAssertEqual(state.currentSession?.questionId, "p1-home",
+                       "选择要原样留着，用户改好参数就能直接重存")
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: directory.pendingReviewsDirectory.appending(path: "2026-08-06-001.txt").path),
+                       "参数就不合法，不该先落盘再报错")
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: directory.reportsDirectory.appending(path: "2026-08-06-001.json").path))
+    }
+
+    func testNewRecordTakesItsFocusPartFromTheQuestionItself() throws {
+        // 没走过 set_training_selection、但显式给了题号：这时会新建一条练习记录，
+        // focusPart 只能从题库里的题推出来。它会进 state.sessions，
+        // list_practice_history 与 get_dashboard_data 都照着它显示，记错就是全错。
+        try StateStore(directory: directory).mutate { state in
+            state.questions.append(Question(id: "p2-describe", part: 2, topic: "Describe", prompt: "Q?"))
+        }
+        let payload = try harness.callToolJSON("save_session_review", [
+            "reviewText": .string(Self.goodReview),
+            "questionId": .string("p2-describe")
+        ])
+        XCTAssertEqual(payload["questionId"]?.stringValue, "p2-describe")
+
+        let state = try StateStore(directory: directory).load()
+        XCTAssertEqual(state.sessions.count, 1)
+        XCTAssertEqual(state.sessions[0].questionId, "p2-describe")
+        XCTAssertEqual(state.sessions[0].focusPart, .part2,
+                       "新建的记录要按题目自身的 part 定，不能一律记成全真模考")
     }
 
     func testWorksWithoutAnySelectionByGeneratingItsOwnSessionID() throws {
@@ -159,5 +228,7 @@ final class SaveSessionReviewToolTests: XCTestCase {
         ])
         let state = try StateStore(directory: directory).load()
         XCTAssertEqual(state.sessions.count, 1, "同一个 sessionId 存两次不能变成两条练习记录")
+        XCTAssertEqual(state.sessions[0].questionId, "p1-home",
+                       "第二次没传 questionId，已经在案的题号不能被清空")
     }
 }
