@@ -48,10 +48,36 @@ final class WorkspaceToolsTests: XCTestCase {
                        "已有昵称不能被后来的调用覆盖")
     }
 
-    func testEmptyBankNoteTellsTheUserWhatToDoNext() throws {
+    // 下面两条是配对的：note 有两条分支，各测一条。
+    // 只断言「下一步」是不够的——两条分支都含这三个字，那样的断言对分支零约束力。
+
+    func testEmptyBankNoteSendsTheUserToImportQuestions() throws {
         let payload = try harness.callToolJSON("initialize_ielts_workspace")
+
+        XCTAssertEqual(payload["questionCount"]?.intValue, 0, "前提没成立：这条测的是空题库分支")
         let note = try XCTUnwrap(payload["note"]?.stringValue)
-        XCTAssertTrue(note.contains("下一步"), "题库为空时必须给出路，而不是只报一个 0")
+        XCTAssertTrue(note.contains("题库还是空的"), "题库为空时得先说清现状，不能只报一个 0：\(note)")
+        XCTAssertTrue(note.contains("下一步"), "题库为空时必须给出路：\(note)")
+        XCTAssertTrue(note.contains("导入"), "空题库的出路是导入题库，note 里必须写出来：\(note)")
+        XCTAssertFalse(note.contains("set_training_selection"),
+                       "题库为 0 时把用户指去选题，他只会撞上一个空列表：\(note)")
+    }
+
+    func testNonEmptyBankNoteSendsTheUserToSelectAQuestion() throws {
+        try directory.createIfNeeded()
+        try StateStore(directory: directory).mutate { state in
+            state.questions.append(Question(id: "q1", part: 1, topic: "Home", prompt: "Where do you live?"))
+        }
+
+        let payload = try harness.callToolJSON("initialize_ielts_workspace")
+
+        XCTAssertEqual(payload["questionCount"]?.intValue, 1, "前提没成立：这条测的是题库非空分支")
+        let note = try XCTUnwrap(payload["note"]?.stringValue)
+        XCTAssertTrue(note.contains("set_training_selection"),
+                      "题库里已经有题了，下一步就该是选题：\(note)")
+        XCTAssertTrue(note.contains("下一步"), "有题库也要说清下一步：\(note)")
+        XCTAssertFalse(note.contains("题库还是空的"),
+                       "题库不空却说空，用户会跑去重新导入一遍：\(note)")
     }
 
     // MARK: - open_dashboard
