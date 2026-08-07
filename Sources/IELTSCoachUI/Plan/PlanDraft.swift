@@ -27,9 +27,10 @@ public struct PlanDraftPreview: Equatable, Sendable {
 }
 
 public enum PlanDraftPreviewBuilder {
-    /// 可行性判据**只有一处**：`PlanScope.blockingReason`。
-    /// 这里绝对不能再写一套自己的判断——预览说能生成、点下去却报错，
-    /// 是最伤信任的一类界面缺陷。
+    /// 可行性判据**只有一处**：`PlanScope.blockingReason`——生成路径上的每一道闸门
+    /// （题目够不够、天数受不受支持）都收在那一个函数里。
+    /// 这里绝对不能再写一套自己的判断，也不能漏掉那边的任何一条——预览说能生成、
+    /// 点下去却报错，是最伤信任的一类界面缺陷。
     public static func preview(state: CoachState, draft: PlanDraft) -> PlanDraftPreview {
         let count = PlanScope.select(from: state.questions, focusPart: draft.focusPart).count
         if let reason = PlanScope.blockingReason(questionCount: count,

@@ -43,7 +43,8 @@ public enum PlanRegenerator {
             throw CoachError.planImpossible(reason)
         }
 
-        // lengthDays 不在 7/14/30 里时由 PlanBuilder 抛错，它的消息已经说清了下一步。
+        // 走到这里说明 PlanScope 已经放行，包括 lengthDays 在 7/14/30 里。
+        // PlanBuilder 自己的 guard 是直接调用它时的兜底，正常路径上到不了。
         var fresh = try PlanBuilder.build(questions: selected, lengthDays: lengthDays,
                                           createdAt: createdAt)
         fresh.focusPart = focusPart

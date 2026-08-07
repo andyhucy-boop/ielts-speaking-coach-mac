@@ -86,6 +86,16 @@ final class PlanScopeTests: XCTestCase {
                        "一道题都没有时不该落进「分不满几天」那条通用文案")
     }
 
+    /// 天数不受支持这道闸门原来只长在 `PlanBuilder.build` 里，界面预览照不到，
+    /// 于是出现过「预览说能生成、点下去却撞一个报错」。可行性判据必须只有这一处。
+    func testBlockingReasonWhenCycleLengthIsUnsupported() throws {
+        let reason = try XCTUnwrap(
+            PlanScope.blockingReason(questionCount: 21, lengthDays: 10, focusPart: .part1))
+        XCTAssertTrue(reason.contains("10"), "要说清现在选的是几天")
+        XCTAssertTrue(reason.contains("7、14、30"), "要说清哪几档才受支持")
+        XCTAssertTrue(reason.contains("下一步"))
+    }
+
     func testLabelsAreChineseAndDistinct() {
         let labels = FocusPart.allCases.map(PlanScope.label(for:))
         XCTAssertEqual(Set(labels).count, labels.count, "四个重点 Part 的说明不能重名")

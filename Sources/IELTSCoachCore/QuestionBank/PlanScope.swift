@@ -50,8 +50,14 @@ public enum PlanScope {
     ///
     /// **生成前的预览与真正生成时必须用同一个判据**，否则会出现
     /// 「预览说能生成、点下去却报错」——最伤信任的一类界面缺陷。
+    /// 所以真正生成路径上的每一道闸门都必须在这里有对应的一条，
+    /// 包括 `PlanBuilder.build` 的天数闸门（下面第一条）。
     public static func blockingReason(questionCount: Int, lengthDays: Int,
                                       focusPart: FocusPart) -> String? {
+        // 顺序与 PlanBuilder.build 里的 guard 一致：先看天数，再看题目。
+        guard PlanBuilder.supportedLengths.contains(lengthDays) else {
+            return unsupportedLengthReason(lengthDays: lengthDays)
+        }
         guard questionCount > 0 else {
             return "题库里没有\(label(for: focusPart))的题目，生成不了计划。"
                 + "下一步：换一个重点 Part，或到「训练题库」页导入含该 Part 的题目。"
@@ -71,6 +77,14 @@ public enum PlanScope {
     }
 
     // MARK: - 文案
+
+    /// 天数不在 `PlanBuilder.supportedLengths` 里时的中文说明。
+    /// `PlanBuilder.build` 兜底时也用这一份，避免同一件事在两处写出两种说法。
+    static func unsupportedLengthReason(lengthDays: Int) -> String {
+        let supported = PlanBuilder.supportedLengths.map(String.init).joined(separator: "、")
+        return "计划天数只支持 \(supported) 天，现在选的是 \(lengthDays) 天，生成不了计划。"
+            + "下一步：把周期改成 \(supported) 天中的一档。"
+    }
 
     /// 重点 Part 的中文说明。界面与 Core 的错误信息共用这一份，避免两处文案漂移。
     public static func label(for focusPart: FocusPart) -> String {

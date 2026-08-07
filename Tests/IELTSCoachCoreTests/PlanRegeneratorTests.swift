@@ -247,9 +247,12 @@ final class PlanRegeneratorTests: XCTestCase {
 
     /// 拒绝的判据必须与界面预览用的判据完全一致，
     /// 否则会出现「预览说能生成、点下去却报错」。
+    ///
+    /// **10 是故意混进来的不受支持档位。** 只穷举 supportedLengths 的话，
+    /// 恰好绕开了唯一会分歧的那一档（天数闸门），全绿也证明不了两处一致。
     func testRefusalMatchesPlanScopeBlockingReason() {
         for count in 0...20 {
-            for days in PlanBuilder.supportedLengths {
+            for days in PlanBuilder.supportedLengths + [10] {
                 let s = state(questions: (0..<count).map { q("b\($0)", 2) })
                 let blocked = PlanScope.blockingReason(questionCount: count, lengthDays: days,
                                                        focusPart: .part2) != nil
