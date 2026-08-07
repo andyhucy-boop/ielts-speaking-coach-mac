@@ -34,9 +34,47 @@ public final class OnboardingFlowModel {
         frozenSteps = steps
     }
 
+    /// 「重新检查」的结果已经消化到第几次了。
+    ///
+    /// **这一份也必须活在这里，不能是 `WelcomeFlowView` 的 `@State`**——理由与
+    /// `frozenSteps` / `index` 完全相同，见类型顶上那段：重查那十秒里这一页被整个摘走，
+    /// 它自己的任何记忆都不作数。只有活在 `RootView` 手上的这份，
+    /// 才记得住「刚才那一次检查我还没消化」。
+    public private(set) var consumedRecheckAttempts = 0
+
     public func advance() { index += 1 }
 
     public func goBack() { index = max(0, index - 1) }
+
+    /// 一次「重新检查」跑完之后问一句：要不要替用户把「环境」这一步走掉。
+    ///
+    /// **判据是「查完了几次」，不是 `permission` 变没变。**
+    /// `permission` 变的那一瞬间这一页根本不在视图树上（`AppState.isCheckingPermission`
+    /// 那十秒整屏是「正在检查运行环境…」），所以 `.onChange(of: app.permission)`
+    /// 一次都触发不了——这里修的正是那一版。`AppState.recheckAttempts` 只增不减，
+    /// 回来之后拿它和自己记的数一比，就知道「我不在场的时候有没有查完过一次」。
+    ///
+    /// 三个条件缺一不可：
+    ///
+    /// - **真的来了一次新结果**（`attempts > consumedRecheckAttempts`）。少了这一条就退化成
+    ///   「权限就绪就跳过环境步」，而那一步在就绪时也必须让用户读到——他有权知道这个 App
+    ///   拿辅助功能去干什么（`OnboardingFlowTests` 里的
+    ///   `testFreshInstallStillExplainsThePermissionEvenWhenAlreadyGranted` 钉着这件事）。
+    /// - **人正停在「环境」这一步**。别的步骤跟环境检查没关系。
+    /// - **这一次真的查到就绪了**。仍然不就绪就得留在原地：那句「已重新检查，仍未通过」
+    ///   是他唯一的线索。
+    ///
+    /// 同一次结果只算一次。这个判断挂在 `.onChange(initial: true)` 上，
+    /// 视图每重新出现一次就会问一次，次次都算数的话用户会被一路推过「题库」和「录音」——
+    /// 两步都没看见，题库还是空的，录音开关压根没被问过。
+    ///
+    /// - Returns: 该往前走一步就返回 true。
+    public func consumeRecheckResult(attempts: Int, step: OnboardingStep?,
+                                     permission: PermissionState) -> Bool {
+        guard attempts > consumedRecheckAttempts else { return false }
+        consumedRecheckAttempts = attempts
+        return step == .environment && permission == .ready
+    }
 }
 
 /// 首次使用引导。
@@ -125,9 +163,22 @@ public struct WelcomeFlowView: View {
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.index)
         .onAppear { model.freeze(steps) }
         // 「重新检查」查到就绪之后自动往前走一步：用户刚在系统设置里勾完开关回来，
-        // 让他再点一次「下一步」是在问一个已经有答案的问题。
-        .onChange(of: app.permission) { _, updated in
-            guard step == .environment, updated == .ready else { return }
+        // 让他再点一次「下一步」是在问一个已经有答案的问题（计划 Task 8 Step 6）。
+        //
+        // **盯的是「已经查完几次」，不是环境状态变没变。** 这里原来写的是
+        // `.onChange(of: app.permission) { … }`，而它在真实运行路径上一次都触发不了：
+        // 写 `permission` 的那一刻 `AppState.isCheckingPermission` 还是 true
+        // （那两行之间没有挂起点），整屏正是「正在检查运行环境…」，这一页连同 `.onChange`
+        // 记着的「上一次的值」早就被销毁了；等它回来是全新的一份，
+        // 而 `.onChange` 不会为「自己不在场时发生的那次变化」补触发。
+        //
+        // 所以信号换成只增不减的 `app.recheckAttempts`，「消化到第几次了」记在 `model` 里
+        // （它在 `RootView` 手上，躲得过这次重建）。`initial: true` 是关键的一半——
+        // 要接的那次变化恰恰发生在这一页不在场的时候，只有「一出现就先问一次」才接得住。
+        .onChange(of: app.recheckAttempts, initial: true) {
+            guard model.consumeRecheckResult(attempts: app.recheckAttempts,
+                                             step: step,
+                                             permission: app.permission) else { return }
             advance()
         }
         .sheet(item: $importFeedback) { feedback in

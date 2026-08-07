@@ -1,4 +1,6 @@
+import ChatGPTBridge
 import Foundation
+import IELTSCoachCore
 import XCTest
 
 @testable import IELTSCoachUI
@@ -297,5 +299,169 @@ final class WelcomeFlowViewTests: XCTestCase {
         model.advance()
         model.goBack()
         XCTAssertEqual(model.index, 1, "「上一步」没有真的退回去")
+    }
+
+    // MARK: - 「重新检查」查到就绪之后，替用户把这一步走掉
+
+    /// **这一段守的是一次已经真实发生过的空转。**
+    ///
+    /// 初版写的是 `.onChange(of: app.permission) { … advance() }`，而它在真实运行路径上
+    /// 一次都触发不了：唯一会写 `AppState.permission` 的 `runPermissionCheck()`
+    /// **先**把 `isCheckingPermission` 拨成 true、再 await 那个最长约十秒的检查、
+    /// 最后才写 `permission`（写完到把标志拨回 false 之间没有挂起点，所以没有任何一帧
+    /// 能看到「permission 变了、但没在检查」）；而 `RootRouter.screen` 在
+    /// `isCheckingPermission == true` 时返回 `.checkingEnvironment`
+    /// （`AppStateTests.testRecheckSaysItIsCheckingWhileThePreflightIsStillRunning`
+    /// 钉着这件事），于是这十秒里 `WelcomeFlowView` 整个被摘出视图树。
+    /// 等检查跑完，回来的是**全新的一份**视图，而 `.onChange` 默认的 `initial: false`
+    /// 不会为「自己不在场时发生的那次变化」补触发——代码在那儿，一次也没跑过，
+    /// 注释却写着「查到就绪自动往前走一步」，用户实际上正要再点一次「下一步」。
+    ///
+    /// 所以判据不能是 `permission` 的「变化」，只能是一个**活得过这次重建**的信号：
+    /// `AppState.recheckAttempts`（只增不减）配上记在 `OnboardingFlowModel` 里的
+    /// 「已经消化到第几次了」——模型在 `RootView` 手上，躲得过这次重建
+    /// （与 `frozenSteps` / `index` 提到那一层是同一个理由）。
+    @MainActor func testARecheckThatFoundEverythingReadyMovesTheFlowForward() {
+        let model = OnboardingFlowModel()
+        model.freeze([.welcome, .environment, .questionBank, .recordingChoice, .ready])
+        model.advance()                          // 用户停在「环境」这一步
+
+        XCTAssertTrue(
+            model.consumeRecheckResult(attempts: 1, step: .environment, permission: .ready),
+            "「重新检查」查到就绪了，流程却不肯往前走。用户刚在系统设置里勾完开关回来，"
+                + "让他再点一次「下一步」是在问一个已经有答案的问题。")
+    }
+
+    /// 同一次结果只算一次。
+    ///
+    /// 这个判断挂在 `.onChange(initial: true)` 上，视图每重新出现一次就会问一次
+    /// （而这一页本来就会被反复重建，见上面那段）。每次都算数的话，用户会被一路推过
+    /// 「题库」和「录音」——两步都没看见，题库还是空的，录音开关他压根没被问过。
+    @MainActor func testTheSameRecheckResultOnlyMovesTheFlowForwardOnce() {
+        let model = OnboardingFlowModel()
+        XCTAssertTrue(
+            model.consumeRecheckResult(attempts: 1, step: .environment, permission: .ready))
+
+        XCTAssertFalse(
+            model.consumeRecheckResult(attempts: 1, step: .environment, permission: .ready),
+            "同一次检查结果被消化了两次：用户会被连推两步，中间那几步一眼都没看到。")
+    }
+
+    /// **不许退化成「权限已经就绪就直接跳过环境步」。**
+    ///
+    /// 那一步在就绪时也必须让用户读到——他有权知道这个 App 拿辅助功能去干什么
+    /// （`OnboardingFlowTests.testFreshInstallStillExplainsThePermissionEvenWhenAlreadyGranted`
+    /// 钉着这件事）。自动前进的前提是「用户刚点过一次『重新检查』」，
+    /// 而不是「权限恰好是就绪的」。
+    @MainActor func testAFlowThatWasNeverRecheckedStillWalksThroughTheEnvironmentStep() {
+        let model = OnboardingFlowModel()
+        XCTAssertFalse(
+            model.consumeRecheckResult(attempts: 0, step: .environment, permission: .ready),
+            "一次「重新检查」都没点过，就因为权限本来就有把「环境」这一步跳掉了。"
+                + "在同一台 Mac 上重装、TCC 还记着授权的人走的正是这条路，"
+                + "他会完全不知道这个 App 要辅助功能干什么。")
+    }
+
+    /// 查完仍然不就绪就得留在原地：那句「已重新检查，仍未通过」是他唯一的线索。
+    @MainActor func testARecheckThatStillFindsSomethingMissingStaysPut() {
+        for permission in [PermissionState.needsAccessibility, .needsChatGPT, .unknown] {
+            let model = OnboardingFlowModel()
+            XCTAssertFalse(
+                model.consumeRecheckResult(attempts: 1, step: .environment, permission: permission),
+                "\(permission)：查完仍然不就绪，却把用户推到了下一步。"
+                    + "他会带着一个残的环境走完引导，而「已重新检查，仍未通过」"
+                    + "那句话一眼都没看到。")
+        }
+    }
+
+    /// 别的步骤跟环境检查没关系，一次检查结果不该推着它们走。
+    @MainActor func testARecheckResultNeverMovesAStepOtherThanTheEnvironment() {
+        for step in [OnboardingStep.welcome, .questionBank, .recordingChoice, .ready] {
+            let model = OnboardingFlowModel()
+            XCTAssertFalse(
+                model.consumeRecheckResult(attempts: 1, step: step, permission: .ready),
+                "\(step)：这一步跟环境检查没关系，却被一次检查结果推着往前走了。")
+        }
+        let model = OnboardingFlowModel()
+        XCTAssertFalse(model.consumeRecheckResult(attempts: 1, step: nil, permission: .ready),
+                       "一步都算不出来的时候（`nothingToConfirm` 那一屏）还在往前走。")
+    }
+
+    /// 把上面那几条接到**真的** `AppState` 上跑一遍。
+    ///
+    /// 单独测那个纯判断，管不住「它盯的这个信号在真实路径上根本不来」——
+    /// 而这正是被修的那个 bug 的形状。所以这里让 `AXDriver.preflight()` 的真实输出
+    /// 流过 `AppState`：先是没授权（自动检查那一次不算数、也不许推人），
+    /// 然后模拟用户去系统设置勾上开关、回来点「重新检查」。全程用假的无障碍接口，
+    /// 一次都不碰真实 ChatGPT（铁律 5）。
+    @MainActor func testTheRealRecheckPathProducesExactlyTheSignalTheFlowWatches() async throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "ielts-onboarding-\(UUID().uuidString)")
+        let directory = DataDirectory(root: root)
+        try directory.createIfNeeded()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let access = FakeAXAccess()
+        access.installed = true
+        access.trusted = false
+        let app = AppState(directory: directory, preflight: {
+            AXDriver(access: access,
+                     locator: AXLocator(access: access, pollInterval: 0.01),
+                     shortTimeout: 0.2, stateTimeout: 0.2,
+                     host: .app(name: "IELTS Speaking Coach")).preflight()
+        })
+
+        let model = OnboardingFlowModel()
+        model.freeze([.welcome, .environment, .questionBank, .recordingChoice, .ready])
+        model.advance()                          // 用户停在「环境」这一步
+
+        await app.startInitialPermissionCheckIfNeeded()
+        XCTAssertEqual(app.permission, .needsAccessibility)
+        XCTAssertFalse(
+            model.consumeRecheckResult(attempts: app.recheckAttempts,
+                                       step: .environment, permission: app.permission),
+            "开机第一次自动检查就把用户推走了——那一次不是他点出来的，何况环境还是缺的。")
+
+        // 用户去「系统设置 › 隐私与安全性 › 辅助功能」把开关勾上了，回来点「重新检查」。
+        access.trusted = true
+        await app.recheckPermission()
+
+        XCTAssertEqual(app.permission, .ready)
+        XCTAssertTrue(
+            model.consumeRecheckResult(attempts: app.recheckAttempts,
+                                       step: .environment, permission: app.permission),
+            "用户勾完开关回来点「重新检查」，查到就绪了，流程还停在原地等他再点一次「下一步」。")
+    }
+
+    /// 上面那几条只管住「这个判断本身对不对」。判断写对了却没接上界面，用户什么也感觉不到——
+    /// 而那恰恰是初版的病：代码在那儿，一次都跑不到。
+    func testTheFlowActuallyAsksThatQuestionWhenARecheckComesBack() {
+        SourceGuard.assertRenders("app.recheckAttempts", inBodyOf: "public var body",
+                                  of: Self.viewPath,
+                                  because: "引导页没有盯着「重新检查」跑完的次数。"
+                                      + "下一步：`.onChange(of: app.recheckAttempts, initial: true)`。"
+                                      + "盯 `app.permission` 是不行的——那一次变化发生在这一页"
+                                      + "被摘出视图树的那十秒里，`.onChange` 不会为它补触发。")
+        SourceGuard.assertRenders("model.consumeRecheckResult(", inBodyOf: "public var body",
+                                  of: Self.viewPath,
+                                  because: "查完回来之后没有问一句「要不要替用户往前走一步」，"
+                                      + "计划 Task 8 Step 6 里「检查到就绪后自动前进一步」那条没落地。")
+        SourceGuard.assertRenders("initial: true", inBodyOf: "public var body", of: Self.viewPath,
+                                  because: "`.onChange` 没写 `initial: true`。"
+                                      + "默认的 `initial: false` 只认「这一页在场时发生的变化」，"
+                                      + "而要处理的那一次恰恰发生在它不在场的时候——"
+                                      + "少了这两个字，这一整条会退回到一次都不触发，跟没写一样。")
+    }
+
+    /// 那种一次都触发不了的写法不许再回来。
+    func testTheFlowDoesNotGoBackToWatchingThePermissionItself() {
+        SourceGuard.assertOmits("onChange(of: app.permission", in: Self.viewPath,
+                                because: "「重新检查」会把 `AppState.isCheckingPermission` 拨成 true，"
+                                    + "根视图整屏换成「正在检查运行环境…」，这一页连同它的 "
+                                    + "`.onChange` 一起被销毁；等 `permission` 真的变了，"
+                                    + "回来的是全新的一份视图，`.onChange` 不会为"
+                                    + "「自己不在场时发生的那次变化」补触发——这种写法一次都跑不到。"
+                                    + "下一步：改盯 `app.recheckAttempts`（它只增不减），"
+                                    + "并把「已经消化到第几次」记进 `OnboardingFlowModel`。")
     }
 }
