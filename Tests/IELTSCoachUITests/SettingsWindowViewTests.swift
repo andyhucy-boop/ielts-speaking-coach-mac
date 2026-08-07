@@ -50,18 +50,51 @@ final class SettingsWindowViewTests: XCTestCase {
                           + "实际取到的是：\n\(body)")
     }
 
-    /// **四个分支一个都不能少。** 少一个，那一栏就是一片空白，而这不会有任何编译错误
+    /// **四个分支一个都不能少，而且每一支画的必须是它自己那一栏。**
+    ///
+    /// 少一支，那一栏就是一片空白，而这不会有任何编译错误
     ///（`@ViewBuilder` 的 `switch` 少一支编不过，但把某一支换成 `EmptyView()` 编得过）。
-    func testEverySectionActuallyDrawsSomething() throws {
+    ///
+    /// **配对必须逐支断言，不能对整个函数体各问各的。** 这里从前写的是
+    /// `body.contains("case .goals") && body.contains("goalsSection")`——
+    /// 两件事分开问，谁画谁完全没人管。2026-08-08 复审实测：把 `.goals` 与 `.data`
+    /// 两支的内容对调（`case .goals: pane(section, content: dataSection)`），
+    /// `swift test` 1671 条一条不红。而那正是 Task 16 的头号功能坏掉的样子：
+    /// 首页齿轮 `navigator.open(.goals)` + `openSettings()` 进来，标签停在「训练目标」上，
+    /// 页面却是「数据与隐私」——用户彻底改不了每周目标，且全套测试全绿。
+    ///
+    /// 所以改成先把 `switch section` 逐支切开（`SourceGuard.switchBranches`，
+    /// 它自己被 `SourceGuardTests` 守着），再问「这一支的大括号里画的是不是它自己那一栏」。
+    func testEverySectionDrawsItsOwnPaneAndNotAnotherSections() throws {
         let body = try SourceGuard.memberBody(of: "private func sectionBody",
                                               in: try Self.viewCode())
-        for (branch, member) in [("case .recording", "recordingSection"),
-                                 ("case .goals", "goalsSection"),
-                                 ("case .practice", "practiceSection"),
-                                 ("case .data", "dataSection")] {
-            XCTAssertTrue(body.contains(branch) && body.contains(member),
-                          "`\(branch)` 那一栏没有画 `\(member)`，用户点过去看到的是一片空白。"
-                              + "实际取到的是：\n\(body)")
+        let branches = try SourceGuard.switchBranches(over: "section", in: body)
+
+        // 先确认这一趟真的切出了分支。切了个空的话，下面那个循环里的 `first(where:)`
+        // 会全部落空——那还是会红，但红的理由会指向四个分区而不是「切分失效了」。
+        XCTAssertEqual(branches.count, SettingsSection.allCases.count,
+                       "`switch section` 切出了 \(branches.count) 支，而 `SettingsSection` "
+                           + "有 \(SettingsSection.allCases.count) 项。要么少了一栏"
+                           + "（用户点过去是一片空白），要么这段 switch 的写法变了、"
+                           + "切分失效了。实际取到的是：\n\(body)")
+        XCTAssertFalse(branches.contains(where: \.isDefault),
+                       "`switch section` 用了 `default:` 兜底。将来加一个分区，"
+                           + "它会静默地落进别人的分支里，编译器一声不吭。"
+                           + "下一步：逐支写全。实际取到的是：\n\(body)")
+
+        for (caseName, member) in [("recording", "recordingSection"),
+                                   ("goals", "goalsSection"),
+                                   ("practice", "practiceSection"),
+                                   ("data", "dataSection")] {
+            let branch = try XCTUnwrap(
+                branches.first { $0.cases.contains(caseName) },
+                "`switch section` 里没有接住 `.\(caseName)` 的那一支，那一栏是一片空白。"
+                    + "实际取到的是：\n\(body)")
+            XCTAssertTrue(SourceGuard.mentions(member, in: branch.body),
+                          "`case .\(caseName)` 那一支画的不是 `\(member)`。"
+                              + "画成别的分区的话，用户从深链接进来标签停在「\(caseName)」上、"
+                              + "页面却是另一栏的内容——他会以为这个设置根本不存在。"
+                              + "这一支实际取到的是：\n\(branch.body)")
         }
     }
 
@@ -135,9 +168,20 @@ final class SettingsWindowViewTests: XCTestCase {
     ///
     /// 它持有自己的 `StateStore`，写盘不经过 `AppState`。少了这根线，
     /// 用户在设置窗口开了录音、转身开练，主窗口交给录音器的还是旧值。
-    /// 这根线本身在 `AppState.makeRecordingSettingsViewModel()` 里，
-    /// 由 `RecordingSettingsViewModelTests` 那条 `onChange` 测试守着行为；
-    /// 这里守的是「这个窗口用的确实是带线的那一份」。
+    ///
+    /// **这条只守「这个窗口要的是工厂那一份」，不守「工厂上真的挂了 `onChange`」。**
+    /// 这里从前写着「那根线由 `RecordingSettingsViewModelTests` 那条 `onChange` 测试守着行为」
+    /// ——那句话是错的，2026-08-08 复审当场戳破：那条测试自己 new 了一台视图模型、
+    /// 自己把 `{ app.reload() }` 传了进去，证明的是「只要接上就会 reload」，
+    /// 证明不了生产路径接了；实测把 `AppState.makeRecordingSettingsViewModel()` 里
+    /// `onChange:` 那一行整句删掉（参数有默认值 `{}`，编译照过），全库一条不红。
+    /// 「既没有守卫、又留着一句说自己被守着的注释」比没有注释更坏——
+    /// 下一个人照着它看一眼就放过去了。
+    ///
+    /// 那件事现在由 `AppStateTests.`
+    /// `testTheRecordingSettingsViewModelFromTheAppTellsTheMainWindowToRefresh` 守：
+    /// 它走的是 `app.makeRecordingSettingsViewModel()` 本身，
+    /// `setEnabled(true)` 之后断言 `app.state.settings.recordingEnabled` 真的变了。
     func testTheRecordingSectionUsesTheViewModelThatNotifiesTheMainWindow() throws {
         let code = try Self.viewCode()
         XCTAssertTrue(code.contains("app.makeRecordingSettingsViewModel()"),
@@ -151,6 +195,14 @@ final class SettingsWindowViewTests: XCTestCase {
 
     // MARK: - 三、训练目标
 
+    /// 等宽数字那一条**必须钉在它说的那一行上**。
+    ///
+    /// 这里从前问的是「`goalsSection` 里任意位置出现过 `.monospacedDigit()` 吗」，
+    /// 而这一段里有两处（目标数字那行、下面的提示那行）。2026-08-08 复审实测：
+    /// 只删掉目标数字那一句——也就是失败信息逐字点名的「从「每周练 9 次」按到
+    /// 「每周练 10 次」时整行会横向抖」的那一行——`swift test` 1671 条一条不红，
+    /// 两处一起删才会红。也就是说它实际守的是「这一块里还有等宽数字」。
+    /// 现在改成对两处各切各的修饰符链，各断言各的。
     func testTheGoalStepperUsesTheSharedRangeAndDoesNotJitter() throws {
         let section = try SourceGuard.memberBody(of: "private var goalsSection",
                                                  in: try Self.viewCode())
@@ -161,13 +213,27 @@ final class SettingsWindowViewTests: XCTestCase {
         XCTAssertTrue(section.contains("WeeklyGoalEditor.label(for: settings.weeklyGoal)"),
                       "那一行显示的不是当前已保存的目标。写死一个数字或者显示别的取值的话，"
                           + "用户按加号看到的数字和磁盘上的对不上。实际取到的是：\n\(section)")
-        XCTAssertTrue(section.contains(".monospacedDigit()"),
-                      "那一行没用等宽数字：从「每周练 9 次」按到「每周练 10 次」时整行会横向抖一下，"
-                          + "而这恰恰是用户唯一会反复来回按的地方"
-                          + "（DESIGN-SYSTEM 第 1 节与第 6 节最后一条）。实际取到的是：\n\(section)")
+
+        let number = try SourceGuard.modifierChain(
+            after: "Text(WeeklyGoalEditor.label(for: settings.weeklyGoal))", in: section)
+        XCTAssertTrue(number.contains(".monospacedDigit()"),
+                      "**目标数字那一行**没用等宽数字：从「每周练 9 次」按到「每周练 10 次」时"
+                          + "整行会横向抖一下，而这恰恰是用户唯一会反复来回按的地方"
+                          + "（DESIGN-SYSTEM 第 1 节与第 6 节最后一条）。"
+                          + "注意这一条只看这一行自己的修饰符链——"
+                          + "下面提示那行上的 `.monospacedDigit()` 替它挡不了枪。"
+                          + "这一行实际取到的是：\n\(number)")
+
         XCTAssertTrue(section.contains("settings.weeklyGoalHint"),
                       "少了那句「本周练了几次、离目标还差几次」（铁律 6 要的现状 + 下一步）。"
                           + "实际取到的是：\n\(section)")
+        let hint = try SourceGuard.modifierChain(after: "Text(settings.weeklyGoalHint)",
+                                                 in: section)
+        XCTAssertTrue(hint.contains(".monospacedDigit()"),
+                      "**提示那一行**没用等宽数字。它写的是「本周练了 9 次」这种句子，"
+                          + "练到第 10 次时整句会跟着横向抖一下"
+                          + "（DESIGN-SYSTEM 第 1 节：数字一律等宽）。"
+                          + "这一行实际取到的是：\n\(hint)")
     }
 
     /// **没存进去的话，那颗 Stepper 必须自己弹回落盘的事实。**
@@ -289,14 +355,27 @@ final class SettingsWindowViewTests: XCTestCase {
 
     // MARK: - 五、数据与隐私
 
+    /// 「可选中」那一条**必须钉在路径那一行上**。
+    ///
+    /// 这里从前问的是「`dataLocationCard` 里任意位置出现过 `.textSelection(.enabled)` 吗」，
+    /// 而这张卡片里有两处（路径、占用）。2026-08-08 复审实测：只删掉路径那一句——
+    /// 也就是计划 Step 4 明写的「数据目录完整路径（**可选中复制**）」、
+    /// 也是下面这条失败信息逐字点名的那一行——`swift test` **全库 1671 条一条不红**，
+    /// 全库再没有第二条兜底。而成品标准第 10 条（换电脑把这个目录整个拷过去）
+    /// 就靠用户能把这条路径复制走。
     func testTheDataSectionShowsThePathTheUsageAndAWayIntoFinder() throws {
         let card = try SourceGuard.memberBody(of: "private var dataLocationCard",
                                               in: try Self.viewCode())
         XCTAssertTrue(card.contains("settings.dataDirectoryURL.path"),
                       "没有把数据目录的完整路径显示出来。成品标准第 10 条（拷这个目录换机器）"
                           + "全靠用户知道它在哪儿。实际取到的是：\n\(card)")
-        XCTAssertTrue(card.contains(".textSelection(.enabled)"),
-                      "那条路径选不中，用户只能照着屏幕手抄。实际取到的是：\n\(card)")
+        let path = try SourceGuard.modifierChain(after: "Text(settings.dataDirectoryURL.path)",
+                                                 in: card)
+        XCTAssertTrue(path.contains(".textSelection(.enabled)"),
+                      "那条路径选不中，用户只能照着屏幕手抄一串几十个字符的路径。"
+                          + "注意这一条只看路径那一行自己的修饰符链——"
+                          + "占用那行上的 `.textSelection(.enabled)` 替它挡不了枪。"
+                          + "这一行实际取到的是：\n\(path)")
         XCTAssertTrue(card.contains("settings.usage.summaryText"),
                       "没显示占用。算出来了不上屏就是白算（本项目栽过好几次）。"
                           + "实际取到的是：\n\(card)")

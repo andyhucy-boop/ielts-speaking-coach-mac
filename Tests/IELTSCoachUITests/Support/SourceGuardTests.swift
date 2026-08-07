@@ -493,6 +493,71 @@ final class SourceGuardTests: XCTestCase {
         XCTAssertThrowsError(try SourceGuard.functionBody(named: "noSuchFunc", in: code))
     }
 
+    // MARK: - 一个元素自己那条修饰符链
+
+    /// **链子必须在下一个元素开始的地方停住。**
+    ///
+    /// 这正是 2026-08-08 复审揪出来的那种空转的解药：一张卡片里有两处
+    /// `.monospacedDigit()` / `.textSelection(.enabled)` 时，对整张卡片问 `contains`
+    /// 删掉其中一处照样绿。这里造的就是那个形状——第一段有、第二段没有——
+    /// 断言「第二段自己那条链子里查不到」。这一条要是切过了头，
+    /// 它会把第一段的修饰符也算进来，当场变红。
+    func testAModifierChainStopsBeforeTheNextElement() throws {
+        let code = """
+        CoachCard {
+            VStack {
+                Text(headline)
+                    .font(Typography.cardTitle)
+                    .monospacedDigit()
+                    .foregroundStyle(Palette.textPrimary)
+                Text(hint)
+                    .font(Typography.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("在访达中显示") { reveal() }
+            }
+        }
+        """
+        let headline = try SourceGuard.modifierChain(after: "Text(headline)", in: code)
+        XCTAssertTrue(headline.contains(".monospacedDigit()"), "少切了自己的修饰符：\(headline)")
+        XCTAssertFalse(headline.contains("Text(hint)"), "切过了头，吃进了下一个元素：\(headline)")
+
+        let hint = try SourceGuard.modifierChain(after: "Text(hint)", in: code)
+        XCTAssertFalse(hint.contains(".monospacedDigit()"),
+                       "把上一个元素的修饰符算到了这一段头上——那正是要消灭的那种空转：\(hint)")
+        XCTAssertTrue(hint.contains(".fixedSize(horizontal: false, vertical: true)"),
+                      "带参数、参数里还带括号的修饰符没吃进来：\(hint)")
+        XCTAssertFalse(hint.contains("Button("), "切过了头，吃进了下一个元素：\(hint)")
+    }
+
+    /// 参数里带括号、带字符串的修饰符不许把链子截断。
+    func testAModifierChainHandlesNestedParensAndStringLiterals() throws {
+        let code = """
+        Text(WeeklyGoalEditor.label(for: settings.weeklyGoal))
+            .accessibilityLabel(Text("每周目标（次）"))
+            .monospacedDigit()
+        Text("别的")
+        """
+        let chain = try SourceGuard.modifierChain(
+            after: "Text(WeeklyGoalEditor.label(for: settings.weeklyGoal))", in: code)
+        XCTAssertTrue(chain.contains(".monospacedDigit()"),
+                      "上一个修饰符参数里的括号/引号把链子截断了：\(chain)")
+        XCTAssertFalse(chain.contains("Text(\"别的\")"), "切过了头：\(chain)")
+    }
+
+    /// **匹配不到一处就抛错，绝不猜。** 猜错等于这条断言在检查另一个元素——
+    /// 那比没有断言更坏，因为它看起来还在守着。
+    func testAModifierChainRefusesToGuessWhenTheMarkerIsNotUnique() {
+        let twice = """
+        Text(path).textSelection(.enabled)
+        Text(path).font(Typography.body)
+        """
+        XCTAssertThrowsError(try SourceGuard.modifierChain(after: "Text(path)", in: twice)) {
+            XCTAssertTrue("\($0)".contains("2 处"), "\($0)")
+        }
+        XCTAssertThrowsError(
+            try SourceGuard.modifierChain(after: "Text(gone)", in: "Text(path)"))
+    }
+
     // MARK: - 视图成员：切段与「从 body 走得到吗」
 
     /// **切段必须切到那个成员自己的大括号上。**

@@ -760,6 +760,46 @@ final class AppStateTests: XCTestCase {
                           + "录音会永远是空的，而所有拿假录音器写的测试都照样全绿。")
     }
 
+    // MARK: - 设置窗口里拨的录音开关必须让主窗口重读（Task 16 复审 2026-08-08）
+
+    /// **走生产那条路：`app.makeRecordingSettingsViewModel()`。**
+    ///
+    /// 这根线（`onChange: { app.reload() }`）此前只有
+    /// `RecordingSettingsViewModelTests.testTurningRecordingOnTellsTheMainWindowToRefresh`
+    /// 在「守」，而那条自己 new 了一台视图模型、自己把 `{ app.reload() }` 传了进去：
+    /// 它证明的是「只要接上这根线，reload 就会发生」，证明不了**生产路径真的接了**。
+    /// 实测（2026-08-08）：把工厂里 `onChange:` 那一整行删掉——那个参数有默认值 `{}`，
+    /// 编译照过——`swift test` 1670 条一条不红。这条测试补的就是那个缺口。
+    ///
+    /// 少了这根线的后果：用户在设置窗口开了录音、转身开练，主窗口手上那份 `state`
+    /// 还是旧的，`makePracticeRunner()` 交给录音器的快照按「关」算，
+    /// 练完一秒录音都没有，而且没有任何报错。
+    ///
+    /// 权限查询注入假的：`swift test` 跑的是没有 bundle id、没有 Info.plist 的命令行进程，
+    /// 不许构造 `SystemMicrophoneAuthorizer`（Phase 5 Global Constraints、铁律 5）。
+    func testTheRecordingSettingsViewModelFromTheAppTellsTheMainWindowToRefresh() async throws {
+        let app = AppState(directory: directory, preflight: { .init(ok: true, messages: []) })
+        let viewModel = app.makeRecordingSettingsViewModel(
+            authorizer: FakeMicrophoneAuthorizer(current: .granted))
+        XCTAssertFalse(app.state.settings.recordingEnabled, "前提没成立：录音开关默认就该是关的")
+
+        await viewModel.setEnabled(true)
+
+        // 前两条只是把「开关这一格自己确实开成了、也确实落了盘」摆清楚，
+        // 免得下面那条因为别的原因红了却被读成「少了 onChange」。
+        XCTAssertTrue(viewModel.enabled, "前提没成立：这一格自己都没开起来")
+        XCTAssertTrue(try StateStore(directory: directory).load().settings.recordingEnabled,
+                      "前提没成立：这一格自己那份 StateStore 都没把开关写进 state.json")
+        // ↓ 这一条才是这条测试的牙齿：工厂上那句 `onChange: { app.reload() }` 被删掉时，
+        //   上面两条照样绿，只有它会红。
+        XCTAssertTrue(app.state.settings.recordingEnabled,
+                      "在设置窗口开了录音，主窗口这份 AppState 还是旧的——"
+                          + "`AppState.makeRecordingSettingsViewModel()` 上那句 "
+                          + "`onChange: { app.reload() }` 没了。"
+                          + "下一步：把它接回去；不然用户转身开练，"
+                          + "交给录音器的快照仍按「关」算，练完一秒录音都没有且不报错。")
+    }
+
     // MARK: - 学习计划页要能写训练数据（Phase 8 Task 9）
 
     /// **这条钉的是「改了、真的存下来了、页面上也跟着变了」三件事。**

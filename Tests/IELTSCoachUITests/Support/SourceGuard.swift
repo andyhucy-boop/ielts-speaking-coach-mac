@@ -437,6 +437,92 @@ enum SourceGuard {
         return try memberBody(of: marker, in: code)
     }
 
+    /// 切出**某一个视图元素自己那条修饰符链**：`marker` 那一段，加上紧跟在它后面的
+    /// 每一个 `.修饰符(…)`，到这条链子结束为止。
+    ///
+    /// ## 为什么要有它
+    ///
+    /// `.monospacedDigit()`、`.textSelection(.enabled)` 这类修饰符，一张卡片里往往有好几处。
+    /// 对整张卡片问 `contains` 的话，删掉其中一处照样是绿的——**而被删掉的那一处
+    /// 恰恰是断言的失败信息逐字点名的那一行**。2026-08-08 复审两次实测：
+    ///
+    /// - 删掉设置窗口目标数字那句 `.monospacedDigit()`（另一处在下面的提示行上）→ 1671 条全绿；
+    /// - 删掉数据目录路径那句 `.textSelection(.enabled)`（另一处在占用那行上）→ 1671 条全绿。
+    ///
+    /// 后果分别是「从每周 9 次按到 10 次时整行横向抖」和「那条路径选不中，
+    /// 用户只能照着屏幕手抄」——两件事都还在被一条看起来在守它的断言「守着」。
+    ///
+    /// **匹配到不是一处就抛错**，理由与 `functionBody(named:)` 相同：切哪一处只能靠猜，
+    /// 猜错就等于这条断言在检查另一个元素。范围太大时先用 `memberBody` 把那一个成员切出来。
+    ///
+    /// ## 边界
+    ///
+    /// 只按写法往后吃 `.名字` 与 `.名字(…)`，遇到第一个不是修饰符的记号就停。
+    /// 换行、空行、已被 `stripLineComments` 掏空的注释行都跨得过去；
+    /// 尾随闭包（`.overlay { … }`）不认——那种写法后面挂的修饰符会被漏掉，
+    /// 界面模块里目前没有「尾随闭包之后还挂着要断言的修饰符」的地方。
+    static func modifierChain(after marker: String, in code: String) throws -> String {
+        let count = occurrences(of: marker, in: code)
+        guard count == 1, let range = code.range(of: marker) else {
+            throw Failure.memberNotFound(
+                name: marker,
+                hint: count == 0
+                    ? "下一步：这一段的写法改了就同步改这里的 marker；整段被删掉的话，"
+                        + "先想清楚它画的东西现在由谁负责。"
+                    : "在这段代码里出现了 \(count) 处，切哪一处只能靠猜——"
+                        + "猜错就等于这条断言在检查另一个元素。"
+                        + "下一步：先用 `memberBody` 把范围切到那一个成员上，"
+                        + "或换一个能唯一定位的 marker。")
+        }
+        var cursor = range.upperBound
+        while let next = modifierEnd(from: cursor, in: code) { cursor = next }
+        return String(code[range.lowerBound..<cursor])
+    }
+
+    /// 从 `start` 起跳过空白；紧接着是一个 `.修饰符` 或 `.修饰符(…)` 的话，
+    /// 返回它结束的位置，否则 nil（链子到此为止）。
+    private static func modifierEnd(from start: String.Index,
+                                    in code: String) -> String.Index? {
+        var index = start
+        while index < code.endIndex, code[index].isWhitespace { index = code.index(after: index) }
+        guard index < code.endIndex, code[index] == "." else { return nil }
+        var after = code.index(after: index)
+        guard after < code.endIndex, isIdentifierCharacter(code[after]) else { return nil }
+        while after < code.endIndex, isIdentifierCharacter(code[after]) {
+            after = code.index(after: after)
+        }
+        var probe = after
+        while probe < code.endIndex, code[probe] == " " { probe = code.index(after: probe) }
+        guard probe < code.endIndex, code[probe] == "(" else { return after }
+        guard let close = closingParen(from: probe, in: code) else { return nil }
+        return code.index(after: close)
+    }
+
+    /// 从 `open`（必须指着一个 `(`）找到配对的 `)`。括号计数，跳过字符串字面量。
+    private static func closingParen(from open: String.Index, in code: String) -> String.Index? {
+        var depth = 0
+        var inString = false
+        var escaped = false
+        var index = open
+        while index < code.endIndex {
+            let character = code[index]
+            if escaped {
+                escaped = false
+            } else if inString {
+                if character == "\\" { escaped = true } else if character == "\"" { inString = false }
+            } else if character == "\"" {
+                inString = true
+            } else if character == "(" {
+                depth += 1
+            } else if character == ")" {
+                depth -= 1
+                if depth == 0 { return index }
+            }
+            index = code.index(after: index)
+        }
+        return nil
+    }
+
     /// 从 `start` 往后找第一个 `{`，返回它与配对 `}` 之间的内容。找不到返回 nil。
     static func balancedBody(after start: String.Index, in source: String) -> String? {
         balancedBodyRange(after: start, in: source).map { String(source[$0]) }
