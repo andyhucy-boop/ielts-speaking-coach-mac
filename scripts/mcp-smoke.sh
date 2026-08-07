@@ -85,7 +85,19 @@ else
     echo "   下一步：想补上这项检查，装好 Xcode 命令行工具后重跑本脚本。"
 fi
 
-# 日志必须走 stderr，而且必须真的有——一句都没有说明启动信息也被吞了。
-grep -q "ielts-speaking-mcp" "$WORK/err.log" || fail "stderr 里没有启动日志。下一步：在 main.swift 启动时往 stderr 写一行含版本与数据目录的日志，出问题时它是唯一的线索。"
+# 日志必须走 stderr，而且**启动那一行**必须真的有。
+# 认准启动行自己的特征，不要只 grep 可执行文件名：退出日志「stdin 已关闭，ielts-speaking-mcp 退出。」
+# 里也有那个名字，只 grep 名字的话，把启动日志整行删掉这条断言照样是绿的（半空转）。
+startup_log="$(grep '已启动' "$WORK/err.log" || true)"
+[ -n "$startup_log" ] || fail "stderr 里没有启动日志（找不到含「已启动」的那一行）。下一步：在 main.swift 启动时往 stderr 写一行含版本与数据目录的日志，出问题时它是唯一的线索。"
+
+# 版本号：真机上「Codex 用的是哪个版本的服务器」只能靠它回答。不写死具体版本，只要求形如 x.y.z。
+printf '%s' "$startup_log" | grep -Eq '[0-9]+\.[0-9]+\.[0-9]+' \
+    || fail "启动日志里没有版本号，实际是：$startup_log。下一步：在 main.swift 的启动日志里带上 MCPServer.serverVersion。"
+
+# 数据目录：写错目录时（比如没读环境变量、回退到了用户真实的 Application Support），
+# 这一行是唯一能看出来的线索，所以必须校验它等于本次真正生效的目录。
+printf '%s' "$startup_log" | grep -qF "$IELTS_SPEAKING_DATA_DIR" \
+    || fail "启动日志里的数据目录不是本次指定的 $IELTS_SPEAKING_DATA_DIR，实际是：$startup_log。下一步：确认 main.swift 打印的是 DataDirectory.resolve() 解析出来的 root 路径，而不是写死的路径。"
 
 echo "✅ MCP stdio 冒烟测试通过：5 条响应、7 个工具齐全、坏消息之后仍存活、读到 EOF 自行退出、stdout 干净。"
