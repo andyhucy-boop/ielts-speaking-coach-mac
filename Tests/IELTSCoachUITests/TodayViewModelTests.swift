@@ -216,6 +216,76 @@ final class TodayViewModelTests: XCTestCase {
                       "目标得真的进到发给 ChatGPT 的提示词里，不能只存在界面上")
     }
 
+    // MARK: - 复训卡片上那句「这个目标出自哪一次练习」（Task 10）
+
+    /// **卡片上说的那一次，必须就是解析器真的要重练的那一次。**
+    ///
+    /// 这里有两套「挑哪个目标」的说法，而且它们经常不一致：
+    ///
+    /// - `TodayViewModel.liveTarget` 取的是**最后记下**的那个没退休的目标；
+    /// - `PracticeRouteResolver.resolveRetrain` 走的是 `RetrainingPolicy.rank(targets:issues:)`
+    ///   的第一个——证据命中高频错题的排前面。
+    ///
+    /// 卡片按前者显示、点下去按后者开练的话，用户看着「补一个原因和例子」点开始，
+    /// 练的却是另一个毛病，而屏幕上没有任何异样。所以 `retrainOrigin` 必须跟着 `rank` 走。
+    func testTheRetrainOriginPointsAtTheTargetTheResolverWillActuallyPractice() {
+        // 两个都没退休的目标：t-ranked 的证据命中一条犯过 5 场的老毛病，权重高；
+        // t-latest 后记下、但一条证据都没有，权重 0。
+        // 于是 rank 挑第一个，而「最后记下的」是第二个——两套说法在这份数据上分道扬镳。
+        var s = state(plan: nil, questions: [question("a"), question("b")],
+                      sessions: [practiceSession("s-ranked", startedAt: "2026-08-01T10:00:00Z"),
+                                 practiceSession("s-latest", startedAt: "2026-08-05T10:00:00Z")])
+        s.sessions[0].questionId = "a"
+        s.sessions[1].questionId = "b"
+        s.issues = [IssueRecord(id: "i1", learnerSaid: "I like it because it is good.",
+                                correction: "", whyItMatters: "", occurrences: 5,
+                                sourceSessionIds: ["x1", "x2", "x3", "x4", "x5"],
+                                lastSeenAt: "2026-08-01T10:00:00Z")]
+        s.targets = [
+            RetrainingTarget(targetKey: "logic-example", label: "回答后补一个原因和例子",
+                             status: "new", evidence: ["I like it because it is good."],
+                             sourceSessionId: "s-ranked", createdAt: "2026-08-01T11:00:00Z"),
+            RetrainingTarget(targetKey: "fillers", label: "少说 you know", status: "new",
+                             evidence: [], sourceSessionId: "s-latest",
+                             createdAt: "2026-08-05T11:00:00Z")
+        ]
+        let vm = TodayViewModel(state: s)
+
+        // 先钉住这份数据真的能把两套说法分开，否则下面那条断言是恰好通过。
+        XCTAssertEqual(vm.liveTarget?.targetKey, "fillers",
+                       "这份数据没能让「最后记下的」和「rank 排第一的」分开，这条测试等于空转")
+
+        guard let origin = vm.retrainOrigin else {
+            return XCTFail("复训卡片查不到这个目标的出处，而解析器明明能开练")
+        }
+        XCTAssertEqual(origin.target.targetKey, "logic-example",
+                       "复训卡片指的目标不是解析器真要练的那个（`RetrainingPolicy.rank` 排第一的）。"
+                           + "用户看着一句话点开始，练的却是另一个毛病。")
+        XCTAssertEqual(origin.session.id, "s-ranked",
+                       "「出自哪一次练习」指到了别的一场，用户回去翻复盘会翻错")
+
+        // 与解析器当场对一遍：卡片上写的目标原文，就是提示词里会发出去的那一段。
+        guard case .ready(let setup) = PracticeRouteResolver.resolve(route: .retrain, state: s) else {
+            return XCTFail("这份数据下复训路线本该能开练，解析器却说不行")
+        }
+        XCTAssertEqual(setup.goal, "回答后补一个原因和例子")
+        XCTAssertEqual(origin.target.label, setup.goal,
+                       "卡片上的目标和真正发给考官的那一段对不上")
+    }
+
+    /// 目标的来源那一场被单条删掉时，卡片不许硬编一个出处。
+    /// 那时解析器本来就会返回「找不到这个目标是哪一次练习提出来的」，两边得是同一个判断。
+    func testTheRetrainOriginIsNilWhenTheSourceSessionWasDeleted() {
+        var s = state(plan: nil, questions: [question("a")],
+                      sessions: [practiceSession("s-kept", startedAt: "2026-08-05T10:00:00Z")])
+        s.sessions[0].questionId = "a"
+        s.targets = [RetrainingTarget(targetKey: "t", label: "L", status: "new", evidence: [],
+                                      sourceSessionId: "已经被删掉的那一场",
+                                      createdAt: "2026-08-01T11:00:00Z")]
+        XCTAssertNil(TodayViewModel(state: s).retrainOrigin,
+                     "来源记录已经不在了，卡片就不该指出一个查不到的出处")
+    }
+
     // MARK: - 本周进度与最近练习
 
     func testWeekProgressCountsOnlyThisWeek() {

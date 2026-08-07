@@ -82,18 +82,28 @@ public struct TodayViewModel: Sendable {
         self.stats = TrainingStats.compute(state: state, now: today, calendar: calendar)
     }
 
-    /// 计划里第一个未完成的那天的题目。
+    /// 计划里第一个未完成的那一天。
     ///
     /// **按「第一个没做完的」取，不是按日历日期取。** 用户请两天假回来，看到的应该是
     /// 上次没做完的那天，而不是「今天是第 5 天」然后把第 3、4 天悄悄跳过去。
+    ///
+    /// 界面要它是为了显示「今天是第几天」与「这一天哪几道已经练过」——
+    /// 只列题目不说第几天的话，这一页和学习计划页对不上；不打勾的话，
+    /// 一天两题练完一题回来看，卡片和练之前一模一样。
+    ///
+    /// **`todayQuestions` 就建在它上面**，两处不许各判一次：判据一旦分家，
+    /// 卡片标题说的那一天和下面列出的那几道题就会是两天的。
+    public var planDay: PlanDay? {
+        state.plan?.days.first { !$0.isComplete && !$0.questionIds.isEmpty }
+    }
+
+    /// 计划里第一个未完成的那天的题目。
     ///
     /// 题目从题库里按 id 反查；题库里已经没有的 id 会被跳过（换季重新导入之后会出现），
     /// 全都查不到时这里返回空，「按计划练今天」那条路线随之不显示——
     /// 显示一张点开是空的卡片，比不显示更糟。
     public var todayQuestions: [Question] {
-        guard let plan = state.plan,
-              let day = plan.days.first(where: { !$0.isComplete && !$0.questionIds.isEmpty })
-        else { return [] }
+        guard let day = planDay else { return [] }
         return day.questionIds.compactMap { id in state.questions.first { $0.id == id } }
     }
 
@@ -124,6 +134,35 @@ public struct TodayViewModel: Sendable {
     /// 已经退休的目标是已经改掉的毛病，拿它复训是白练一场。
     public var liveTarget: RetrainingTarget? {
         state.targets.last { $0.status != "retired" }
+    }
+
+    /// 复训卡片上那句「这一场要盯的目标出自哪一次练习」。
+    ///
+    /// **必须跟着 `RetrainingPolicy.rank` 走，不能用 `liveTarget`。** 这一页上有两套
+    /// 「挑哪个目标」的说法，而且它们经常给出不同的答案：
+    ///
+    /// - `liveTarget` 取的是**最后记下**的那个没退休的目标；
+    /// - `PracticeRouteResolver.resolveRetrain` 走的是 `RetrainingPolicy.rank`
+    ///   的第一个——证据命中高频错题的排在前面。
+    ///
+    /// 卡片按前者显示、点下去按后者开练的话，用户看着「补一个原因和例子」点开始，
+    /// 练的却是另一个毛病，而屏幕上没有任何异样。这正是本项目最危险的那种失败形态。
+    ///
+    /// 来源那一场被单条删掉时返回 nil，与解析器同一个判断
+    /// （那时它返回「找不到这个目标是哪一次练习提出来的」）——
+    /// 卡片不许硬编一个查不到的出处。
+    public var retrainOrigin: RetrainOrigin? {
+        guard let target = RetrainingPolicy.rank(targets: state.targets,
+                                                 issues: state.issues).first,
+              let session = state.sessions.first(where: { $0.id == target.sourceSessionId })
+        else { return nil }
+        return RetrainOrigin(target: target, session: session)
+    }
+
+    /// 一个待复训的目标，连同它是哪一次练习的复盘提出来的。
+    public struct RetrainOrigin: Sendable {
+        public let target: RetrainingTarget
+        public let session: PracticeSession
     }
 
     /// 这条路线上已经定下来的那道题。**nil 表示这道题得由用户当场自己挑。**

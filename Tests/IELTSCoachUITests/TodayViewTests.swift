@@ -46,15 +46,244 @@ final class TodayViewTests: XCTestCase {
         }
     }
 
-    /// 一场练习的设置（哪道题、哪个 Part、带什么目标）必须来自 `TodayViewModel`，
-    /// 而不是在视图里现拼。视图里拼的那份没有任何测试管得住——
-    /// `TodayViewModelTests` 里那几条 `practiceSetup` 的断言会当场退化成空转。
-    func testTheSetupHandedToTheRunnerComesFromTheViewModel() throws {
+    /// 一场练习的设置（哪道题、哪个 Part、带什么目标、什么时候给反馈、Part 2 怎么准备）
+    /// 必须来自 `PracticeRouteResolver`，而不是在视图里现拼。
+    ///
+    /// **Task 10 把这里从 `TodayViewModel.practiceSetup` 换成了解析器**，不是换个花样：
+    /// `TodayViewModel.practiceSetup` 只填 Part、时长、目标三样，`feedbackTiming` 与
+    /// `part2PrepMode` 走的是 `SessionSetup` 的参数默认值——也就是说用户在学习计划页
+    /// 把「反馈时机」改成「当场点出」之后，从这一页开的每一场仍然是全程零反馈，
+    /// 而界面上一个字都不会提。解析器从 `RouteDefaults(settings:)` 取这两项，
+    /// 27 条 `PracticeRouteResolverTests` 守着它。
+    func testTheSetupHandedToTheRunnerComesFromTheResolver() throws {
         let code = try Self.todayViewCode()
         XCTAssertTrue(
-            code.contains("model.practiceSetup(") || code.contains(".practiceSetup("),
-            "视图自己拼了 SessionSetup。下一步：改成调 `TodayViewModel.practiceSetup(question:route:)`，"
-                + "那样 Part、时长、目标这三样才有测试守着。")
+            code.contains("PracticeRouteResolver.resolve("),
+            "这一页没有把「练哪道题、按什么设置练」交给 `PracticeRouteResolver.resolve(…)`。"
+                + "下一步：每一条路线的点击都走解析器，那样用户设的反馈时机与 Part 2 准备方式"
+                + "才会真的进到这一场里。")
+        XCTAssertFalse(
+            code.contains("SessionSetup("),
+            "视图自己拼了 `SessionSetup`。视图里拼的那一份没有任何测试管得住，"
+                + "而且一定会漏掉 `feedbackTiming` / `part2PrepMode`——用户改了练习偏好，"
+                + "从这一页开的练习照旧，界面上还什么都不说。"
+                + "下一步：改成用 `PracticeRouteResolver.resolve(…)` 返回的那一份。")
+        XCTAssertFalse(
+            code.contains("model.practiceSetup("),
+            "这一页还在用 `TodayViewModel.practiceSetup(question:route:)`。它不带 "
+                + "`feedbackTiming` / `part2PrepMode`，用户在学习计划页设的练习偏好会被静默丢掉。"
+                + "下一步：改成 `PracticeRouteResolver.resolve(…)`。")
+    }
+
+    // MARK: - 四条路线：显示出来的每一条，点下去一定能开练（Task 10）
+
+    /// **这一条是 Task 10 的交付判据。**
+    ///
+    /// Phase 3 的 `TodayViewModel.availableRoutes` 判的是「前提成立」——有计划、有记录、
+    /// 有没退休的目标。而前提成立不等于开得了练：计划里今天那道题可能已经被换季导入删掉、
+    /// 复训目标的来源记录可能被单条删过、上次那道题可能已经不在题库里。
+    /// 那几种情况下卡片照样显示，点下去什么也不发生——用户会以为程序坏了，
+    /// 而这一页是他每天打开的第一眼。
+    ///
+    /// `PracticeRouteResolver.availableRoutes` 用的是**解析同一条路线的那段代码**，
+    /// `PracticeRouteResolverTests.testEveryShownRouteCanActuallyStart` 钉着这条不变量。
+    func testTheRouteListComesFromTheResolverNotFromThePhase3Preconditions() throws {
+        let code = try Self.todayViewCode()
+
+        XCTAssertTrue(
+            code.contains("PracticeRouteResolver.availableRoutes("),
+            "路线列表不是从 `PracticeRouteResolver.availableRoutes(state:preferring:defaults:)` 来的。"
+                + "下一步：换成解析器——只有它能保证「显示出来的每一条都点得动」。")
+        XCTAssertFalse(
+            code.contains("model.availableRoutes"),
+            "这一页还在用 Phase 3 的 `TodayViewModel.availableRoutes` 排路线。那只判「前提成立」，"
+                + "而前提成立不等于开得了练（今天那道题可能已被换季导入删掉、复训目标的来源记录"
+                + "可能被删过）。显示一条点了没用的路线，比不显示更糟。"
+                + "下一步：全部改走 `PracticeRouteResolver.availableRoutes(…)`。")
+        XCTAssertTrue(
+            code.contains("PracticeRoutePreference.route(fromSettings:"),
+            "默认路线不是从设置里读的，那用户在学习计划页选的「默认练习路线」就白设了——"
+                + "他改完之后这一页的卡片顺序纹丝不动，也没有任何解释。"
+                + "下一步：用 `PracticeRoutePreference.route(fromSettings: app.state.settings.defaultRoute)`。")
+        XCTAssertTrue(
+            code.contains("RouteDefaults(settings:"),
+            "解析路线时没有把用户的练习偏好传进去。那样「当场点出」「自己决定什么时候开口」"
+                + "这两项设置对这一页开的每一场都不生效，而界面上什么都不说。"
+                + "下一步：传 `RouteDefaults(settings: app.state.settings)`。")
+    }
+
+    /// 每一条路线的点击都得先解析一次，两种结果各有各的去处。
+    ///
+    /// 只处理 `.ready` 而把 `.unavailable` 丢掉的话，那句写好的中文（发生了什么 +
+    /// 下一步做什么）一个字都不上屏，用户点下去界面纹丝不动——本项目最不能接受的那一类。
+    func testEveryCardResolvesFirstAndBothOutcomesGoSomewhere() throws {
+        let act = try SourceGuard.memberBody(of: "private func act", in: try Self.todayViewCode())
+        for (needle, why) in [
+            ("PracticeRouteResolver.resolve(", "先解析一次"),
+            ("case .ready", "解析成功时开练"),
+            ("case .unavailable", "解析不成功时把那句中文说明留在界面上")
+        ] {
+            XCTAssertTrue(act.contains(needle),
+                          "点一张路线卡片之后没有\(why)（`\(needle)`）。实际取到的是：\n\(act)")
+        }
+    }
+
+    /// **`.unavailable` 那段文字必须留在卡片下面，不能一闪而过。**
+    ///
+    /// 那段文字本身写的就是下一步该做什么（「到「学习计划」页重新生成计划，
+    /// 已经练过的进度不会丢」这种）。一闪就没了等于没说，而用户这时候正想开练。
+    func testTheUnavailableMessageStaysUnderTheCardInsteadOfFlashingBy() throws {
+        let code = try Self.todayViewCode()
+
+        // 存进 `@State`：存不下来的话，下一次重绘就没了。
+        XCTAssertGreaterThanOrEqual(
+            SourceGuard.occurrences(of: "blockedRoutes", in: code), 3,
+            "「这条路线为什么开不了」没有被记在页面状态里（至少要有：声明一次、写入一次、读出来画一次）。"
+                + "下一步：用一个 `@State` 按路线记着那句说明，并把它画在那张卡片下面。")
+
+        SourceGuard.assertRenders(
+            "blockedNotice", inBodyOf: "private func routeBlock", of: Self.viewRelativePath,
+            because: "那句「这条路线现在开不了、下一步做什么」写好了却没摆在卡片下面，"
+                + "用户点完之后界面上什么都不会变。")
+
+        let notice = try SourceGuard.memberBody(of: "private func blockedNotice", in: code)
+        XCTAssertTrue(
+            notice.contains("blockedRoutes["),
+            "那块提示画的不是刚才解析出来的那句话。实际取到的是：\n\(notice)")
+
+        for transient in ["asyncAfter", "Task.sleep", "withAnimation(.easeIn"] {
+            XCTAssertFalse(
+                code.contains(transient),
+                "这一页出现了「\(transient)」，多半是给那句说明加了自动消失。"
+                    + "那段文字写的就是下一步该做什么，一闪就没了等于没说。"
+                    + "下一步：让它一直留在卡片下面，直到这条路线真的能开练。")
+        }
+    }
+
+    /// 「按计划练今天」这张卡片要说清**今天是第几天**、今天有哪几道题、哪几道已经练过了。
+    ///
+    /// 只列题目不打勾的话，一天两题练完一题回来看，卡片和练之前一模一样——
+    /// 用户不知道自己练过了没有，只能再点一次。
+    func testThePlanTodayCardShowsWhichDayItIsAndTicksOffWhatIsAlreadyDone() throws {
+        let code = try Self.todayViewCode()
+        let detail = try SourceGuard.memberBody(of: "private var planTodayDetail", in: code)
+        XCTAssertTrue(
+            detail.contains("day.id"),
+            "卡片上没写今天是第几天。计划页说「第 5 天」，这一页什么都不说，"
+                + "用户没法把两页对上。实际取到的是：\n\(detail)")
+        XCTAssertTrue(
+            detail.contains("planQuestionRow("),
+            "今天的题目一道都没画出来，这张卡片上只剩一个动词。实际取到的是：\n\(detail)")
+
+        let row = try SourceGuard.memberBody(of: "private func planQuestionRow", in: code)
+        XCTAssertTrue(
+            row.contains("isCompleted"),
+            "题目行不分「练过的」和「没练的」。一天两题练完一题回来看，卡片和练之前一模一样，"
+                + "用户只能再点一次。实际取到的是：\n\(row)")
+        XCTAssertTrue(
+            row.contains("checkmark"),
+            "已经练过的那几道没有打勾（图标只用 SF Symbols，不用 emoji）。实际取到的是：\n\(row)")
+        XCTAssertTrue(
+            row.contains("act(.planToday"),
+            "点某一道题不会去练那一道。计划里一天排两题，用户想先练第二道就没有任何办法。"
+                + "实际取到的是：\n\(row)")
+        XCTAssertTrue(
+            row.contains("item.id"),
+            "点题目时没有把那道题的 id 传给解析器，点哪一道都练同一道。实际取到的是：\n\(row)")
+    }
+
+    /// 「继续上次练习」得说清上次练的是哪道题、什么时候练的、上次盯的是什么目标。
+    ///
+    /// 上次的目标尤其不能省：这条路线的意思就是接着上次那件事再练一遍，
+    /// 目标不显示的话，它和「随便再练一道」在用户眼里没有区别。
+    func testTheContinueLastCardShowsTheQuestionTheTimeAndLastTimesGoal() throws {
+        let detail = try SourceGuard.memberBody(of: "private var continueLastDetail",
+                                                in: try Self.todayViewCode())
+        for (needle, why) in [
+            ("recentSessions.first", "上次那一场（顺序由 `TodayViewModel.recentSessions` 定，这一页不另排）"),
+            ("topic", "那道题的话题"),
+            ("dateText(", "上次是什么时候练的"),
+            (".goal", "上次盯的那个单点目标——没有它，这条路线和随便再练一道没区别")
+        ] {
+            XCTAssertTrue(detail.contains(needle),
+                          "「继续上次练习」卡片上没有\(why)（`\(needle)`）。实际取到的是：\n\(detail)")
+        }
+    }
+
+    /// **复训卡片必须显示真正会发给考官的那段目标原文。**
+    ///
+    /// 用户得在开练之前就知道自己这一场要盯着哪件事——不显示的话，
+    /// 这条路线和普通练习在他眼里没有区别（计划 Task 10 Step 3 原话）。
+    ///
+    /// 而且**必须取解析器给出的 `setup.goal`，不能取 `TodayViewModel.liveTarget?.label`**：
+    /// 那两个挑的不是同一个目标（一个是「最后记下的」，一个是
+    /// `RetrainingPolicy.rank` 排第一的），而且 label 为空时解析器会回落成 targetKey。
+    /// 取错了，屏幕上写的和提示词里发的就是两码事。
+    func testTheRetrainCardShowsTheGoalThatWillActuallyBeSent() throws {
+        let code = try Self.todayViewCode()
+        let detail = try SourceGuard.memberBody(of: "private var retrainDetail", in: code)
+        XCTAssertTrue(
+            detail.contains("setup.goal"),
+            "复训卡片上没有这一场真正要盯的目标原文。用户开练之前不知道自己要改什么，"
+                + "这条路线就退化成了「再练一道题」。实际取到的是：\n\(detail)")
+        XCTAssertFalse(
+            detail.contains("liveTarget"),
+            "复训卡片显示的是 `TodayViewModel.liveTarget`（最后记下的那个目标），"
+                + "而解析器练的是 `RetrainingPolicy.rank` 排第一的那个——两者常常不是同一个。"
+                + "屏幕上写一句、提示词里发另一句，是本项目最危险的那种失败。"
+                + "实际取到的是：\n\(detail)")
+        XCTAssertTrue(
+            detail.contains("retrainOrigin"),
+            "卡片没说这个目标是哪一次练习提出来的。同一个毛病可能被点名过好几次，"
+                + "不说出处，用户没法回去看当时的复盘。实际取到的是：\n\(detail)")
+    }
+
+    /// 「从题库自由选题」得先说清题库里有多少题，否则这张卡片上只有一个动词。
+    func testTheFreePickCardSaysHowManyQuestionsTheBankHas() throws {
+        let detail = try SourceGuard.memberBody(of: "private var freePickDetail",
+                                                in: try Self.todayViewCode())
+        XCTAssertTrue(
+            detail.contains("app.state.questions.count"),
+            "「从题库自由选题」卡片没说题库里有多少题。实际取到的是：\n\(detail)")
+        XCTAssertTrue(
+            detail.contains(".monospacedDigit()"),
+            "题数没用等宽数字：导完一批题从「12」跳到「120」时这一行会横向抖"
+                + "（DESIGN-SYSTEM 第 6 节最后一条）。实际取到的是：\n\(detail)")
+    }
+
+    /// **整页只有一个主行动**（DESIGN-SYSTEM 第 4 节）：排在第一位的那条路线。
+    /// 两个同样醒目的紫色大块会让人不知道该点哪个。
+    func testOnlyTheFirstRouteIsThePagesSinglePrimaryAction() throws {
+        let code = try Self.todayViewCode()
+        XCTAssertEqual(
+            SourceGuard.occurrences(of: "PrimaryActionCard(", in: code), 1,
+            "这一页构造了不止一处 `PrimaryActionCard`。规范第 4 节：每页最多一个主行动，"
+                + "两块同样醒目的紫色会让人不知道该点哪个。")
+        let block = try SourceGuard.memberBody(of: "private func routeBlock", in: code)
+        for needle in ["isPrimary", "primaryCard(", "secondaryCard("] {
+            XCTAssertTrue(block.contains(needle),
+                          "路线卡片没有分出「第一张是主行动、其余次一级」（`\(needle)`）。"
+                              + "实际取到的是：\n\(block)")
+        }
+        let section = try SourceGuard.memberBody(of: "private var routes", in: code)
+        XCTAssertTrue(
+            section.contains("index == 0"),
+            "「哪一张是主行动」不是按顺序第一张定的。卡片顺序由 `availableRoutes` 决定"
+                + "（默认路线在最前），主行动必须跟着它走。实际取到的是：\n\(section)")
+    }
+
+    /// 一条路线都排不出来时不许留白。三样一个不少：说明现状、说明下一步、一颗能直接点的按钮。
+    func testWhenNoRouteCanStartThePageStillSaysWhatToDoNext() throws {
+        let code = try Self.todayViewCode()
+        SourceGuard.assertRenders(
+            "noRouteCard", inBodyOf: "private var routes", of: Self.viewRelativePath,
+            because: "一条路线都排不出来时这一段是一片空白，用户会以为程序坏了。")
+        let card = try SourceGuard.memberBody(of: "private var noRouteCard", in: code)
+        XCTAssertTrue(card.contains("下一步"),
+                      "空状态没说下一步该干什么（铁律 6）。实际取到的是：\n\(card)")
+        XCTAssertTrue(card.contains("onGo(.plan)"),
+                      "空状态那颗按钮没有把用户送到「学习计划」页——那正是排不出路线时"
+                          + "唯一能做的事（生成一份计划）。实际取到的是：\n\(card)")
     }
 
     // MARK: - 题库空时，整页只做「去导入」这一件事

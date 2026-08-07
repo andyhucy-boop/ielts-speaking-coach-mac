@@ -7,7 +7,10 @@ import SwiftUI
 ///
 /// 这一页要回答三个问题——今天练什么、这周练够了没有、上次练的是什么。
 ///
-/// **最要紧的一条：四条路线只显示前提成立的那几条**（`TodayViewModel.availableRoutes`）。
+/// **最要紧的一条：显示出来的每一条路线，点下去一定能开练。**
+/// 排路线与解析路线走的是同一段代码（`PracticeRouteResolver`），不是两处各判一次——
+/// Phase 3 的前提判断只问「有没有计划 / 有没有记录 / 有没有目标」，而前提成立不等于
+/// 开得了练：今天那道题可能已被换季导入删掉、复训目标的来源记录可能被单条删过。
 /// 显示一条点了没用的路线，比不显示更糟：用户点下去什么也不发生，会以为程序坏了。
 ///
 /// 版式全部走 Task 7 的组件与令牌（`CoachCard` / `PrimaryActionCard` / `SectionHeader` /
@@ -32,7 +35,39 @@ struct TodayView: View {
     /// 上一版这里弹的是一张写着 `swift run coach practice <id>` 的卡片。
     @State private var launch: PracticeLaunch?
 
+    /// 每条路线上一次「点了却开不了」时，解析器给出的那句中文说明。
+    ///
+    /// **必须存在页面状态里，不能一闪而过**：那段文字本身写的就是下一步该做什么
+    /// （「到「学习计划」页重新生成计划，已经练过的进度不会丢」这一类），
+    /// 一闪就没了等于没说，而用户这时候正想开练。
+    ///
+    /// 按路线分开存：三张卡片同时挂着各自的说明是正常的，共用一处会互相盖掉。
+    @State private var blockedRoutes: [PracticeRoute: String] = [:]
+
     private var model: TodayViewModel { TodayViewModel(state: app.state) }
+
+    /// 开一场练习要用的那两项用户偏好（考官何时给反馈、Part 2 的一分钟怎么处理）。
+    ///
+    /// **不能省。** 省掉的话 `SessionSetup` 会走参数默认值，于是用户在学习计划页
+    /// 把「反馈时机」改成「当场点出」之后，从这一页开的每一场仍然是全程零反馈，
+    /// 而界面上一个字都不会提——界面显示的状态和真实行为对不上（铁律 7）。
+    private var defaults: RouteDefaults { RouteDefaults(settings: app.state.settings) }
+
+    /// 用户在学习计划页选的默认练习路线。它决定卡片的顺序，也就决定哪一张是主行动。
+    private var preferredRoute: PracticeRoute {
+        PracticeRoutePreference.route(fromSettings: app.state.settings.defaultRoute)
+    }
+
+    /// 这一页现在真的能开练的那几条路线，默认路线排在最前面。
+    ///
+    /// **走解析器而不是 `TodayViewModel.availableRoutes`**：后者只判前提成立，
+    /// 而 `PracticeRouteResolver.availableRoutes` 是拿解析同一条路线的那段代码试着解一遍，
+    /// 解得出来才收进列表——这是「显示出来的每一条都点得动」唯一守得住的做法
+    /// （`PracticeRouteResolverTests.testEveryShownRouteCanActuallyStart` 钉着这条不变量）。
+    private var availableRoutes: [PracticeRoute] {
+        PracticeRouteResolver.availableRoutes(state: app.state,
+                                              preferring: preferredRoute, defaults: defaults)
+    }
 
     var body: some View {
         ScrollView {
@@ -77,24 +112,54 @@ struct TodayView: View {
                           route: launch.route,
                           preselected: launch.preselected,
                           candidates: model.pickableQuestions,
-                          makeSetup: { model.practiceSetup(question: $0, route: launch.route) },
+                          // 在弹层里当场挑的那道题同样走解析器的取值，不在这里另拼一份：
+                          // 另拼的那份一定会漏掉 feedbackTiming / part2PrepMode，
+                          // 于是「自由选题」这条路线成了唯一不听用户练习偏好的一条。
+                          makeSetup: {
+                              PracticeRouteResolver.setup(for: $0, goal: "", defaults: defaults)
+                          },
                           onClose: { self.launch = nil })
         }
     }
 
-    /// 点这条路线上那颗按钮之后干什么。
+    /// 点这条路线（或路线里某一道题）之后干什么。
     ///
     /// **「复训一个旧问题」不在这一页开练**：复训要先挑目标、回看证据、撤掉提示，
     /// 之后才开口（Phase 6 的三步流程）。在这里直接弹练习 sheet 的话，那一场既不带单点目标、
     /// 也不会挂进复训台账——用户以为自己在复训，其实只是又练了一道题，而且看不出任何异样。
-    private func act(_ route: PracticeRoute) {
+    ///
+    /// 其余三条一律**先解析一次**，两种结果各有各的去处：解得出来就开练，
+    /// 解不出来就把解析器那句中文留在这张卡片下面。只处理 `.ready`、把 `.unavailable`
+    /// 丢掉的话，用户点下去界面纹丝不动——本项目最不能接受的那一类。
+    ///
+    /// - Parameter questionID: 用户在今日题目列表里点的那一道；nil 表示由解析器决定
+    ///   （「按计划练今天」自动挑今天第一道没练的）。
+    private func act(_ route: PracticeRoute, questionID: String? = nil) {
         guard route != .retrain else {
             // 不预先选目标：复训中心按 `RetrainingPolicy.rank` 排的第一条就是最该练的那个，
             // 这一页再挑一次只会给出第二套说法。
             app.navigation.openRetrainingCenter(preselecting: nil)
             return
         }
-        startPractice(route)
+        // 「从题库自由选题」的题目本来就要用户当场挑。还没挑时解析器会说「还没选题。
+        // 下一步：先在题目列表里点一道题」——那句话在这里不是故障而是流程的下一步，
+        // 而且这张卡片上根本没有题目列表，摆出来等于把用户指向一个不存在的地方（铁律 6）。
+        // 所以直接开挑题弹层，题目在那儿选。
+        guard route != .freePick || questionID != nil else {
+            blockedRoutes[route] = nil
+            startPractice(route, setup: nil)
+            return
+        }
+        switch PracticeRouteResolver.resolve(route: route, state: app.state,
+                                             selectedQuestionID: questionID, defaults: defaults) {
+        case .ready(let setup):
+            // 上一次挡住这条路线的那句话要清掉，否则开练之后它还挂在卡片下面，
+            // 用户会以为这一场没真的开起来。
+            blockedRoutes[route] = nil
+            startPractice(route, setup: setup)
+        case .unavailable(let message):
+            blockedRoutes[route] = message
+        }
     }
 
     /// 这条路线的按钮上写什么。**「复训一个旧问题」不能也叫「开始练习」**：
@@ -105,12 +170,11 @@ struct TodayView: View {
 
     /// 开一场新的练习。**每一场都新造一台驱动器**：它带着「这一场是哪道题」的状态，
     /// 复用同一台会让上一场的残留影响下一场。
-    private func startPractice(_ route: PracticeRoute) {
-        launch = PracticeLaunch(
-            route: route,
-            preselected: model.plannedQuestion(for: route)
-                .map { model.practiceSetup(question: $0, route: route) },
-            runner: app.makePracticeRunner())
+    ///
+    /// - Parameter setup: 已经解析定下来的这一场；nil 表示题目要在 sheet 里当场挑
+    ///   （「从题库自由选题」）。
+    private func startPractice(_ route: PracticeRoute, setup: SessionSetup?) {
+        launch = PracticeLaunch(route: route, preselected: setup, runner: app.makePracticeRunner())
     }
 
     // MARK: - 顶部：问候与日期
@@ -238,19 +302,37 @@ struct TodayView: View {
     // MARK: - 今天练什么：四条路线只显示有意义的
 
     private var routes: some View {
-        let available = model.availableRoutes
+        let available = availableRoutes
         return VStack(alignment: .leading, spacing: Spacing.md) {
             SectionHeader(number: 2, label: "PRACTICE ROUTES", title: "今天练什么？")
-            if let primary = available.first {
-                // 排在第一位的那条是这一页唯一的主行动（规范第 4 节：每页最多一个）。
-                // 其余用 `CoachCard` + 次一级按钮——两个同样醒目的紫色大块会让人不知道该点哪个。
-                primaryCard(primary)
-                ForEach(Array(available.dropFirst())) { route in
-                    secondaryCard(route)
-                }
-            } else {
+            if available.isEmpty {
                 noRouteCard
+            } else {
+                // 顺序原样来自解析器（默认路线在最前），这一页不再排一次。
+                // **排在第一位的那条是这一页唯一的主行动**（规范第 4 节：每页最多一个），
+                // 所以「哪一张是主行动」只能按顺序第一张定，不能另挑一条——
+                // 另挑的话，用户在学习计划页改了默认路线，最醒目的那块却纹丝不动。
+                ForEach(Array(available.enumerated()), id: \.element) { index, route in
+                    routeBlock(route, isPrimary: index == 0)
+                }
             }
+        }
+    }
+
+    /// 一条路线在页面上占的那一块：卡片本身 + 它下面那句「刚才为什么开不了」。
+    ///
+    /// 两样必须绑在一起画。说明单独摆在别处的话，三张卡片各自的失败原因就分不清是谁的了。
+    @ViewBuilder
+    private func routeBlock(_ route: PracticeRoute, isPrimary: Bool) -> some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            if isPrimary {
+                primaryCard(route)
+            } else {
+                // 次一级用 `CoachCard` + 次一级按钮——两个同样醒目的紫色大块
+                // 会让人不知道该点哪个。
+                secondaryCard(route)
+            }
+            blockedNotice(route)
         }
     }
 
@@ -282,6 +364,31 @@ struct TodayView: View {
         }
     }
 
+    /// 这条路线刚才点下去为什么没开起来。
+    ///
+    /// **那段文字要一直留在卡片下面，直到这条路线真的能开练。** 它本身写的就是
+    /// 下一步该做什么（「到「学习计划」页重新生成计划，已经练过的进度不会丢」这一类），
+    /// 做成几秒后自动消失的浮层等于没说，而用户这时候正想开练。
+    ///
+    /// 文字可选中：用户要把这句话复制去核对题目 id 或者反馈给开发者。
+    @ViewBuilder
+    private func blockedNotice(_ route: PracticeRoute) -> some View {
+        if let message = blockedRoutes[route] {
+            CoachCard {
+                Label {
+                    Text(message)
+                        .font(Typography.secondary)
+                        .foregroundStyle(Palette.textPrimary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundStyle(Palette.warning)
+                }
+            }
+        }
+    }
+
     /// 每条路线卡片里那几行「具体是什么」。
     ///
     /// 没有这几行，四张卡片就只剩四个动词，用户点之前不知道会练到什么。
@@ -289,47 +396,142 @@ struct TodayView: View {
     @ViewBuilder
     private func routeDetail(_ route: PracticeRoute) -> some View {
         switch route {
-        case .planToday:
-            VStack(alignment: .leading, spacing: Spacing.xs) {
-                // 用下标而不是 `\.id` 做身份：题库正常情况下 id 唯一，但用户手工编辑过
-                // state.json 之后未必如此，而 ForEach 遇到重复 id 会错乱地复用行。
-                ForEach(Array(model.todayQuestions.enumerated()), id: \.offset) { _, question in
-                    Text("Part \(question.part) · \(promptText(question))")
-                        .font(Typography.body)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-        case .continueLast:
-            if let last = model.recentSessions.first {
-                Text("上次练的：\(questionText(last))")
-                    .font(Typography.body)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        case .retrain:
-            if let target = model.liveTarget {
-                Text("上次复盘留下的目标：\(target.label)")
-                    .font(Typography.body)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        case .freePick:
-            EmptyView()
+        case .planToday: planTodayDetail
+        case .freePick: freePickDetail
+        case .continueLast: continueLastDetail
+        case .retrain: retrainDetail
         }
     }
 
-    /// 题库有题、却一条路线都排不出来。**按现在的规则走不到这里**
-    /// （题库非空就至少有「从题库自由选题」），留着是因为 `availableRoutes` 的规则以后会改，
+    /// 「按计划练今天」：今天是第几天、今天有哪几道题、哪几道已经练过了。
+    ///
+    /// **第几天不能省**：学习计划页说「第 5 天」，这一页什么都不说的话，
+    /// 用户没法把两页对上，也不知道自己落下了几天。
+    @ViewBuilder
+    private var planTodayDetail: some View {
+        if let day = model.planDay {
+            VStack(alignment: .leading, spacing: Spacing.xs) {
+                // 等宽数字：从第 9 天跳到第 10 天时这一行不许横向抖（规范第 6 节最后一条）。
+                Text("计划的第 \(day.id) 天，共 \(day.questionIds.count) 道题，"
+                     + "已经练完 \(day.completedQuestionIds.count) 道。")
+                    .font(Typography.secondary)
+                    .monospacedDigit()
+                    .fixedSize(horizontal: false, vertical: true)
+                // 用下标而不是 `\.id` 做身份：题库正常情况下 id 唯一，但用户手工编辑过
+                // state.json 之后未必如此，而 ForEach 遇到重复 id 会错乱地复用行。
+                ForEach(Array(model.todayQuestions.enumerated()), id: \.offset) { _, question in
+                    planQuestionRow(question,
+                                    isCompleted: day.completedQuestionIds.contains(question.id))
+                }
+            }
+        }
+    }
+
+    /// 今天要练的一道题。**整行可点，点哪一道就练哪一道。**
+    ///
+    /// 计划里一天排两题，不能点的话，用户想先练第二道就没有任何办法——
+    /// 点整张卡片走的是「今天第一道没练的」。
+    ///
+    /// **练过的必须打勾**：一天两题练完一题回来看，卡片和练之前一模一样的话，
+    /// 用户不知道自己练过了没有，只能再点一次。图标只用 SF Symbols，不用 emoji（规范第 4 节）。
+    private func planQuestionRow(_ item: Question, isCompleted: Bool) -> some View {
+        Button {
+            act(.planToday, questionID: item.id)
+        } label: {
+            HStack(alignment: .top, spacing: Spacing.sm) {
+                Image(systemName: isCompleted ? "checkmark.circle.fill" : "circle")
+                Text("Part \(item.part) · \(promptText(item))")
+                    .font(Typography.body)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(isCompleted
+                            ? "已经练过：Part \(item.part) \(promptText(item))"
+                            : "还没练：Part \(item.part) \(promptText(item))")
+    }
+
+    /// 「从题库自由选题」：先说清题库里有多少题，否则这张卡片上只剩一个动词。
+    private var freePickDetail: some View {
+        // 等宽数字：导完一批题从「12」跳到「120」时这一行不许横向抖（规范第 6 节最后一条）。
+        Text("题库里现在有 \(app.state.questions.count) 道题。"
+             + "点右边那颗按钮之后先挑一道，挑好才会开始。")
+            .font(Typography.body)
+            .monospacedDigit()
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// 「继续上次练习」：上次练的哪道题、什么时候练的、上次盯的是什么目标。
+    ///
+    /// **上次的目标不能省**：这条路线的意思就是接着上次那件事再练一遍
+    /// （解析器会把它一并带进这一场），不显示的话，它和「随便再练一道」在用户眼里没有区别。
+    @ViewBuilder
+    private var continueLastDetail: some View {
+        if let last = model.recentSessions.first {
+            VStack(alignment: .leading, spacing: Spacing.xs) {
+                Text("上次练的：\(topicText(last)) · \(questionText(last))")
+                    .font(Typography.body)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("练的时间：\(dateText(last.startedAt))")
+                    .font(Typography.secondary)
+                    .monospacedDigit()
+                if !last.goal.isEmpty {
+                    Text("上次盯的目标：\(last.goal)")
+                        .font(Typography.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    /// 「复训一个旧问题」：这一场要盯的目标原文，以及它出自哪一次练习。
+    ///
+    /// **目标原文取的是解析器算出来的 `setup.goal`，不是 `TodayViewModel.liveTarget?.label`。**
+    /// 那两个挑的不是同一个目标（一个是「最后记下的」，一个是 `RetrainingPolicy.rank`
+    /// 排第一的），而且 label 是空白时解析器会回落成 targetKey。取错了，
+    /// 屏幕上写的和提示词里发的就是两码事，而界面上看不出任何异样。
+    ///
+    /// 不显示目标的话，这条路线和普通练习在用户眼里没有区别——他开练之前不知道自己要改什么。
+    @ViewBuilder
+    private var retrainDetail: some View {
+        if case .ready(let setup) = PracticeRouteResolver.resolve(route: .retrain,
+                                                                  state: app.state,
+                                                                  defaults: defaults),
+           let origin = model.retrainOrigin {
+            VStack(alignment: .leading, spacing: Spacing.xs) {
+                Text("排在最前面的目标：\(setup.goal)")
+                    .font(Typography.body)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("它出自 \(dateText(origin.session.startedAt)) 那一场练习的复盘。"
+                     + "到复训中心可以先回看当时的证据，再决定重练哪一个。")
+                    .font(Typography.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// 题库有题、却一条路线都解析得出来。**按现在的规则走不到这里**
+    /// （题库非空就至少有「从题库自由选题」），留着是因为解析规则以后会改，
     /// 而那时这里若什么都不画，用户看到的是一块无法解释的空白。
+    ///
+    /// 三样一个不少：说明现状、说明下一步、一颗能直接点的按钮。按钮送去「学习计划」——
+    /// 一条路线都排不出来时，能做的就是先有一份计划。
     private var noRouteCard: some View {
         CoachCard {
             VStack(alignment: .leading, spacing: Spacing.sm) {
-                Text("现在没有可以开始的练习路线")
+                Text("暂时没有可以直接开始的路线")
                     .font(Typography.cardTitle)
                     .foregroundStyle(Palette.textPrimary)
-                Text("题库里有 \(app.state.questions.count) 道题，但四条路线的前提一条都不成立。"
-                     + "下一步：到「训练题库」看一眼题库是不是正常，若不正常就重新导入一次。")
+                Text("题库里有 \(app.state.questions.count) 道题，"
+                     + "但四条路线现在都定不出具体该练哪一道。"
+                     + "下一步：到「学习计划」页生成一份计划，回到这一页就能按计划开练；"
+                     + "也可以用「从题库自由选题」自己挑一道。")
                     .font(Typography.secondary)
                     .foregroundStyle(Palette.textSecondary)
-                Button("去训练题库") { onGo(.questionBank) }
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("去学习计划") { onGo(.plan) }
                     .buttonStyle(.bordered)
                     .padding(.top, Spacing.xs)
             }
@@ -522,8 +724,8 @@ struct TodayView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 // 走 `act` 而不是直接开练：排在第一位的那条就是这一页的主行动，
                 // 两处各挑各的会给出两套说法。`?? .freePick` 只是兜底——
-                // 这一整块只在题库非空时才渲染，那时 `availableRoutes` 至少有「从题库自由选题」。
-                Button("开始练习") { act(model.availableRoutes.first ?? .freePick) }
+                // 这一整块只在题库非空时才渲染，那时解析器至少排得出「从题库自由选题」。
+                Button("开始练习") { act(availableRoutes.first ?? .freePick) }
                     .buttonStyle(.bordered)
                     .padding(.top, Spacing.xs)
             }
@@ -547,6 +749,15 @@ struct TodayView: View {
 
     private func promptText(_ question: Question) -> String {
         question.prompt.isEmpty ? "（这道题没有题干）" : question.prompt
+    }
+
+    /// 上次那道题的话题。**题库里已经没有这道题时要说出来**，不给一段空白——
+    /// 空白会让人以为这一行坏了（换季重新导入题库之后就会出现）。
+    private func topicText(_ session: PracticeSession) -> String {
+        guard let question = app.state.questions.first(where: { $0.id == session.questionId }) else {
+            return "（题库里已经没有这道题了）"
+        }
+        return question.topic.isEmpty ? "（这道题没有话题）" : question.topic
     }
 
     private func questionText(_ session: PracticeSession) -> String {
