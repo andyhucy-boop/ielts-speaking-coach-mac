@@ -1,6 +1,7 @@
 import Foundation
 import XCTest
 
+import IELTSCoachCore
 @testable import IELTSCoachUI
 
 /// 今日训练页上那几件**没法靠数据断言守住、但决定用户看不看得见**的事。
@@ -122,6 +123,284 @@ final class TodayViewTests: XCTestCase {
                 + "本项目在权限页上已经吃过一次同屏矛盾指令的亏。"
                 + "下一步：让那句话跟着 `TodayViewModel.practiceRecordingIsWired` 走，"
                 + "记录接上之后再恢复原来的说法。")
+    }
+
+    // MARK: - 四格：数字和脚注都得真的画出来
+    //
+    // 这一组补的是 Task 8 的窟窿。原来这一页新写了约 130 行视图代码、五条「必须做到」的
+    // 验收要求，一条视图层测试都没有，实测三个突变全部全绿（1148/1148）：
+    //
+    // - 删掉 `Text(tile.footnote)` → 四格脚注全消失，而脚注是首页上唯一写着
+    //   「下一步做什么」的地方（铁律 6），计划里那条验收原话是
+    //   「**不允许因为「太长了不好看」就不显示**」；
+    // - 删掉 `Text(tile.value)` → 四个数字全不显示，只剩四个标题和四段脚注；
+    // - 把「查看全部问题」的 `onGo(.issues)` 改成 `onGo(.reviewReports)` → 按钮跑到复盘报告页。
+    //
+    // `RenderReachabilitySweepTests` 拦得住「整个成员被删掉」，拦不住成员**内容**被改坏——
+    // 上面三个突变里成员都还在，所以它一声不吭。
+
+    /// 四格的内容必须一格不落地来自 `TodayViewModel.statTiles`：
+    /// 视图里现拼一份的话，`HomeStatsTests` 那 12 条（含「绝不预测分数」那条红线）
+    /// 当场退化成在测一段没人用的实现。
+    func testTheFourTilesComeFromTheViewModelAndAreOnScreen() throws {
+        let code = try Self.todayViewCode()
+        let row = try SourceGuard.memberBody(of: "private var statsRow", in: code)
+
+        XCTAssertTrue(
+            row.contains("model.statTiles"),
+            "四格不是从 `TodayViewModel.statTiles` 来的。视图里另拼一份的话，"
+                + "`HomeStatsTests` 那一整组（包括「绝不预测分数」那条红线）就在测一段"
+                + "没人用的实现。实际取到的是：\n\(row)")
+        XCTAssertTrue(
+            row.contains("statCard(tile)"),
+            "遍历了四格却没有把每一格画出来，这一行只剩一块空白。实际取到的是：\n\(row)")
+        SourceGuard.assertRenders(
+            "statsRow", inBodyOf: "var body: some View", of: Self.viewRelativePath,
+            because: "四格写好了却没摆进 `body`，用户一个数字都看不到。")
+    }
+
+    /// 一格里那四样缺一不可。**尤其是 `footnote`**——它是这一格里唯一说清
+    /// 「下一步做什么」的地方（铁律 6），计划验收第 1 条特意写了
+    /// 「不允许因为「太长了不好看」就不显示」。
+    func testEveryTileShowsItsNumberItsUnitItsCaptionAndItsFootnote() throws {
+        let card = try SourceGuard.memberBody(of: "private func statCard", in: try Self.todayViewCode())
+        for (needle, why) in [
+            ("Text(tile.value)", "这一格的数字。少了它，四张卡片上只剩标题和脚注，"
+                + "「本周训练」到底练了几次一个字都看不到"),
+            ("Text(tile.unit)", "单位。光一个「42」用户不知道是分钟还是次"),
+            ("Text(tile.caption)", "这一格是什么。没有标题的数字没人看得懂"),
+            ("Text(tile.footnote)", "脚注。它是这一格里唯一写着「下一步做什么」的地方（铁律 6），"
+                + "计划验收第 1 条明写「不允许因为「太长了不好看」就不显示」")
+        ] {
+            XCTAssertTrue(card.contains(needle),
+                          "四格里没有\(why)（`\(needle)`）。实际取到的是：\n\(card)")
+        }
+        XCTAssertTrue(
+            card.contains(".monospacedDigit()"),
+            "这一格的数字没用等宽数字：「3/5」跳到「10/5」、「9」跳到「10」时整行会横向抖一下"
+                + "（DESIGN-SYSTEM 第 6 节最后一条）。实际取到的是：\n\(card)")
+        XCTAssertTrue(
+            card.contains("CoachCard"),
+            "四格没走 `CoachCard`，会散在页面上没有边界（计划验收第 1 条）。"
+                + "实际取到的是：\n\(card)")
+    }
+
+    /// 「本周训练」那一格里的进度条得跟着设置里的目标走，不是写死的 5。
+    /// 认这一格靠 `StatTile.weekID`——两处各写一个 `"week"` 字面量的话，
+    /// 改了一处另一处会安静地不再匹配，进度条就此消失。
+    func testTheWeeklyProgressBarSitsInTheWeekTileAndFollowsTheConfiguredGoal() throws {
+        let code = try Self.todayViewCode()
+        let card = try SourceGuard.memberBody(of: "private func statCard", in: code)
+        XCTAssertTrue(
+            card.contains("StatTile.weekID"),
+            "进度条没有靠 `StatTile.weekID` 认「本周训练」那一格。实际取到的是：\n\(card)")
+        SourceGuard.assertRenders(
+            "weekProgressBar", inBodyOf: "private func statCard", of: Self.viewRelativePath,
+            because: "进度条写好了却没摆进那一格，用户只看得到「2/5」这个数字，看不到条。")
+        let bar = try SourceGuard.memberBody(of: "private var weekProgressBar", in: code)
+        XCTAssertTrue(
+            bar.contains("model.weekProgress"),
+            "进度条的目标次数不是从 `TodayViewModel.weekProgress` 来的。视图里写死 5 的话，"
+                + "用户在设置里把目标改成 3，这根条还按 5 画，而「3/5」旁边写的却是 3——"
+                + "他没有任何办法知道哪个是真的。实际取到的是：\n\(bar)")
+    }
+
+    // MARK: - 「你的问题正在怎么变化」
+
+    func testTheIssueTrendSectionRendersTheRowsTheViewModelPicked() throws {
+        let section = try SourceGuard.memberBody(of: "private var issueTrends",
+                                                 in: try Self.todayViewCode())
+        XCTAssertTrue(
+            section.contains("SectionHeader(number: 4, label: \"ISSUE TRENDS\""),
+            "区块标题不见了，这一段会变成几行没头没尾的句子（DESIGN-SYSTEM 第 4 节）。"
+                + "实际取到的是：\n\(section)")
+        XCTAssertTrue(
+            section.contains("model.issueChanges"),
+            "列表不是从 `TodayViewModel.issueChanges` 来的。视图里另排一份的话，"
+                + "首页和问题档案页会给出两套顺序，用户不知道该信哪个，"
+                + "而只有视图模型那一处有测试守着。实际取到的是：\n\(section)")
+        XCTAssertTrue(
+            section.contains("issueRow(row)"),
+            "遍历了行却没有把每一条画出来，这一段只剩一个标题。实际取到的是：\n\(section)")
+        for forbidden in ["sorted", "prefix(", "filter { "] where section.contains(forbidden) {
+            XCTFail("这一段在视图里又 `\(forbidden)` 了一次。排序、截断与筛选**原样**来自"
+                        + "`TodayViewModel.issueChanges`，这一页不许再来一遍——"
+                        + "那会造出第二套说法，而依据只有视图模型那一处有测试守着。"
+                        + "实际取到的是：\n\(section)")
+        }
+        SourceGuard.assertRenders(
+            "issueTrends", inBodyOf: "var body: some View", of: Self.viewRelativePath,
+            because: "整个「你的问题正在怎么变化」写好了却没摆进 `body`。")
+    }
+
+    /// 一条 = 一个毛病。少一样，用户就看不出「这条说的是哪个毛病、犯过几次、最近是好是坏」。
+    func testEveryIssueRowShowsWhatWasSaidTheTrendAndHowOftenItHappened() throws {
+        let row = try SourceGuard.memberBody(of: "private func issueRow", in: try Self.todayViewCode())
+        for (field, why) in [
+            ("row.learnerSaid", "当时说的那句原话——它是「这条说的是哪个毛病」的唯一依据"),
+            ("row.trend.badge", "趋势那几个字。只剩一块颜色的话，色觉障碍用户什么都读不到"),
+            ("row.detail", "结论背后的原始数字，用户要靠它自己核对"),
+            ("row.occurrences", "一共犯过几次")
+        ] {
+            XCTAssertTrue(row.contains(field),
+                          "一行里没有\(why)（`\(field)`）。实际取到的是：\n\(row)")
+        }
+        XCTAssertGreaterThanOrEqual(
+            SourceGuard.occurrences(of: ".monospacedDigit()", in: row), 2,
+            "行里的数字没有全部用等宽数字。「9 次」跳到「10 次」时这一列会横向抖"
+                + "（DESIGN-SYSTEM 第 6 节最后一条）。实际取到的是：\n\(row)")
+        XCTAssertTrue(
+            row.contains("IssueArchiveView.trendColor(row.trend)"),
+            "趋势的配色不是从 `IssueArchiveView.trendColor` 来的。两页各画各的话，"
+                + "同一个「出现变多了」在首页和问题档案页会是两个颜色，"
+                + "而只有那一处有测试守着每一档该是什么色。实际取到的是：\n\(row)")
+    }
+
+    /// **「查看全部问题」必须落到问题档案页。** 首页只放五条，剩下的全在那一页上；
+    /// 指到别处去的话，用户点完到了一个跟「全部问题」无关的页面，
+    /// 而他要找的那几条再也没有入口。
+    func testTheSeeAllButtonGoesToTheIssueArchiveAndNowhereElse() throws {
+        let section = try SourceGuard.memberBody(of: "private var issueTrends",
+                                                 in: try Self.todayViewCode())
+        XCTAssertTrue(
+            section.contains("Button(\"查看全部问题\")"),
+            "「查看全部问题」这颗按钮不见了。首页只放最要紧的五条，没有这颗按钮，"
+                + "剩下的问题在这一页上就没有任何入口。实际取到的是：\n\(section)")
+        XCTAssertTrue(
+            section.contains("onGo(.issues)"),
+            "「查看全部问题」没有切到 `.issues`。它写着「全部问题」，落到别的页面就是骗人——"
+                + "而按钮点了跑到别处，是本项目最不能接受的那一类。实际取到的是：\n\(section)")
+        for wrong in [".reviewReports", ".history", ".vocabulary", ".questionBank"] {
+            XCTAssertFalse(
+                section.contains("onGo(\(wrong))"),
+                "「查看全部问题」那一段里出现了 `onGo(\(wrong))`，用户点「查看全部问题」"
+                    + "会被送到另一页。实际取到的是：\n\(section)")
+        }
+    }
+
+    /// 一条问题都没有时不许留白。三样一个不少：说明现状、说明下一步、一颗能直接点的按钮。
+    func testTheEmptyIssueListStillSaysWhatIsGoingOnAndWhatToDoNext() throws {
+        let code = try Self.todayViewCode()
+        SourceGuard.assertRenders(
+            "noIssueCard", inBodyOf: "private var issueTrends", of: Self.viewRelativePath,
+            because: "一条问题都没有时这一段是一片空白，用户会以为这块内容坏了"
+                + "（DESIGN-SYSTEM 第 4 节要求空状态给足三样）。")
+        let empty = try SourceGuard.memberBody(of: "private var noIssueCard", in: code)
+        XCTAssertTrue(empty.contains("还没有记录到反复出现的问题"),
+                      "空状态没说清现状。实际取到的是：\n\(empty)")
+        XCTAssertTrue(empty.contains("下一步"),
+                      "空状态没说下一步该干什么（铁律 6）。实际取到的是：\n\(empty)")
+        XCTAssertTrue(empty.contains("Button(\"开始练习\")"),
+                      "空状态没有那颗能直接点的按钮，用户读完还得自己回上面找。"
+                          + "实际取到的是：\n\(empty)")
+        XCTAssertTrue(empty.contains("act("),
+                      "空状态那颗「开始练习」点下去什么也不发生。按钮点了没反应是本项目"
+                          + "最不能接受的那一类。实际取到的是：\n\(empty)")
+    }
+
+    // MARK: - 整页不许出现分数、评级、水平判断
+
+    /// 计划 Task 8 视图验收第 4 条、DEFINITION-OF-DONE 第 4 节第一条：**不预测雅思分数。**
+    ///
+    /// `HomeStatsTests.testNoScorePredictionInAnyUserFacingText` 扫的是视图模型给出的文案，
+    /// 而这一页上还有一批**硬写在视图里**的中文（`noIssueCard`、`noSessionCard`、
+    /// `noRouteCard`、`emptyBank`、问候语），它们不归那条测试管——
+    /// 顺手在空状态里写一句「练够了大概能到 6.5」，那边照样全绿。
+    /// 这条补的就是这一段。做法与 `IssueArchiveViewTests.testThisPageNeverPredictsABandScore` 一致。
+    func testThisPageNeverPredictsABandScore() throws {
+        let code = try Self.todayViewCode()
+        XCTAssertTrue(
+            code.contains("struct TodayView"),
+            "没扫到 TodayView 的源码，这条测试等于空转。下一步：确认文件还在——"
+                + Self.viewRelativePath)
+        for banned in ["band", "Band", "BAND", "score", "Score",
+                       "分数", "评分", "打分", "得分", "几分", "水平分", "评级", "水平判断", "预测"] {
+            XCTAssertFalse(
+                code.contains(banned),
+                "今日训练页里出现了「\(banned)」。本阶段不得出现任何形式的雅思分数预测或"
+                    + "水平判断（DEFINITION-OF-DONE 第 4 节）：给「你大概 6.5 分」这种数字"
+                    + "既不准也有害，会让人盯着数字而不是盯着问题。"
+                    + "下一步：改成只说「练了几次、开口多久、哪个毛病在变少」。")
+        }
+    }
+
+    // MARK: - 脚注指的方向，得和按钮在页面上的真实位置对得上
+
+    /// 四格的脚注写着「点「开始练习」」，而那颗按钮在页面上是在四格上面还是下面，
+    /// 由 `body` 里两段的先后顺序决定。**指反了比不指更糟**：用户会照着往上翻，
+    /// 去找一颗根本不在那儿的按钮。本项目在权限页上已经吃过一次同屏矛盾指令的亏。
+    ///
+    /// 期望的方向是从源码里的相对位置**推出来**的，不是写死的：以后把四格挪到
+    /// 「今天练什么？」下面，这条测试会当场变红，逼人把文案一起改。
+    func testTileFootnotesPointTowardWhereTheStartButtonActuallyIs() throws {
+        let body = try SourceGuard.memberBody(of: "var body: some View", in: try Self.todayViewCode())
+
+        // 锚点必须各只有一处，否则「谁在前面」只能靠猜，而猜错等于这条断言在查别的东西。
+        for anchor in ["statsRow", "routes"] {
+            XCTAssertEqual(
+                SourceGuard.occurrences(of: anchor, in: body), 1,
+                "`body` 里「\(anchor)」不是恰好出现一次，「四格在按钮上面还是下面」就没法从"
+                    + "源码里读出来。下一步：改了 body 的写法，就同步改这条测试的锚点。"
+                    + "实际取到的是：\n\(body)")
+        }
+        guard let tiles = body.range(of: "statsRow"), let button = body.range(of: "routes") else {
+            return XCTFail("`body` 里找不到 `statsRow` 或 `routes`，这条测试无从判断方向。"
+                               + "下一步：确认这两段还在 body 里。实际取到的是：\n\(body)")
+        }
+        // 「开始练习」那颗按钮由 `routes` 那一段画：`actionTitle(_:)` 对除复训以外的路线
+        // 返回的就是「开始练习」，而排在第一位的那条路线（题库非空时至少有「从题库自由选题」）
+        // 永远不是复训。
+        let tilesComeFirst = tiles.lowerBound < button.lowerBound
+        let wrongWay = tilesComeFirst ? Self.upwardWords : Self.downwardWords
+        let rightWay = tilesComeFirst ? Self.downwardWords : Self.upwardWords
+
+        var checked = 0
+        var directed = 0
+        for tile in TodayViewModel(state: CoachState.empty()).statTiles {
+            guard let clause = Self.clause(before: "开始练习", in: tile.footnote) else { continue }
+            checked += 1
+            if rightWay.contains(where: clause.contains) { directed += 1 }
+            for word in wrongWay {
+                XCTAssertFalse(
+                    clause.contains(word),
+                    "「\(tile.caption)」那一格的脚注把用户指向「\(word)」，"
+                        + "而「开始练习」在页面上位于四格的\(tilesComeFirst ? "下面" : "上面")"
+                        + "（`body` 里 statsRow 排在 routes \(tilesComeFirst ? "前" : "后")面）。"
+                        + "照着做的人会往错的方向翻，去找一颗不在那儿的按钮。"
+                        + "下一步：把方向词改成对的那个，或者干脆去掉、只说「点「开始练习」」。"
+                        + "实际脚注：\(tile.footnote)")
+            }
+        }
+
+        XCTAssertGreaterThanOrEqual(
+            checked, 2,
+            "四格脚注里一句提到「开始练习」的都没扫到，这条测试等于空转。"
+                + "下一步：确认空数据下的「本周训练」「累计训练」两格仍然告诉用户去开练。")
+        XCTAssertGreaterThanOrEqual(
+            directed, 1,
+            "四格脚注里没有一句带方向词，上面那圈「方向必须和 body 里的位置对得上」"
+                + "就没有样本可查。下一步：确认这是有意去掉方向词——是的话把这条断言一起删掉"
+                + "并在提交信息里写明；不是的话把方向词加回去。")
+    }
+
+    /// 「往上找」的各种说法。`上一步` `上次` 这类不在里面：它们说的不是位置。
+    static let upwardWords = ["上面", "上方", "往上", "上边", "上头"]
+    /// 「往下找」的各种说法。
+    static let downwardWords = ["下面", "下方", "往下", "下边"]
+
+    /// 取 `needle` 前面**同一小句**里的那几个字。
+    ///
+    /// 不扫整条脚注，是为了不误报：一条脚注完全可以一边说「上面那条说明」、
+    /// 一边让用户去点下面的按钮，那两句话各说各的。误报几次，这条守卫就会被人整条删掉
+    /// （`SourceGuard.directions` 里已经写过同一个道理）。
+    static func clause(before needle: String, in text: String) -> String? {
+        guard let found = text.range(of: needle) else { return nil }
+        let head = text[text.startIndex..<found.lowerBound]
+        let separators: Set<Character> = ["。", "；", "！", "？", "，", "、", "：", ";", "\n"]
+        guard let lastBreak = head.lastIndex(where: { separators.contains($0) }) else {
+            return String(head)
+        }
+        return String(head[head.index(after: lastBreak)...])
     }
 
     // MARK: - 扫源码用的小工具

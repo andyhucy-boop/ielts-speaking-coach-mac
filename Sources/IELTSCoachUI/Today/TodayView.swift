@@ -45,8 +45,13 @@ struct TodayView: View {
                     emptyBank
                 } else {
                     // 四格摆在这一支里而不是页头，是因为它们的脚注里写着
-                    // 「回到上面点「开始练习」」——题库空的时候那颗按钮根本不在页面上，
+                    // 「点下面的「开始练习」」——题库空的时候那颗按钮根本不在页面上，
                     // 照着做的人会一直找。同屏矛盾指令这个坑，本项目在权限页上踩过一次。
+                    //
+                    // **下面这个顺序不是随手排的**：`statsRow` 在 `routes` 前面，
+                    // 所以那句话里的方向词必须是「下面」。挪动这两段的先后时要一起改文案，
+                    // `TodayViewTests.testTileFootnotesPointTowardWhereTheStartButtonActuallyIs`
+                    // 会把没改的那一次拦下来。
                     statsRow
                     recordingNotice
                     routes
@@ -177,6 +182,17 @@ struct TodayView: View {
     }
 
     /// 「本周训练」那一格里的进度条。目标次数来自设置（`weekProgress.goal`），不是写死的 5。
+    ///
+    /// **这一格里还欠一颗「改目标」按钮，留给 Task 9。**
+    /// 计划 Task 8 视图验收第 2 条要求「「本周训练」那一格里额外放一个「改目标」按钮，
+    /// 点了打开 Task 9 的设置面板」，而计划 Task 9 的 Step 3 又写着由它给 `TodayView`
+    /// 加一个 `@Binding var showingWeeklyGoal: Bool` 参数「供「改目标」按钮使用」，
+    /// 且 Task 9 的 git 清单里列了本文件——计划本身在这一条上自相矛盾。
+    ///
+    /// 按住不做的理由：那颗按钮要打开的面板（`WeeklyGoalSheet`）是 Task 9 的交付物，
+    /// 现在还不存在。先摆一颗点了没反应的按钮，是本项目最不能接受的那一类。
+    /// 所以这里按铁律 11 把它写明白，而不是猜着做（交付报告里也记了同一件事）。
+    /// **Task 9 的实现者：这颗按钮还欠着，请连同 binding 一起补上。**
     private var weekProgressBar: some View {
         let progress = model.weekProgress
         return ProgressView(value: Double(min(progress.done, progress.goal)),

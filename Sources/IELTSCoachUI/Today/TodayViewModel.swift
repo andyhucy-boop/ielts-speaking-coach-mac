@@ -203,8 +203,14 @@ public struct TodayViewModel: Sendable {
         if stats.weeklyDone >= stats.weeklyGoal {
             footnote = "本周目标已经完成。下一步：想继续练就继续，目标只是下限，不是上限。"
         } else {
+            // 方向词是「下面」不是「上面」：四格在页面上排在「今天练什么？」**之前**
+            // （`TodayView.body` 里 `statsRow` 在 `routes` 前面），那颗「开始练习」在四格下方。
+            // 指反了，用户会照着往上翻，去找一颗不在那儿的按钮——同屏矛盾指令这个坑，
+            // 本项目在权限页上踩过一次。`TodayViewTests
+            // .testTileFootnotesPointTowardWhereTheStartButtonActuallyIs` 把这个方向词
+            // 和 body 里两段的先后顺序绑在一起，以后谁挪了位置而没改文案，那条测试会变红。
             footnote = "离本周目标还差 \(stats.weeklyGoal - stats.weeklyDone) 次。"
-                + "下一步：回到上面点「开始练习」，再练一场。"
+                + "下一步：点下面的「开始练习」，再练一场。"
         }
         // 读不出时间的那几场不能悄悄消失：用户明明练过，本周次数却不动，
         // 不说清楚他只会以为工具坏了（铁律 7）。
@@ -218,8 +224,9 @@ public struct TodayViewModel: Sendable {
     }
 
     private var totalTile: StatTile {
+        // 方向词同上：按钮在四格**下面**。
         let footnote = stats.totalSessions == 0
-            ? "还没有任何练习记录。下一步：回到上面点「开始练习」，练第一场。"
+            ? "还没有任何练习记录。下一步：点下面的「开始练习」，练第一场。"
             : "从第一场到现在的全部练习都算在里面。下一步：到训练记录页可以逐场回看。"
         return StatTile(id: "total", caption: "累计训练",
                         value: "\(stats.totalSessions)", unit: "次", footnote: footnote)
