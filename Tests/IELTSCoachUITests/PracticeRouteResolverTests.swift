@@ -50,6 +50,47 @@ final class PracticeRouteResolverTests: XCTestCase {
         XCTAssertEqual(setup.question.id, "b", "a 今天已经练过了，再给它一次计划不会前进")
     }
 
+    /// 上一条只覆盖「同一天内跳过已练的题」。这条覆盖的是**整天跳过**：
+    /// 第 1 天全部练完之后，「按计划练今天」要走到第 2 天去。
+    /// 停在已完成的那一天上，pending 会是空的，用户会被告知「题目在题库里找不到了」——
+    /// 题一道没丢，这条路线却从此永远开不了练。
+    func testPlanTodaySkipsDaysThatAreAlreadyFinished() {
+        let s = state(questions: [q("a"), q("b")],
+                      planDays: [PlanDay(id: 1, questionIds: ["a"], completedQuestionIds: ["a"]),
+                                 PlanDay(id: 2, questionIds: ["b"], completedQuestionIds: [])])
+        guard case .ready(let setup) = PracticeRouteResolver.resolve(route: .planToday, state: s) else {
+            return XCTFail("第 1 天已经练完，第 2 天还有题，应当能开练")
+        }
+        XCTAssertEqual(setup.question.id, "b", "第 1 天整天都练完了，今天该练第 2 天")
+    }
+
+    /// 题数少于天数时 `PlanBuilder` 会给尾部若干天分 0 题（`PlanScope.blockingReason` 的注释
+    /// 写的就是这件事），而空天的 `isComplete` 恒为 false（`PlanDay.isComplete` 要求
+    /// `!questionIds.isEmpty`）。只按 `!isComplete` 挑天，解析器会永远停在一个空天上。
+    func testPlanTodaySkipsDaysThatGotNoQuestionsAtAll() {
+        let s = state(questions: [q("a"), q("b")],
+                      planDays: [PlanDay(id: 1, questionIds: ["a"], completedQuestionIds: ["a"]),
+                                 PlanDay(id: 2, questionIds: [], completedQuestionIds: []),
+                                 PlanDay(id: 3, questionIds: ["b"], completedQuestionIds: [])])
+        guard case .ready(let setup) = PracticeRouteResolver.resolve(route: .planToday, state: s) else {
+            return XCTFail("第 2 天一道题都没分到，应当跳过它去练第 3 天")
+        }
+        XCTAssertEqual(setup.question.id, "b", "空天不是「今天的题」，停在它上面这条路线就废了")
+    }
+
+    /// 真实形态：空天全在尾部。真正有题的那几天练完之后，
+    /// 用户该看到的是「练完了」，而不是「你的题丢了」——题一道没丢。
+    func testPlanTodaySaysEverythingIsDoneWhenOnlyEmptyTailDaysRemain() {
+        let s = state(questions: [q("a")],
+                      planDays: [PlanDay(id: 1, questionIds: ["a"], completedQuestionIds: ["a"]),
+                                 PlanDay(id: 2, questionIds: [], completedQuestionIds: [])])
+        guard case .unavailable(let message) = PracticeRouteResolver.resolve(
+            route: .planToday, state: s) else { return XCTFail("尾部空天不该被当成「今天的题」") }
+        XCTAssertTrue(message.contains("已经全部练完"), "该说的是「练完了」")
+        XCTAssertFalse(message.contains("找不到"), "题一道没丢，不许告诉用户题丢了")
+        XCTAssertTrue(message.contains("下一步"))
+    }
+
     func testPlanTodayHonoursAnExplicitPickAmongTodaysQuestions() {
         let s = state(questions: [q("a"), q("b")],
                       planDays: [PlanDay(id: 1, questionIds: ["a", "b"], completedQuestionIds: [])])
@@ -81,6 +122,10 @@ final class PracticeRouteResolverTests: XCTestCase {
                       planDays: [PlanDay(id: 1, questionIds: ["a"], completedQuestionIds: ["a"])])
         guard case .unavailable(let message) = PracticeRouteResolver.resolve(
             route: .planToday, state: s) else { return XCTFail("练完了不该还能「按计划练今天」") }
+        // 只断言「下一步」分不出任何一条文案——解析器里每一条都含「下一步」。
+        // 「你练完了」和「你的题丢了」对用户是两件完全不同的事，必须逐条钉住。
+        XCTAssertTrue(message.contains("已经全部练完"), "要告诉用户是练完了，不是出错了")
+        XCTAssertFalse(message.contains("找不到"), "题一道没丢，不许告诉用户题丢了")
         XCTAssertTrue(message.contains("下一步"))
     }
 
@@ -89,6 +134,9 @@ final class PracticeRouteResolverTests: XCTestCase {
                       planDays: [PlanDay(id: 1, questionIds: ["gone"], completedQuestionIds: [])])
         guard case .unavailable(let message) = PracticeRouteResolver.resolve(
             route: .planToday, state: s) else { return XCTFail("题没了就不该假装能练") }
+        // 「重新生成」两条文案里都有，分不开它们；要钉的是「题丢了」这件事本身。
+        XCTAssertTrue(message.contains("找不到了"), "要告诉用户是题丢了")
+        XCTAssertFalse(message.contains("全部练完"), "题还没练完，不许说练完了")
         XCTAssertTrue(message.contains("重新生成"))
         XCTAssertTrue(message.contains("下一步"))
     }
@@ -188,6 +236,30 @@ final class PracticeRouteResolverTests: XCTestCase {
         XCTAssertEqual(setup.question.id, "b")
     }
 
+    /// 复训的全部意义就是**先重答提出这个目标的那道原题**。
+    /// 这里排第一的目标出自较早的 s1，而 state 里还有更新的 s2——
+    /// 「按 sourceSessionId 反查」和「随手拿最近那一场」在这个 state 上结果不同。
+    /// 拿错了不会报错也不会崩：goal 还是对的，界面上一点异样都没有，
+    /// 用户只是在拿别的题练一个不对应的目标。
+    func testRetrainUsesTheSessionThatRaisedTheTargetNotTheLatestOne() {
+        let s = state(questions: [q("a"), q("b")],
+                      sessions: [session("s1", question: "a", startedAt: "2026-08-01T10:00:00Z"),
+                                 session("s2", question: "b", startedAt: "2026-08-05T10:00:00Z")],
+                      targets: [target("t1", label: "目标一", session: "s1",
+                                       evidence: ["I very like it"]),
+                                target("t2", label: "目标二", session: "s2")],
+                      issues: [IssueRecord(id: "i1", learnerSaid: "I very like it",
+                                           correction: "I really like it",
+                                           whyItMatters: "very 不能修饰动词", occurrences: 4,
+                                           sourceSessionIds: ["s1"],
+                                           lastSeenAt: "2026-08-01T10:00:00Z")])
+        guard case .ready(let setup) = PracticeRouteResolver.resolve(
+            route: .retrain, state: s) else { return XCTFail("应当能开练") }
+        XCTAssertEqual(setup.goal, "目标一", "证据命中高频错题的目标排第一")
+        XCTAssertEqual(setup.question.id, "a",
+                       "要练的是提出这个目标的那一场（s1）的原题，不是最近那一场（s2）的")
+    }
+
     func testRetrainIgnoresRetiredTargets() {
         let s = state(questions: [q("a")],
                       sessions: [session("s1", question: "a", startedAt: "2026-08-01T10:00:00Z")],
@@ -216,11 +288,37 @@ final class PracticeRouteResolverTests: XCTestCase {
                        "goal 一旦是空串，复训会静默退化成普通练习——这是决策 6 真正要挡的东西")
     }
 
+    /// 这条要挡的是「那条训练记录已被删除」：**sessions 非空、但没有一条 id 对得上**。
+    /// 只用空 sessions 测，等于只测了「一场练习都没有」，
+    /// 「查不到就退回随便一场」这种兜底会一路绿灯地混过去——
+    /// 那样复训会去重答别人的题，goal 还是对的，用户看不出任何异样。
+    /// 第二个 state 保留「一场练习都没有」这条老路径，两种都得挡住。
     func testRetrainUnavailableWhenTheSourceSessionIsGone() {
-        let s = state(questions: [q("a")],
-                      targets: [target("t1", label: "补一个例子", session: "missing")])
+        let states = [
+            state(questions: [q("a"), q("b")],
+                  sessions: [session("s2", question: "b", startedAt: "2026-08-05T10:00:00Z")],
+                  targets: [target("t1", label: "补一个例子", session: "missing")]),
+            state(questions: [q("a")],
+                  targets: [target("t1", label: "补一个例子", session: "missing")])
+        ]
+        for s in states {
+            guard case .unavailable(let message) = PracticeRouteResolver.resolve(
+                route: .retrain, state: s) else { return XCTFail("找不到出处就不该开练") }
+            XCTAssertTrue(message.contains("哪一次练习"), "要说清丢的是「这个目标的出处」")
+            XCTAssertTrue(message.contains("下一步"))
+        }
+    }
+
+    /// 出处那一场还在，但它当时练的那道题已经不在题库里了（换季重新导入）。
+    /// 这是另一条分支，报的也该是另一件事。
+    func testRetrainUnavailableWhenTheOriginalQuestionLeftTheBank() {
+        let s = state(questions: [q("other")],
+                      sessions: [session("s1", question: "gone", startedAt: "2026-08-01T10:00:00Z")],
+                      targets: [target("t1", label: "补一个例子", session: "s1")])
         guard case .unavailable(let message) = PracticeRouteResolver.resolve(
-            route: .retrain, state: s) else { return XCTFail("找不到出处就不该开练") }
+            route: .retrain, state: s) else { return XCTFail("原题没了就不该假装能练") }
+        XCTAssertTrue(message.contains("原题"), "丢的是原题，不是目标的出处")
+        XCTAssertFalse(message.contains("哪一次练习"))
         XCTAssertTrue(message.contains("下一步"))
     }
 
@@ -275,6 +373,14 @@ final class PracticeRouteResolverTests: XCTestCase {
                   planDays: [PlanDay(id: 1, questionIds: ["a"], completedQuestionIds: [])]),
             state(questions: [q("a")],
                   planDays: [PlanDay(id: 1, questionIds: ["a"], completedQuestionIds: ["a"])]),
+            // 第 1 天整天练完、第 2 天还有题
+            state(questions: [q("a"), q("b")],
+                  planDays: [PlanDay(id: 1, questionIds: ["a"], completedQuestionIds: ["a"]),
+                             PlanDay(id: 2, questionIds: ["b"], completedQuestionIds: [])]),
+            // 题数少于天数时尾部会有分不到题的空天
+            state(questions: [q("a")],
+                  planDays: [PlanDay(id: 1, questionIds: ["a"], completedQuestionIds: ["a"]),
+                             PlanDay(id: 2, questionIds: [], completedQuestionIds: [])]),
             state(questions: [q("other")],
                   planDays: [PlanDay(id: 1, questionIds: ["gone"], completedQuestionIds: [])]),
             state(questions: [q("a")],
@@ -288,7 +394,15 @@ final class PracticeRouteResolverTests: XCTestCase {
                   sessions: [session("s1", question: "a", startedAt: "2026-08-01T10:00:00Z")],
                   targets: [target("t1", label: "", session: "s1")]),
             state(questions: [q("other")],
-                  targets: [target("t1", label: "补一个例子", session: "missing")])
+                  targets: [target("t1", label: "补一个例子", session: "missing")]),
+            // 目标的出处那一条记录被删过，但别的练习记录还在
+            state(questions: [q("a"), q("b")],
+                  sessions: [session("s2", question: "b", startedAt: "2026-08-05T10:00:00Z")],
+                  targets: [target("t1", label: "补一个例子", session: "missing")]),
+            // 出处还在，它当时练的那道题被换季导入删掉了
+            state(questions: [q("other")],
+                  sessions: [session("s1", question: "gone", startedAt: "2026-08-01T10:00:00Z")],
+                  targets: [target("t1", label: "补一个例子", session: "s1")])
         ]
     }
 
