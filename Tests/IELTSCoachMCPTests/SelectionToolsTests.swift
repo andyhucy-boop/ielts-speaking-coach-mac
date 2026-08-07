@@ -69,6 +69,16 @@ final class SelectionToolsTests: XCTestCase {
         XCTAssertTrue(result.text.contains("下一步"))
     }
 
+    func testSelectionNoteSaysWhatHappenedAndWhichToolIsNext() throws {
+        let payload = try harness.callToolJSON("set_training_selection",
+                                               ["questionId": .string("p1-home")])
+        let note = try XCTUnwrap(payload["note"]?.stringValue)
+        XCTAssertTrue(note.contains("已选定"), "note 得先说清发生了什么：\(note)")
+        XCTAssertTrue(note.contains("下一步"), "选完题不给出路，模型会停在这里等指令：\(note)")
+        XCTAssertTrue(note.contains("get_training_context"),
+                      "选完题的下一步只有取考官提示词一条路，工具名必须写出来：\(note)")
+    }
+
     func testUnknownFocusPartIsRejectedWithTheAllowedValues() throws {
         let result = try harness.callTool("set_training_selection", [
             "questionId": .string("p1-home"), "focusPart": .string("Part 9")
@@ -96,6 +106,35 @@ final class SelectionToolsTests: XCTestCase {
         XCTAssertTrue(prompt.contains("Describe a useful skill you learned."))
         XCTAssertTrue(prompt.contains("Section rules (Part 2)"))
         XCTAssertTrue(prompt.contains("how you learned it"), "followups 要一起进提示词")
+    }
+
+    func testTheGoalChosenAtSelectionTimeReachesTheExaminerPrompt() throws {
+        _ = try harness.callToolJSON("set_training_selection", [
+            "questionId": .string("p1-home"),
+            "goal": .string("回答后补一个原因和例子")
+        ])
+        let payload = try harness.callToolJSON("get_training_context")
+
+        let prompt = try XCTUnwrap(payload["examinerPrompt"]?.stringValue)
+        // 单点目标只有进了提示词才算数：落盘但不进提示词＝这一场根本没在练它，
+        // 而负载里的 goal 字段照样是对的，光看它分不出来。
+        XCTAssertTrue(prompt.contains("本次唯一目标：回答后补一个原因和例子"),
+                      "选题时定下的单点目标必须原样进考官提示词：\(prompt)")
+        XCTAssertEqual(payload["goal"]?.stringValue, "回答后补一个原因和例子")
+    }
+
+    func testLearnerControlledPrepModeChangesThePart2Rules() throws {
+        _ = try harness.callToolJSON("set_training_selection", ["questionId": .string("p2-skill")])
+        let payload = try harness.callToolJSON("get_training_context",
+                                               ["part2PrepMode": .string("learner-controlled")])
+        XCTAssertEqual(payload["part2PrepMode"]?.stringValue, "learner-controlled")
+
+        let prompt = try XCTUnwrap(payload["examinerPrompt"]?.stringValue)
+        // 只回显 part2PrepMode 证明不了什么——必须看提示词正文真的换了准备规则。
+        XCTAssertTrue(prompt.contains("say \"I'm ready\""),
+                      "learner-controlled 时由学员喊开始，提示词里必须写出来：\(prompt)")
+        XCTAssertFalse(prompt.contains("Announce one minute of preparation"),
+                       "换了准备模式还留着一分钟倒计时那句，ChatGPT 会两句都照做：\(prompt)")
     }
 
     func testDefaultDurationForNonPart2IsSixMinutes() throws {
@@ -129,6 +168,17 @@ final class SelectionToolsTests: XCTestCase {
         let first = try harness.callToolJSON("get_training_context")["reviewRequestId"]?.stringValue
         let second = try harness.callToolJSON("get_training_context")["reviewRequestId"]?.stringValue
         XCTAssertEqual(first, second, "同一场练习问两次上下文，标记必须一致，否则复盘对不上号")
+    }
+
+    func testContextNoteSaysWhatToSendAndWhichToolIsNext() throws {
+        _ = try harness.callToolJSON("set_training_selection", ["questionId": .string("p1-home")])
+        let payload = try harness.callToolJSON("get_training_context")
+        let note = try XCTUnwrap(payload["note"]?.stringValue)
+        XCTAssertTrue(note.contains("下一步"), "拿到上下文之后该干什么，必须写出来：\(note)")
+        XCTAssertTrue(note.contains("examinerPrompt"),
+                      "负载里有好几段文本，note 得说清先发哪一段：\(note)")
+        XCTAssertTrue(note.contains("save_session_review"),
+                      "练完之后的落点是保存复盘，工具名必须写出来，否则整条链在这里断掉：\(note)")
     }
 
     func testWithoutASelectionItSaysWhatToDoNext() throws {
