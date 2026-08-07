@@ -109,9 +109,12 @@ final class NavigationStateTests: XCTestCase {
             retrainBranch.contains("return"),
             "`.retrain` 那一支跳完页没有 `return`，接着又把普通练习 sheet 弹了出来——"
                 + "用户会同时被换页并被塞进一场不带目标的练习。实际取到的是：\n\(retrainBranch)")
+        // 比的是 `startPractice(route,` 而不是完整的调用形状：Task 10 给它加了
+        // `setup:`（「已经解析定下来的这一场」的载体），以后还可能再加参数。
+        // 这里要钉的是「另外三条路线真的会开练」，不是参数表长什么样。
         XCTAssertTrue(
-            act.contains("startPractice(route)"),
-            "`act(_:)` 里没有 `startPractice(route)`，另外三条路线点下去什么都不会发生。"
+            act.contains("startPractice(route,"),
+            "`act(_:)` 里没有 `startPractice(route, …)`，另外三条路线点下去什么都不会发生。"
                 + "实际取到的是：\n\(act)")
 
         // 三、按钮文字：这条路线点下去是换一页，不是开练。
