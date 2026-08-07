@@ -15,6 +15,9 @@ import XCTest
 final class PermissionGateViewTests: XCTestCase {
     static let viewPath = "Onboarding/PermissionGateView.swift"
     static let rootPath = "RootView.swift"
+    /// Phase 10 Task 8 之后，摆出权限页的不再是根视图，而是首次使用引导的「环境」那一步。
+    /// 根视图只负责决定「这一屏显不显示引导」。
+    static let flowPath = "Onboarding/WelcomeFlowView.swift"
 
     // MARK: - 最上面那行标题
 
@@ -48,14 +51,14 @@ final class PermissionGateViewTests: XCTestCase {
                                   because: "重查反馈没有接在真实的次数上，那它要么永远不显示、"
                                       + "要么一直挂着。下一步：把 `recheckAttempts` 传进去。")
 
-        // 根视图得把 AppState 的计数真的递下来。**必须是 `app.recheckAttempts`**：
+        // 摆出权限页的那一头得把 AppState 的计数真的递下来。**必须是 `app.recheckAttempts`**：
         // 视图自己的 @State 在重查期间会随页面一起被销毁（那十秒里显示的是等待屏），
         // 查完回来是全新的一份，那句反馈永远显示不出来。
-        SourceGuard.assertRenders("recheckAttempts: app.recheckAttempts", in: Self.rootPath,
-                                  because: "RootView 没把重查次数递给权限页。"
+        SourceGuard.assertRenders("recheckAttempts: app.recheckAttempts", in: Self.flowPath,
+                                  because: "引导的「环境」那一步没把重查次数递给权限页。"
                                       + "下一步：`PermissionGateView(... recheckAttempts: "
                                       + "app.recheckAttempts ...)`。")
-        SourceGuard.assertRenders("await app.recheckPermission()", in: Self.rootPath,
+        SourceGuard.assertRenders("await app.recheckPermission()", in: Self.flowPath,
                                   because: "「重新检查」这颗按钮没有接在 AppState 上，按了不会真去查。")
     }
 

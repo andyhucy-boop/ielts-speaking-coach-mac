@@ -189,10 +189,11 @@ final class AppStateTests: XCTestCase {
                           + "`isCheckingPermission = true`。")
         XCTAssertEqual(
             RootRouter.screen(isCheckingPermission: app.isCheckingPermission,
-                              permission: app.permission, permissionSkipped: false),
+                              permission: app.permission, questionCount: 0,
+                              hasCompletedOnboarding: false, onboardingDismissed: false),
             .checkingEnvironment,
-            "重查的这十秒里路由一路返回权限页：用户点完「重新检查」，"
-                + "屏幕上一个像素都不会变，只能对着授权页干等。")
+            "重查的这十秒里路由一路返回引导页：用户点完「重新检查」，"
+                + "屏幕上一个像素都不会变，只能对着授权那一步干等。")
 
         gate.letItFinish()
         await recheck.value

@@ -7,7 +7,7 @@ import SwiftUI
 /// `RootView` 每被 new 一次就自己 new 一个 `AppState`（`RootView.init()`），于是第二个窗口 =
 /// 第二份状态 + 第二次完整 preflight——又一次 `NSWorkspace.open` 把 ChatGPT 拉到前台，
 /// 又一次最多八秒的无障碍树轮询。而且两个窗口的 `permission`、`loadError`、
-/// `permissionSkipped` 互不相通：在一个窗口点了「先跳过」，另一个还挡着；
+/// `onboardingDismissed` 互不相通：在一个窗口走完了首次使用引导，另一个还挡着；
 /// 在一个窗口导完题库，另一个显示的还是旧题库。计划里从头到尾没提过窗口数量。
 ///
 /// 两条修法之间选了 `Window`：

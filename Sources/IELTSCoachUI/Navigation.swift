@@ -107,8 +107,10 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Sendable {
 public enum RootScreen: Equatable, Sendable {
     /// 环境检查还没出结论。
     case checkingEnvironment
-    /// 环境不就绪，挡一道授权引导。
-    case permissionGate
+    /// 首次使用引导（`WelcomeFlowView`）。**原名 `permissionGate`**：
+    /// 那时挡在前面的只有讲权限的 `PermissionGateView`，现在它是引导里的一步
+    /// （「让它能替你操作 ChatGPT」），挡在前面的是整条引导。
+    case onboarding
     /// 侧边栏 + 内容区的主界面。
     case workspace
 }
@@ -116,16 +118,28 @@ public enum RootScreen: Equatable, Sendable {
 /// 「什么时候挡、什么时候放行」抽成纯函数，因为这段判断错了用户是直接撞墙的，
 /// 而 `View` 里的 `if` 没有任何测试管得住。
 public enum RootRouter {
+    /// - Parameters:
+    ///   - questionCount: 题库里有多少道题。只影响引导**内容**（题库已经有题就不问导入），
+    ///     不影响弹不弹——但仍要传进来，好让这一处和 `OnboardingFlow.steps` 永远同一份输入。
+    ///   - hasCompletedOnboarding: 磁盘上记着的「引导看过没有」（`OnboardingProgressStore`）。
+    ///   - onboardingDismissed: 这次启动里引导已经收工了（`AppState.onboardingDismissed`）。
     public static func screen(isCheckingPermission: Bool,
                               permission: PermissionState,
-                              permissionSkipped: Bool) -> RootScreen {
-        // 用户明确点了「先跳过」就不能再把他挡在外面，包括「又开始检查了」这种理由——
-        // 那等于点了跳过却没进去。
-        if permissionSkipped { return .workspace }
-        // 检查没跑完时 permission 还是初始的 .unknown。照它渲染，用户开机第一眼看到的
-        // 会是「环境检查没通过」——一句还没查就下的结论。
+                              questionCount: Int,
+                              hasCompletedOnboarding: Bool,
+                              onboardingDismissed: Bool) -> RootScreen {
+        // 引导这次已经收工了就不能再把他挡在外面，包括「又开始检查了」这种理由——
+        // 那等于走完了引导却没进去。也包括「权限还是缺的」：在最后一步点了「先跳过」
+        // 之后立刻又弹回同一屏，是这条流程最容易犯、也最让人恼火的错。
+        if onboardingDismissed { return .workspace }
+        // 检查没跑完时 permission 还是初始的 .unknown。照它渲染，**已经走过引导的老用户**
+        // 开机第一眼会看到「让它能替你操作 ChatGPT」那一步——一句还没查就下的结论。
+        // （这一条计划里的 RootView 代码片段漏掉了，见 Task 8 的实施记录。）
         if isCheckingPermission { return .checkingEnvironment }
-        return permission == .ready ? .workspace : .permissionGate
+        return OnboardingFlow.shouldPresent(permission: permission,
+                                            questionCount: questionCount,
+                                            hasCompletedBefore: hasCompletedOnboarding)
+            ? .onboarding : .workspace
     }
 
     /// 用户自己切了一页之后，「从『训练记录』点『看这次的复盘』带过来的那一场」还留不留。

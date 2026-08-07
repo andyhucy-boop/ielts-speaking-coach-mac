@@ -125,18 +125,24 @@ final class NavigationTests: XCTestCase {
     func testChecksEnvironmentBeforeAccusingTheUserOfAnything() {
         // 环境检查还没跑完时，permission 只能是初始的 .unknown。此时若直接按 .unknown
         // 渲染，用户开机第一眼看到的是「环境检查没通过」——一句还没查就下的结论。
+        //
+        // **已经走过引导的老用户身上这条最要命**：`.unknown` 会算出 `[.environment]`，
+        // 于是每次开机的头十秒，屏幕上都是「让它能替你操作 ChatGPT」——
+        // 而查完多半一切正常。Phase 10 Task 8 的计划片段漏了这一条。
         XCTAssertEqual(
             RootRouter.screen(isCheckingPermission: true, permission: .unknown,
-                              permissionSkipped: false),
+                              questionCount: 217, hasCompletedOnboarding: true,
+                              onboardingDismissed: false),
             .checkingEnvironment)
     }
 
-    func testBlocksWithTheGateWhenSomethingIsMissing() {
+    func testBlocksWithTheOnboardingWhenSomethingIsMissing() {
         for state in [PermissionState.needsAccessibility, .needsChatGPT, .unknown] {
             XCTAssertEqual(
                 RootRouter.screen(isCheckingPermission: false, permission: state,
-                                  permissionSkipped: false),
-                .permissionGate,
+                                  questionCount: 217, hasCompletedOnboarding: true,
+                                  onboardingDismissed: false),
+                .onboarding,
                 "\(state) 时不该直接放进主界面——练习点了会失败且没有线索")
         }
     }
@@ -144,20 +150,36 @@ final class NavigationTests: XCTestCase {
     func testGoesToTheWorkspaceWhenEverythingIsReady() {
         XCTAssertEqual(
             RootRouter.screen(isCheckingPermission: false, permission: .ready,
-                              permissionSkipped: false),
+                              questionCount: 217, hasCompletedOnboarding: true,
+                              onboardingDismissed: false),
             .workspace)
     }
 
-    func testSkippingTheGateLetsTheUserIn() {
-        // spec 第 7 节规定授权可跳过。跳过之后就不能再把他挡在外面，
-        // 包括「又开始检查了」这种理由——那等于点了「先跳过」却没进去。
+    /// 全新安装的人，就算环境一切就绪也要先走一遍引导。
+    ///
+    /// 少了这一条，「引导」就退化成了从前那道只在环境不就绪时才出现的授权页——
+    /// 而环境本来就绪的用户会一头栽进一个空题库的主界面，既没人告诉他题库要自己导，
+    /// 也没人问过他要不要录音。
+    func testAFreshInstallStillWalksThroughTheOnboardingEvenWhenEverythingIsReady() {
+        XCTAssertEqual(
+            RootRouter.screen(isCheckingPermission: false, permission: .ready,
+                              questionCount: 217, hasCompletedOnboarding: false,
+                              onboardingDismissed: false),
+            .onboarding)
+    }
+
+    func testFinishingOrSkippingTheOnboardingLetsTheUserIn() {
+        // spec 第 7 节规定授权可跳过。收工之后就不能再把他挡在外面，
+        // 包括「又开始检查了」这种理由——那等于走完了引导却没进去。
         XCTAssertEqual(
             RootRouter.screen(isCheckingPermission: false, permission: .needsAccessibility,
-                              permissionSkipped: true),
+                              questionCount: 217, hasCompletedOnboarding: true,
+                              onboardingDismissed: true),
             .workspace)
         XCTAssertEqual(
             RootRouter.screen(isCheckingPermission: true, permission: .needsChatGPT,
-                              permissionSkipped: true),
+                              questionCount: 0, hasCompletedOnboarding: false,
+                              onboardingDismissed: true),
             .workspace)
     }
 

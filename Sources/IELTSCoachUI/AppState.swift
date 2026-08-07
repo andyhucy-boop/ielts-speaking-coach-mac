@@ -31,7 +31,17 @@ public final class AppState {
     /// 静默失败会让用户以为目标改好了，下次打开发现又变回去，
     /// 而且他永远不知道为什么。
     public private(set) var settingsError: String?
-    public var permissionSkipped = false
+    /// 这次启动里首次使用引导已经收工了（走完最后一步，或在最后一步点了「先跳过」）。
+    ///
+    /// **它是「本次启动内」的，不进磁盘。** 磁盘上那个「引导看过没有」由
+    /// `OnboardingProgressStore` 记（存本机 UserDefaults，理由见那个文件）。
+    /// 两者分工是：磁盘那份决定「下次开机还问不问」，这一份决定「这次别再弹回来」——
+    /// 少了这一份，用户在最后一步跳过之后，`OnboardingFlow.steps` 会因为权限仍缺
+    /// 立刻算出 `[.environment]`，引导当场又弹回他脸上。
+    ///
+    /// 原名 `permissionSkipped`：那时挡在前面的是只讲权限的 `PermissionGateView`。
+    /// 现在挡在前面的是整条引导，走完它并不等于「跳过了权限」，所以跟着改了名。
+    public var onboardingDismissed = false
 
     /// 侧边栏选中项与跨页跳转意图。
     ///
@@ -438,6 +448,32 @@ public final class AppState {
                                    relativePath: session.recordingPath,
                                    store: store,
                                    recordings: RecordingStore(directory: directory))
+    }
+
+    /// 造一份「录音设置」的视图模型：**与本 AppState 同一个数据目录**。
+    ///
+    /// 首次使用引导的「要不要录下你的回答？」那一步直接内嵌 Phase 5 的 `RecordingSettingsView`，
+    /// 它要的就是这一份。**引导页绝不许自己写一遍开关逻辑**：Phase 10 Task 8 的跨阶段复审
+    /// 补注写明，自己写会造出 Phase 5 明令禁止的那个状态——开关显示「开」、
+    /// 麦克风权限根本没申请过，于是用户练完一场发现什么都没录，而且完全无从查起。
+    /// 「问权限 → 拿到 granted 才写盘 → 写盘走 `RecordingConsent.enable`」这条路
+    /// 只在 `RecordingSettingsViewModel.setEnabled(_:)` 里有一份。
+    ///
+    /// 放在这里而不是让视图自己 new 一个，理由和 `makeRecordingPlaybackViewModel` 一样：
+    /// `directory` 与 `store` 都是私有的，而它们私有是有道理的——App 与命令行必须读写同一个
+    /// 目录。引导里拨的开关要是写进另一个 state.json，用户练完一场一秒录音都没有，
+    /// 而设置窗口里那个开关看着好端端地开着。
+    ///
+    /// **`authorizer` 做成带默认值的参数**：`swift test` 跑的是没有 bundle id、
+    /// 没有 Info.plist 的命令行进程，Phase 5 计划的 Global Constraints 写明单元测试里
+    /// 不许构造 `SystemMicrophoneAuthorizer`（那会真的去问系统要麦克风状态）。
+    /// 默认值只在没传参时才求值，所以生产路径拿到的仍是真家伙。
+    public func makeRecordingSettingsViewModel(
+        authorizer: any MicrophoneAuthorizing = SystemMicrophoneAuthorizer()
+    ) -> RecordingSettingsViewModel {
+        RecordingSettingsViewModel(store: store,
+                                   recordings: RecordingStore(directory: directory),
+                                   authorizer: authorizer)
     }
 
     /// 读出某次练习的复盘，拆成复盘报告页要显示的分区。

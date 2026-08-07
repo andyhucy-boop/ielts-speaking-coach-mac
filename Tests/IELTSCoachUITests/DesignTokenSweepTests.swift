@@ -70,7 +70,13 @@ final class DesignTokenSweepTests: XCTestCase {
             let path = try SourceGuard.relativePath(of: file)
             guard !exempt.contains(path) else { continue }
             let code = try SourceGuard.code(path)
-            guard code.contains("var body") else { continue }   // 只看真的画界面的文件
+            // 只看真的画界面的文件。**判据必须带上 `: some View`**：光看「有没有 `var body`」
+            // 会把纯逻辑文件也算进来——`OnboardingStep.body` 是一段**给用户看的中文正文**
+            // （`String`），它当然不该引用 `Typography` 和 `Palette`，
+            // 但会被下面两条断言当成「整页样式被删光了」报出来。
+            // 模块里现有的每一个 SwiftUI 视图都写成 `var body: some View {`，
+            // 所以这一收紧不放过任何一个真视图（下面那条 `checked.count` 的防空转断言看着）。
+            guard code.contains("var body: some View") else { continue }
             checked.append(path)
 
             XCTAssertGreaterThan(

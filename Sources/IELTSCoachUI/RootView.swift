@@ -35,6 +35,18 @@ public struct RootView: View {
     /// 开了系统「减弱动态效果」就不做过渡（DESIGN-SYSTEM 第 5 节，那是硬性要求）。
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// 首次使用引导走到第几步。
+    ///
+    /// **它必须在这一层，不能在 `WelcomeFlowView` 自己手里**：引导里「重新检查」那一下
+    /// 会把整屏换成「正在检查运行环境…」，引导页连同它的 `@State` 一起被销毁重建，
+    /// 用户会被扔回第一步（理由与 `PermissionGateView.recheckAttempts` 完全相同）。
+    @State private var onboarding = OnboardingFlowModel()
+
+    /// 「引导看过没有」记在哪儿。**存本机 UserDefaults，不进数据目录**——
+    /// 换了机器，辅助功能授权是本机 TCC 的，必须重给一次，引导应该再出现
+    /// （理由写在 `OnboardingProgressStore` 上）。
+    private let onboardingStore: any OnboardingProgressStore
+
     /// 生产入口：真实数据目录 + 真实的环境检查。
     public init() { self.init(app: AppState()) }
 
@@ -45,7 +57,11 @@ public struct RootView: View {
     /// 又会在用户真实的「应用程序支持」目录里建目录和 `.state.lock`。
     /// 也就是说，在预览里直接写无参的 `RootView()`，会让「打开画布看一眼布局」这件事
     /// 产生真实副作用。`PreviewSafetyTests` 扫源码守着这件事。
-    init(app: AppState) { _app = State(initialValue: app) }
+    init(app: AppState,
+         onboardingStore: any OnboardingProgressStore = UserDefaultsOnboardingStore()) {
+        _app = State(initialValue: app)
+        self.onboardingStore = onboardingStore
+    }
 
     public var body: some View {
         // 横幅摆在最外面、三屏之上：它要能在「正在检查运行环境…」和授权引导页上照样显示。
@@ -63,17 +79,22 @@ public struct RootView: View {
             // 直接挂在下面的分支上，切屏会被当成新视图重新触发检查。
             // （`Group` 不行——它会把修饰符透传给每个子视图。）
             ZStack {
-                switch RootRouter.screen(isCheckingPermission: app.isCheckingPermission,
-                                         permission: app.permission,
-                                         permissionSkipped: app.permissionSkipped) {
+                switch RootRouter.screen(
+                    isCheckingPermission: app.isCheckingPermission,
+                    permission: app.permission,
+                    questionCount: app.state.questions.count,
+                    hasCompletedOnboarding: hasCompletedOnboarding,
+                    onboardingDismissed: app.onboardingDismissed) {
                 case .checkingEnvironment:
                     checkingEnvironment
-                case .permissionGate:
-                    PermissionGateView(state: app.permission,
-                                       messages: app.permissionMessages,
-                                       recheckAttempts: app.recheckAttempts,
-                                       onRecheck: { Task { await app.recheckPermission() } },
-                                       onSkip: { app.permissionSkipped = true })
+                case .onboarding:
+                    // 授权那一步在引导里面（`WelcomeFlowView` 复用 `PermissionGateView`），
+                    // 所以这一层不再单独摆一道授权页——两处各摆一道的话，
+                    // 用户在引导里跳过之后会撞上第二道说着同一件事的墙。
+                    WelcomeFlowView(app: app,
+                                    model: onboarding,
+                                    hasCompletedBefore: hasCompletedOnboarding,
+                                    onFinish: finishOnboarding)
                 case .workspace:
                     workspace
                 }
@@ -106,6 +127,22 @@ public struct RootView: View {
                 deepLinkNotice = message
             }
         }
+    }
+
+    /// 磁盘上记着的「引导看过没有」。版本号涨了就当成没看过——
+    /// 不留这个口子的话，改了引导也没人看得到（见 `OnboardingFlow.currentVersion`）。
+    private var hasCompletedOnboarding: Bool {
+        onboardingStore.completedVersion() >= OnboardingFlow.currentVersion
+    }
+
+    /// 引导收工：记一笔「看过了」，再放行到主界面。
+    ///
+    /// **两件事都要做，缺一不可。** 只记不放行，`OnboardingFlow.steps` 会因为权限仍缺
+    /// 立刻算出 `[.environment]`，引导当场又弹回用户脸上；只放行不记，下次开机
+    /// 从「欢迎」重头再来一遍。
+    private func finishOnboarding() {
+        onboardingStore.markCompleted(version: OnboardingFlow.currentVersion)
+        app.onboardingDismissed = true
     }
 
     /// 检查最长可能花十秒（要等 ChatGPT 的无障碍树醒过来）。这段时间里界面必须一直在说话，
@@ -280,11 +317,14 @@ struct PlaceholderView: View {
     }
 }
 
-/// 预览一律走注入：假的环境检查（不碰真的 ChatGPT）+ 临时目录（不碰用户真实的训练数据）。
-/// 见 `RootView.init(app:)` 的说明。
+/// 预览一律走注入：假的环境检查（不碰真的 ChatGPT）+ 临时目录（不碰用户真实的训练数据）
+/// + 只活在内存里的引导进度（不往真实偏好设置里写「引导看过了」）。
+/// 见 `RootView.init(app:onboardingStore:)` 的说明。
 #Preview {
     RootView(app: AppState(
         directory: DataDirectory(root: URL(fileURLWithPath: NSTemporaryDirectory())
             .appending(path: "ielts-coach-preview")),
-        preflight: { BridgeReadiness(ok: true, messages: ["✅ 环境就绪（预览用的假结果）"]) }))
+        preflight: { BridgeReadiness(ok: true, messages: ["✅ 环境就绪（预览用的假结果）"]) }),
+             onboardingStore: InMemoryOnboardingStore(
+                completedVersion: OnboardingFlow.currentVersion))
 }
