@@ -1,0 +1,1 @@
+designated => identifier "com.ielts.speakingcoach" and certificate leaf = H"4bffcd37377a383d9d75460f2c2c9d85174fc82a"

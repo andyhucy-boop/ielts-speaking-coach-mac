@@ -7,13 +7,50 @@ set -euo pipefail
 # TCC（辅助功能授权）记的是签名的「指定要求」。ad-hoc 绑的是二进制指纹 cdhash，
 # 每次编译都变，用户得反复去系统设置重新勾选。自签名绑「标识 + 证书」，
 # 编译多少次都不变。实测对比见计划的「前置条件」一节。
+#
+# 组装期自检两件事（Phase 5 Task 10 / Phase 9 Task 11 留下来的，勿删）：
+#   · Info.plist 里有 CFBundleURLTypes 且 scheme 是 ieltscoach
+#   · Info.plist 里有 NSMicrophoneUsageDescription
+#
+# 签名期自检四件事（Phase 10 Task 1 新增两件、加严一件），任何一件不对都退出非零：
+#   1. 签名本身有效（codesign --verify --strict）
+#   2. 带了 Hardened Runtime 标志
+#   3. 带了麦克风 entitlement（没有它，Hardened Runtime 下录音会被系统拒掉）
+#   4. 「指定要求」形状正确，且与 packaging/expected-designated-requirement.txt 逐字一致
+# 第 4 条是本产品最恼人失败模式的守门员：它一变，用户的辅助功能授权就没了，
+# 而且不会有任何报错，只是「今天怎么又不能自动开练了」。
 
 APP_NAME="IELTS Speaking Coach"
 BUNDLE_ID="com.ielts.speakingcoach"
-SIGN_IDENTITY="IELTS Coach Dev"
+APP_VERSION="1.0.0"
+
+# 可被环境变量覆盖，供 notarize.sh 用 Developer ID 重签时复用同一套组装逻辑。
+SIGN_IDENTITY="${IELTS_SIGN_IDENTITY:-IELTS Coach Dev}"
+SIGNATURE_CHANNEL="${IELTS_SIGNATURE_CHANNEL:-self-signed}"
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$ROOT/.build"
 APP="$BUILD_DIR/$APP_NAME.app"
+ENTITLEMENTS="$ROOT/packaging/IELTSCoach.entitlements"
+BASELINE="$ROOT/packaging/expected-designated-requirement.txt"
+
+if [[ ! -f "$ENTITLEMENTS" ]]; then
+    echo "❌ 找不到 entitlements 文件：$ENTITLEMENTS"
+    echo "   发生了什么：packaging/ 目录不完整。"
+    echo "   下一步：确认这个文件在仓库里并已提交；缺了它，签出来的包在 Hardened Runtime 下用不了麦克风。"
+    exit 1
+fi
+
+# 构建号默认取 git 提交数（单调递增）。
+# IELTS_BUILD_NUMBER 存在时优先 —— verify-signature-stability.sh 靠它制造
+# 「两次打包内容确实不同」的条件，否则那个比较是空转的。
+if [[ -n "${IELTS_BUILD_NUMBER:-}" ]]; then
+    BUILD_NUMBER="$IELTS_BUILD_NUMBER"
+else
+    BUILD_NUMBER="$(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || echo 1)"
+fi
+BUILD_COMMIT="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 echo "▶︎ 编译…"
 swift build -c release --product IELTSCoachApp
@@ -27,6 +64,8 @@ echo "▶︎ 生成图标…"
 "$ROOT/scripts/make-icon.sh"
 cp "$BUILD_DIR/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 
+# 注意：没有 NSAccessibilityUsageDescription 这种键，系统不读它。
+# 辅助功能是 TCC 里由用户手动勾选的，弹的是系统固定文案，不是 App 能自定义的。
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -38,10 +77,14 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleExecutable</key><string>IELTSCoachApp</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.9.0</string>
-    <key>CFBundleVersion</key><string>1</string>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+    <key>CFBundleShortVersionString</key><string>$APP_VERSION</string>
+    <key>CFBundleVersion</key><string>$BUILD_NUMBER</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
+    <key>LSApplicationCategoryType</key><string>public.app-category.education</string>
     <key>NSHighResolutionCapable</key><true/>
+    <key>NSHumanReadableCopyright</key>
+    <string>© 2026 IELTS Speaking Coach 作者。与 OpenAI、British Council、IDP、Cambridge Assessment English 均无隶属关系。</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>开启「保存我的回答录音」后，用于录下你练习时的回答，便于回听。录音只存在本机，可随时删除。</string>
     <key>CFBundleURLTypes</key>
@@ -53,6 +96,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
             <array><string>ieltscoach</string></array>
         </dict>
     </array>
+    <key>IELTSBuildCommit</key><string>$BUILD_COMMIT</string>
+    <key>IELTSBuildDate</key><string>$BUILD_DATE</string>
+    <key>IELTSSigningIdentity</key><string>$SIGN_IDENTITY</string>
+    <key>IELTSSignatureChannel</key><string>$SIGNATURE_CHANNEL</string>
 </dict>
 </plist>
 PLIST
@@ -107,7 +154,54 @@ if ! security find-identity -p codesigning 2>/dev/null | grep -q "\"$SIGN_IDENTI
     exit 1
 fi
 
-codesign --force --sign "$SIGN_IDENTITY" --identifier "$BUNDLE_ID" "$APP"
+# 不加 --deep：Apple 已不建议，且本包里没有嵌套代码，加了只会掩盖问题。
+# --timestamp=none：本地打包不联网。公证路径由 notarize.sh 用 --timestamp 重签。
+codesign --force \
+         --sign "$SIGN_IDENTITY" \
+         --identifier "$BUNDLE_ID" \
+         --options runtime \
+         --entitlements "$ENTITLEMENTS" \
+         --timestamp=none \
+         "$APP"
+
+echo "▶︎ 自检…"
+
+# 下面三段一律「先把输出收进变量，再在变量上匹配」，不用 `codesign … | grep -q`：
+# grep -q 命中即退出会给 codesign 一个 SIGPIPE，配合本脚本开头的 pipefail，
+# 通过的用例反而会被判成失败——那是最难查的一类假红。
+
+VERIFY_OUT="$(codesign --verify --strict --verbose=2 "$APP" 2>&1 || true)"
+case "$VERIFY_OUT" in
+    *"satisfies its Designated Requirement"*)
+        ;;
+    *)
+        echo "❌ 签名校验没通过。"
+        echo "   实际读到：$VERIFY_OUT"
+        echo "   下一步：跑 codesign --verify --strict --verbose=4 \"$APP\" 看具体是哪一项不满足。"
+        exit 1
+        ;;
+esac
+
+SIG_INFO="$(codesign -dvvv "$APP" 2>&1 || true)"
+if ! grep -qE 'flags=0x[0-9a-f]+\(.*runtime' <<< "$SIG_INFO"; then
+    echo "❌ 签出来的包没有 Hardened Runtime 标志。"
+    echo "   发生了什么：codesign 的 --options runtime 没生效，将来送公证会被直接退回。"
+    echo "   下一步：确认上面那条 codesign 命令里的 --options runtime 还在，然后重打。"
+    exit 1
+fi
+
+SIGNED_ENTITLEMENTS="$(codesign -d --entitlements - --xml "$APP" 2>/dev/null || true)"
+case "$SIGNED_ENTITLEMENTS" in
+    *"com.apple.security.device.audio-input"*)
+        ;;
+    *)
+        echo "❌ 签名里没带上麦克风 entitlement。"
+        echo "   发生了什么：Hardened Runtime 打开后，没有这条 entitlement 的 App 一碰麦克风就会被系统直接拒掉，"
+        echo "   用户开「保存我的回答录音」时会失败，而且失败得很难看懂。"
+        echo "   下一步：检查 $ENTITLEMENTS 的内容，以及签名命令里的 --entitlements 参数。"
+        exit 1
+        ;;
+esac
 
 # 签名成功什么都不证明——真正要守的是「指定要求」是否仍然稳定。
 # TCC（辅助功能授权）记的就是它。ad-hoc 签名会让它变成 cdhash H"…"，
@@ -138,5 +232,30 @@ case "$DESIGNATED" in
         ;;
 esac
 
+# 形状对了还不够：形状里那串 leaf 哈希换了一张证书照样对。
+# 所以再跟仓库里记录的基线逐字比一次。
+#
+# 顺序是刻意的：**先验形状、再对基线**。反过来的话，万一哪天签名悄悄退化成 ad-hoc，
+# 首次运行会把那条 cdhash 要求当成基线写进仓库，从此这道闸门永远绿灯。
+if [[ ! -f "$BASELINE" ]]; then
+    printf '%s\n' "$DESIGNATED" > "$BASELINE"
+    echo "ℹ️  首次记录签名基线到 $BASELINE"
+    echo "   下一步：把这个文件提交进仓库。以后每次打包都会跟它逐字比对，"
+    echo "   一旦变了就说明辅助功能授权会失效，脚本会当场拦下来。"
+elif [[ "$DESIGNATED" != "$(cat "$BASELINE")" ]]; then
+    echo "❌ 签名的「指定要求」和仓库里记录的基线不一致。"
+    echo "   基线：$(cat "$BASELINE")"
+    echo "   本次：$DESIGNATED"
+    echo "   发生了什么：系统会把这次打出来的 App 当成另一个程序，"
+    echo "   之前授予的辅助功能权限会失效，用户得回系统设置重新勾一次。"
+    echo "   下一步（二选一）："
+    echo "     A. 你不是故意换证书：确认 login 钥匙串里的「$SIGN_IDENTITY」证书还在、没被重新生成，修好后重打。"
+    echo "     B. 你是故意换证书（例如换成 Developer ID 准备公证）：把新值写进"
+    echo "        $BASELINE 并提交，然后到 系统设置 › 隐私与安全性 › 辅助功能 里"
+    echo "        删掉旧条目、重新勾选一次。"
+    exit 1
+fi
+
 echo "✅ 已生成 $APP"
+echo "   版本 $APP_VERSION（构建 $BUILD_NUMBER，提交 $BUILD_COMMIT，通道 $SIGNATURE_CHANNEL）"
 echo "   $DESIGNATED"
