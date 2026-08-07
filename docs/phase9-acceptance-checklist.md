@@ -192,6 +192,23 @@ Sources/IELTSCoachMCP/Tools/GetTrainingContextTool.swift:113  ExaminerPrompt.bui
 它们分别守着第 5.3 节、第 7.3 节、第 6.4 节要你验的那三件事——
 也就是说那三条判据在真机上要是不满足，**是真机的问题，不是测试放水**。
 
+### 第四处：证明**清单第 5.3 节那条检查本身**有约束力
+
+上面三处验的是「单元测试有没有约束力」。这一处验的是**这份清单里的检查项**有没有约束力——
+因为本清单上一版在 5.3 节写的就是一条空转检查（拿 `sessionTotal` 验「有没有留下半个选择」）。
+
+拿第 1 处那个突变（`state.questions.first(where:…)` → `state.questions.first`，
+等于不存在的题号也会被「选中」）重新编译出真的二进制，
+再拿**真实数据的副本**照 5.3 节的步骤跑一遍「故意传不存在的题号」：
+
+| 检查项 | 突变后的结果 |
+|---|---|
+| **旧检查**：`get_dashboard_data` 的 `sessionTotal` 仍是 0 | ✅ **绿——漏报**。写进去的是 `currentSession`，`sessionTotal` 数的是 `sessions`，两者无关 |
+| **新检查 A**：再调 `get_training_context`，应当仍是「还没有选定题目…」 | ❌ **红**。它返回了一整份真实上下文 |
+| **新检查 B**：`state.json` 的 `currentSession` 应当是 `None` | ❌ **红**。实际是 `{'id': '2026-08-07-001', 'questionId': 'p1-home-001'}`——**还选错了题** |
+
+同一个缺陷，旧检查一声不吭，新检查两条都红。已改回，`swift test` **1490 条全绿**。
+
 ---
 
 ## 3. 准备工作（约 15 分钟）
@@ -244,13 +261,22 @@ PY
 
 ```bash
 cd ~/Projects/ielts-speaking-coach-mac
-./scripts/build-app.sh >/dev/null && codesign -d -r- ".build/IELTS Speaking Coach.app" 2>&1 | grep designated
-./scripts/build-app.sh >/dev/null && codesign -d -r- ".build/IELTS Speaking Coach.app" 2>&1 | grep designated
+./scripts/build-app.sh && codesign -d -r- ".build/IELTS Speaking Coach.app" 2>&1 | grep designated
+./scripts/build-app.sh && codesign -d -r- ".build/IELTS Speaking Coach.app" 2>&1 | grep designated
 ```
 
+> **别给 `build-app.sh` 加 `>/dev/null`。** 它的四道闸门——URL scheme（`:78`）、麦克风用途说明（`:91`）、
+> 签名身份缺失（`:103`）、指定要求形状不对（`:131`）——**报警和诊断全都走 stdout**。
+> 丢掉 stdout 再用 `&&` 串起来的话，脚本一失败整行只会输出**一片空白**，
+> 你拿不到任何线索，而 3.4 是第 6、7 节的硬前提。输出啰嗦一点，好过失败时无声无息。
+
 - [ ] 第一次跑时若弹出「codesign 想使用钥匙串里的私钥」，点「始终允许」
-- [ ] **两行一模一样**（成品标准第 9 条）。不一致 = 辅助功能授权会反复失效，**立刻停下报告**
-- [ ] 打包过程里应当看到 `✓ 已注册 URL scheme：ieltscoach://`
+- [ ] **两行 `designated` 一模一样**（成品标准第 9 条）。不一致 = 辅助功能授权会反复失效，**立刻停下报告**
+- [ ] 打包过程里看到了 `✓ 已注册 URL scheme：ieltscoach://` 和 `✓ 麦克风用途说明：…`
+- [ ] **看到以 `❌` 开头的中文诊断就停下**，照它的「下一步」处理，别继续往下做。
+      最可能撞上的是这一条（子代理没法替你跑签名，理由见第 2 节）：
+      「找不到可用的签名身份「IELTS Coach Dev」（证书或私钥缺失）。」——
+      它后面跟着的三行讲的就是「证书在、私钥不在」这种半截状态怎么修
 
 然后**手动打开一次**——这一步才是让系统登记链接的那一步：
 
@@ -414,7 +440,30 @@ printf '%s\n' \
 - [ ] 是**中文**、说清了「发生了什么」（没有这个题号 + 现在共几题）和「下一步」（两条路）
 - [ ] Codex 收到之后**自己纠正了**（去调 `get_dashboard_data` 找真题号）还是直接把错误甩给你？
       **两种都记下来**——这是「工具说明写得够不够清楚」的直接证据
-- [ ] 顺手让它再调一次 `get_dashboard_data`：`sessionTotal` 仍是 0，**没有留下半个选择**
+- [ ] 紧接着让它再调一次 `get_training_context`（不传参数），预期**仍然是那句空状态文案**，逐字：
+
+```
+还没有选定题目，没有可用的练习上下文。下一步：先调用 set_training_selection 选一道题。
+```
+
+  这一条才是「选题失败不许留下半个选择」的真机验收。前提是你还没成功选过题——
+  按本节开头那条提示，5.5 的第一步应当已经做过了，而它不写盘，状态仍是干净的。
+
+- [ ] 回终端直接看盘，最硬的一条：
+
+```bash
+python3 -c "import json;print(json.load(open('/tmp/ielts-phase9/state.json')).get('currentSession'))"
+```
+
+  预期打印 `None`。打印出一个带 `id` / `questionId` 的字典 = 失败的选题把半个选择写进去了，**停下报告**。
+
+> ⚠️ **别拿 `get_dashboard_data` 的 `sessionTotal` 验这件事**（本清单上一版就是这么写的，是错的）。
+> `set_training_selection` 写的是 `state.currentSession`（`SetTrainingSelectionTool.swift:64`），
+> 而 `sessionTotal` 数的是 `state.sessions`（`DashboardSummary.swift:91`），两者根本不是一回事，
+> `get_dashboard_data` 的负载里也**没有** `currentSession` 这个字段。
+> 实跑确认（2026-08-07，真实数据副本）：**成功**选中 `p2-skill-001`、`state.json` 里
+> `currentSession` 确实写进去了之后，`get_dashboard_data` 返回的 `sessionTotal` **依然是 0**。
+> 也就是说那条检查成功和失败都显示 0，永远不会红——正是本项目消灭过 15 次的那种空转检查。
 
 然后选真的那道：「用 set_training_selection 选 `p2-skill-001`，目标写「回答后补一个原因和一个例子」」。
 
