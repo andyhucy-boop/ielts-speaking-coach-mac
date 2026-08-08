@@ -244,6 +244,7 @@ public struct WelcomeFlowView: View {
             PermissionGateView(state: app.permission,
                                messages: app.permissionMessages,
                                recheckAttempts: app.recheckAttempts,
+                               onRequestPermission: { Task { await app.requestAccessibilityPermission() } },
                                onRecheck: { Task { await app.recheckPermission() } },
                                onSkip: { advance() })
         } else {

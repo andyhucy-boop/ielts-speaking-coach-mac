@@ -25,6 +25,7 @@ public struct PermissionGateView: View {
     /// 「正在检查运行环境…」换掉，本视图连同它的 `@State` 一起销毁重建。
     let recheckAttempts: Int
     let host: HostEnvironment
+    let onRequestPermission: () -> Void
     let onRecheck: () -> Void
     let onSkip: () -> Void
     /// 真正去打开系统设置的那一下。抽成闭包是为了让「返回 false 时到底会不会告诉用户」
@@ -42,6 +43,7 @@ public struct PermissionGateView: View {
     public init(state: PermissionState, messages: [String],
                 recheckAttempts: Int,
                 host: HostEnvironment = .current,
+                onRequestPermission: @escaping () -> Void,
                 onRecheck: @escaping () -> Void, onSkip: @escaping () -> Void,
                 openURL: @escaping (URL) -> Bool = { NSWorkspace.shared.open($0) },
                 writeToPasteboard: @escaping (String) -> Bool = { text in
@@ -51,6 +53,7 @@ public struct PermissionGateView: View {
                 }) {
         self.state = state; self.messages = messages
         self.recheckAttempts = recheckAttempts; self.host = host
+        self.onRequestPermission = onRequestPermission
         self.onRecheck = onRecheck; self.onSkip = onSkip
         self.openURL = openURL; self.writeToPasteboard = writeToPasteboard
     }
@@ -90,11 +93,21 @@ public struct PermissionGateView: View {
 
             HStack(spacing: Spacing.sm) {
                 if state == .needsAccessibility {
+                    // **主行动是「申请权限」而不是「打开系统设置」。**
+                    //
+                    // 只调被动查询（`AXIsProcessTrusted`）的话，本应用根本不会出现在
+                    // 「系统设置 › 隐私与安全性 › 辅助功能」那份列表里——把用户直接送去设置，
+                    // 他会在一个没有这个应用的列表里翻半天。2026-08-08 用户第一次装好就是这样，
+                    // 原话是「系统中没搜到这个软件」。
+                    //
+                    // 点这颗按钮走 `AXIsProcessTrustedWithOptions(prompt:)`：系统弹窗，
+                    // **并且把本应用登记进那份列表**。之后「打开系统设置」才是句有用的话。
+                    Button("申请辅助功能权限") { onRequestPermission() }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Palette.accent)
                     Button("打开系统设置") {
                         notice = PermissionStatus.openSettings(host: host, using: openURL)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Palette.accent)
                     Button("重新检查", action: onRecheck)
                 } else {
                     // 每页只有一个主行动：没有「打开系统设置」时，主行动是「重新检查」
@@ -142,5 +155,5 @@ public struct PermissionGateView: View {
                    + "把「IELTS Speaking Coach」加进去并勾选，然后回到本应用点「重新检查」。"],
         recheckAttempts: 1,
         host: .app(name: "IELTS Speaking Coach"),
-        onRecheck: {}, onSkip: {})
+        onRequestPermission: {}, onRecheck: {}, onSkip: {})
 }

@@ -49,6 +49,9 @@ final class FakeAXAccess: AXAccess, @unchecked Sendable {
     func isTargetInstalled() -> Bool { installed }
     func isTargetRunning() -> Bool { running }
     func isAccessibilityTrusted() -> Bool { trusted }
+    /// 记下被调过几次——「申请权限」按钮点了到底有没有真的去申请，靠这个断言。
+    private(set) var trustRequests = 0
+    func requestAccessibilityTrust() -> Bool { trustRequests += 1; return trusted }
     func launchTarget() throws { running = true }
     func wakeAccessibilityTree(timeout: TimeInterval) -> Bool {
         wakeTimeouts.append(timeout)

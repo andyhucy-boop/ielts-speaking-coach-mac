@@ -56,6 +56,7 @@ public final class AppState {
 
     private let directory: DataDirectory
     private let store: StateStore
+    private let requestTrust: @Sendable () -> Bool
     private let preflight: @Sendable () -> BridgeReadiness
     private let makeBridge: @Sendable () -> any CoachBridge & Sendable
     private let makeTranscriptSampler: @Sendable () -> any TranscriptSampling
@@ -118,7 +119,15 @@ public final class AppState {
         }
     }
 
+    /// 向系统申请辅助功能权限。**这是让本应用出现在「系统设置 › 辅助功能」列表里的唯一办法。**
+    ///
+    /// 与 `livePreflight` 不同，这一份不会启动 ChatGPT，只跟 TCC 打交道。
+    nonisolated public static let liveRequestTrust: @Sendable () -> Bool = {
+        LiveAXAccess().requestAccessibilityTrust()
+    }
+
     public init(directory: DataDirectory = .resolve(),
+                requestTrust: @escaping @Sendable () -> Bool = AppState.liveRequestTrust,
                 preflight: @escaping @Sendable () -> BridgeReadiness = AppState.livePreflight,
                 makeBridge: @escaping @Sendable () -> any CoachBridge & Sendable = AppState.liveBridge,
                 makeTranscriptSampler: @escaping @Sendable () -> any TranscriptSampling
@@ -127,6 +136,7 @@ public final class AppState {
                     -> any PracticeRecording = AppState.liveRecording()) {
         self.directory = directory
         self.store = StateStore(directory: directory)
+        self.requestTrust = requestTrust
         self.preflight = preflight
         self.makeBridge = makeBridge
         self.makeTranscriptSampler = makeTranscriptSampler
@@ -157,6 +167,20 @@ public final class AppState {
         guard !didStartInitialCheck else { return }
         didStartInitialCheck = true
         await runPermissionCheck()
+    }
+
+    /// 向系统申请辅助功能权限，然后立刻重查一次。
+    ///
+    /// **这一步不能省成「让用户自己去系统设置勾」**：没有调过带 prompt 的那个 API 之前，
+    /// 本应用根本不在那份列表里，用户翻遍设置也找不到它——2026-08-08 用户第一次装好
+    /// 就卡在这里，原话是「系统中没搜到这个软件」。
+    ///
+    /// 系统对同一个应用身份只弹一次对话框。已经拒绝过之后再点这颗按钮不会再弹，
+    /// 但那时列表里已经有它了，`PermissionStatus.guidance` 会引导用户去手动勾。
+    public func requestAccessibilityPermission() async {
+        let request = requestTrust
+        _ = await Task.detached(priority: .userInitiated) { request() }.value
+        await recheckPermission()
     }
 
     /// 重新检查运行环境。用户点「重新检查」时**必须**真的再查一次，所以这里没有闸。

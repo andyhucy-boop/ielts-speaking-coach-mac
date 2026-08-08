@@ -84,6 +84,20 @@ public final class LiveAXAccess: AXAccess, @unchecked Sendable {
         AXIsProcessTrusted()
     }
 
+    public func requestAccessibilityTrust() -> Bool {
+        // 带 prompt 的这个变体做两件事，第二件才是关键：
+        // 1. 没授权时弹出系统对话框
+        // 2. **把本应用登记进「系统设置 › 隐私与安全性 › 辅助功能」那份列表**
+        //
+        // 只用 AXIsProcessTrusted() 的话第 2 件永远不会发生，用户在设置里根本找不到这个应用。
+        // 已经拒绝过之后再调不会再弹对话框，但那时列表里已经有它了，用户能自己勾上。
+        // 键名写成字面量而不是 kAXTrustedCheckOptionPrompt：后者是个全局 var，
+        // Swift 6 的严格并发检查会报「not concurrency-safe because it involves shared mutable state」。
+        // 字面量的值与它完全相同，且是 Apple 文档里公开的常量名，不会变。
+        let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
+        return AXIsProcessTrustedWithOptions(options)
+    }
+
     public func launchTarget() throws {
         guard !isTargetRunning() else { return }
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: Self.targetBundleID) else {
