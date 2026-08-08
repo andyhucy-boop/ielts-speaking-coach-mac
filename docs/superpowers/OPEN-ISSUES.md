@@ -5,9 +5,11 @@
 
 修完一条就从这里删掉。**但只有自己做过突变、亲眼看到红，才允许删。**
 
-**最后一次整体复核：2026-08-07（Phase 5 录音，见第十节）。基线 `swift test` = 846 条 / 0 失败 / 7.4–7.7 秒。**
+**最后一次整体复核：2026-08-08（成品终审，见第负一节）。基线 `swift test` = 1857 条 / 0 失败 / 20.2 秒。**
 
-复核时工作区是干净的，与 `phase2-bridge` HEAD（`664808f`）一致。
+> 上一次是 2026-08-07（Phase 5 录音，见第十节），当时的基线是 846 条 / 7.4–7.7 秒，
+> 工作区与 `phase2-bridge` HEAD（`664808f`）一致。
+> **但今天的基线是 1857**，别再拿 846 去对。
 
 > 上一次是 2026-08-06 第二轮（第九节），当时的基线是 706 条 / 6.0–6.2 秒，
 > 工作区与 `8ba702c` 一致。各节里的旧条数按当时实测原样保留，
@@ -23,7 +25,80 @@
 
 ---
 
-## 零、本轮复核：做了什么、看到了什么
+## 负一、成品终审（2026-08-08）：13 条修完之后的独立复核
+
+完整报告在 `docs/superpowers/FINAL-REVIEW.md`。这里只记**与本清单有关**的部分。
+
+### 四条最狠的缺陷，逐条把修复拆掉看它复发
+
+不是读代码判断「看起来修好了」，是把修好的那段逻辑改回缺陷前的形状、
+用**自己写的探针**（不复用实现者的假件）跑一遍、看到原报告描述的确切后果，再改回去。
+探针跑完即删，没有提交。
+
+| 突变 | 拆掉的东西 | 看到了什么 | 咬住它的测试 |
+|---|---|---|---|
+| M-A | `PracticeRunner.ensureStillRunning` 掏空 | 取消之后录音器 `begin` 被调 1 次（麦克风真被重开）、`sendText` 照发、剪贴板从「用户刚复制的银行卡号」变 nil、`reports/` 真的多出一份复盘 | `PracticeCancelTests` 4 条 + 探针 2 条 |
+| M-B | 两处 `guard !isWrappingUp` 掏空 | 连点两下 → `sendText` 被调 **2 次**，两条链路交错跑（`isVoiceActive, endVoice, sendText, isVoiceActive, endVoice, sendText, …`） | 探针 1 条（作者那组走的是别的判据） |
+| M-C | `DataDirectory.safeURL` 掏空成「直接拼」 | **真实文件系统上**：`state.json` 真被删、录音目录真被递归删光、数据目录**外面**的文件真被删、那条记录也一起没了 | `SessionDeleterTests` 新补的 6 条 + 探针 1 条 |
+| M-D | 分区表拿掉 habits/logic_feedback + `summary(from:)` 恒空 | 只含这三块的复盘 → 分区列表 `[]`，「回答前有较长停顿」「没有先直接回应问题」两句都到不了任何一行 | `ReviewReportViewModelTests` 7 条 + 探针 1 条 |
+
+### 本轮修掉的一条守卫缺口（初审 3.2 点名、修第 3 条的人没关上）
+
+**`LiveAXAccess` 的代次校验此前没有任何测试盯着。**
+实测（突变 M-E）：把 `press`/`setValue` 里的 `element.epoch == currentEpoch` 整个删掉，
+**1855 条测试没有一条会红**。
+
+原因很具体：修第 3 条时新补的 `LiveAXAccessConcurrencyTests` 走的是「找不到目标 App」那道接缝
+（`locateApp: { nil }`），那时 `elementMap` 恒为空，`press` 无论如何都返回 false——
+它问的是「有没有丢 +1」「会不会当场炸」，恰恰问不到「旧引用还认不认」。
+连它最后那句 `XCTAssertFalse(access.press(stale))` 也是恒成立的。
+
+真删掉之后的后果：rawID 每次快照都从 0 重编，旧引用会**静默命中新树里编号相同的另一个元素**，
+本工具在 ChatGPT 里按到别的控件上。
+
+**修法**：把「验代次 + 取元素」抽成 `internal func resolve(_:)`（两件事仍在同一把锁里，
+`press`/`setValue` 行为一个字没变），新增 `Tests/ChatGPTBridgeTests/LiveAXAccessEpochGuardTests.swift`
+直接问它。接缝给的是**本测试进程自己**的 `AXUIElement`（没有 GUI，树里只有根节点一个——
+而这里要的恰恰只是「映射表里有一条」），全程只问 `resolve`，`press`/`setValue` 一次都不调用，
+**不碰真实 ChatGPT、不发出任何按键**（铁律 3）。
+突变证明：把那一行改回没有代次校验的样子，`testAReferenceFromThepreviousSnapshotIsRefused…` 当场红。
+
+### 从本清单里划掉的一条
+
+- ~~`SessionDeleterTests` 的假件把数据目录外的路径一律当成「文件不存在」，路径穿越永远测不出来~~
+  → **已修**：新补的 6 条走真实文件系统（`SystemFileRemover`），断言的是磁盘上
+  `state.json` / 录音目录 / 数据目录外的文件还在不在。突变 M-C 验过它们真的会红。
+
+### 仍然留在清单上的（终审逐条复核，都还在）
+
+- **词汇导出的最后一跳（文本 → 文件字节）零测试**，界面那句「已经把 N 张卡片存到 xxx.txt」
+  是拿内存里的数算的，跟磁盘上落了什么字节无关。
+- **诊断的十个档位里有三个（录音、题库导入、生成计划）没有任何地方会写进去。**
+  终审实测：`LastErrorLog.shared.record` 全仓库只有 4 个调用点（读盘、写盘、解析复盘、练习失败）。
+- **逐字稿采样仍然在主线程上遍历整棵界面树**（`PracticeRunner.beginCollectingTranscript` 里那个
+  `Task` 继承主 actor）。练习进行中界面每 2.5 秒顿一下，不丢任何数据。
+- **文案指着不存在的东西还有 5 处**（`PlanRegenerator` 的「点『按计划练今天』」其实是卡片标题、
+  `RetrainingCoordinator` 的「带着这个目标重练」全应用没有这颗按钮、
+  「在访达中显示原文」不做存在性判断也不给反馈、命令行导入 PDF 时把原因说反了、
+  `ChatGPTBridgeError` 是全项目唯一没有中文描述的错误类型）。逐条见 FINAL-REVIEW 第 3.3 节。
+- **`AXDriver` 每场练习取复盘时都会清空并改写系统剪贴板，全程没有一句话告诉用户**
+  （取消之后不会再发生了，但顺利路径上仍然如此）。
+- **`scripts/seed-demo-data.swift` 的安全闸只认默认目录，不认自定义数据目录的环境变量。**
+- 第一到第十节里没被上面点到名的，终审没有逐条复验，**按仍然存在处理**。
+
+### 终审新记的一条观察（不是缺陷，但别当成保证）
+
+**`ReviewParser.looksLikeReview` 只认四个键**（`must_correct` / `natural_upgrades` /
+`logic_feedback` / `priority_target`），所以一份**只有** summary（或只有 habits / vocabulary /
+answer_upgrades）的复盘会被整份拒收。属实，但失败是**响亮**的（中文错误 + 完整文件路径 + 下一步），
+不是静默失败；改动解析器的判别力有误伤风险（它要在 ChatGPT 的闲聊里认出哪块 JSON 是复盘）。
+已挂成后台任务，没有顺手改。
+
+---
+
+## 零、2026-08-06 第一轮复核：做了什么、看到了什么
+
+（下文里的「本轮」指的是那一轮，不是终审。）
 
 ### 四个「曾经全绿」的最狠突变，现在全部变红
 

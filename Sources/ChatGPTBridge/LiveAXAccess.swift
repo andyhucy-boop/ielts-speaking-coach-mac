@@ -126,22 +126,30 @@ public final class LiveAXAccess: AXAccess, @unchecked Sendable {
         return result
     }
 
-    public func setValue(_ text: String, on element: AXElementRef) -> Bool {
-        // 「验代次」和「取元素」必须在同一把锁里：分开的话，两句之间来一次
-        // `snapshotTree()`，验过的代次就已经作废，取到的是新树里同编号的另一个元素。
+    /// 「验代次」+「取元素」。**两件事必须在同一把锁里**：分开的话，两句之间来一次
+    /// `snapshotTree()`，验过的代次就已经作废，取到的是新树里同编号的另一个元素。
+    ///
+    /// **抽成一个函数只为一件事：让代次校验本身测得到。** 它此前只以两行三元表达式
+    /// 的形态活在 `press`/`setValue` 里，而唯一碰得到它的测试走的是「找不到目标 App」
+    /// 那道接缝——那时 `elementMap` 恒为空，`press` 无论如何都返回 false。
+    /// 于是把这两处的 `element.epoch == currentEpoch` 整个删掉，全套测试没有一条会红
+    /// （本次终审实测过）。而真删掉之后，本工具会在 ChatGPT 里**按到编号相同的另一个控件**：
+    /// 用户看到的是「按钮明明在，按下去没反应」，或者更糟——按到了别的东西。
+    /// 现在 `LiveAXAccessEpochGuardTests` 直接问这个函数，删一个字它就红。
+    func resolve(_ element: AXElementRef) -> AXUIElement? {
         lock.lock()
-        let axElement = element.epoch == currentEpoch ? elementMap[element.rawID] : nil
-        lock.unlock()
-        guard let axElement else { return false }
+        defer { lock.unlock() }
+        return element.epoch == currentEpoch ? elementMap[element.rawID] : nil
+    }
+
+    public func setValue(_ text: String, on element: AXElementRef) -> Bool {
+        guard let axElement = resolve(element) else { return false }
         return AXUIElementSetAttributeValue(axElement, kAXValueAttribute as CFString, text as CFTypeRef) == .success
     }
 
     /// **注意：返回 true 不等于动作生效**，调用方必须另行验证状态变化。
     public func press(_ element: AXElementRef) -> Bool {
-        lock.lock()
-        let axElement = element.epoch == currentEpoch ? elementMap[element.rawID] : nil
-        lock.unlock()
-        guard let axElement else { return false }
+        guard let axElement = resolve(element) else { return false }
         return AXUIElementPerformAction(axElement, kAXPressAction as CFString) == .success
     }
 
