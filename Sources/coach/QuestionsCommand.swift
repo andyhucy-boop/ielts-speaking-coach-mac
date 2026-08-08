@@ -1,5 +1,6 @@
 import Foundation
 import IELTSCoachCore
+import PDFKit
 
 enum QuestionsCommand {
     static func run(_ args: [String]) -> Int32 {
@@ -29,7 +30,8 @@ enum QuestionsCommand {
 
     private static func importBank(path: String?) -> Int32 {
         guard let path else {
-            print("❌ 没有指定题库文件。下一步：coach questions import ~/Downloads/题库.csv")
+            print("❌ 没有指定题库文件。下一步：coach questions import ~/Downloads/题库.pdf")
+            print("   支持 .pdf / .csv / .json 三种。")
             return 2
         }
         let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
@@ -37,19 +39,42 @@ enum QuestionsCommand {
         if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
            isDirectory.boolValue {
             print("❌ 「\(url.path)」是个文件夹，不是题库文件。")
-            print("   下一步：指定文件夹里那个具体的 .csv 或 .json 文件。")
+            print("   下一步：指定文件夹里那个具体的 .pdf / .csv / .json 文件。")
             return 2
         }
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else {
-            print("❌ 读不到文件：\(url.path)")
-            print("   下一步：确认路径正确、文件是 UTF-8 编码的文本，然后重试。")
-            return 1
-        }
+        let ext = url.pathExtension.lowercased()
         let title = url.deletingPathExtension().lastPathComponent
+
+        // PDF 走 PDFKit 取纯文本，再交给 Core 里那个只吃字符串的解析器。
+        // **PDFKit 只在这里出现**——`IELTSCoachCore` 只许依赖 Foundation。
+        let text: String
+        if ext == "pdf" {
+            guard let extracted = PDFDocument(url: url)?.string, !extracted.isEmpty else {
+                print("❌ 这份 PDF 里没有可提取的文字，它可能是扫描件。")
+                print("   下一步：换一份文字版 PDF，或先用系统「预览」把它转成文字。")
+                return 1
+            }
+            text = extracted
+        } else {
+            guard let plain = try? String(contentsOf: url, encoding: .utf8) else {
+                print("❌ 读不到文件：\(url.path)")
+                print("   下一步：确认路径正确、文件是 UTF-8 编码的文本，然后重试。")
+                return 1
+            }
+            text = plain
+        }
+
         do {
-            let result = url.pathExtension.lowercased() == "json"
-                ? try QuestionBankImporter.importJSON(text, sourceTitle: title)
-                : try QuestionBankImporter.importCSV(text, sourceTitle: title)
+            let result: ImportResult
+            switch ext {
+            case "pdf":
+                result = try PDFQuestionExtractor.extract(plainText: text,
+                                                          sourceTitle: title, sourceUrl: "")
+            case "json":
+                result = try QuestionBankImporter.importJSON(text, sourceTitle: title)
+            default:
+                result = try QuestionBankImporter.importCSV(text, sourceTitle: title)
+            }
 
             result.warnings.forEach { print("⚠️  \($0)") }
 
