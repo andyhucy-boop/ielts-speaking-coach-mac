@@ -45,7 +45,7 @@ final class DiagnosticsReportTests: XCTestCase {
     private func input(permission: PermissionState = .ready,
                        findings: Int = 0,
                        usage: DataUsageReport? = nil,
-                       environmentMessages: [String] = [],
+                       environmentMessages: [String]? = nil,
                        lastError: DiagnosticsError? = nil) -> DiagnosticsInput {
         DiagnosticsInput(metadata: metadata(),
                          dataDirectory: URL(fileURLWithPath: "/Users/tester/Library/Application Support/IELTS Speaking Coach"),
@@ -131,6 +131,33 @@ final class DiagnosticsReportTests: XCTestCase {
         let text = DiagnosticsReport.text(
             input(environmentMessages: ["✅ 找到 ChatGPT", "❌ 没有辅助功能权限"]))
         XCTAssertTrue(text.contains("没有辅助功能权限"), text)
+    }
+
+    /// 「还没查过」和「查过了却没出声」是两件事，诊断文字里必须说成两句话。
+    ///
+    /// 关于页刻意不自动检查环境（那会把 ChatGPT 拉到前台，打断用户手上的事），
+    /// 所以「一条输出都没有」正是它**没被点过「重新检查」时的正常状态**。
+    /// 把它写成「这本身就不正常」，收到这段话的人会从一个假线索查起；
+    /// 而页面若再补一句「这是设计如此」，同一段文字里就有两句打架的话了
+    /// （2026-08-08 复审实测：关于页复制出来的原文正是这样）。
+    func testAnEnvironmentThatWasNeverCheckedIsCalledUncheckedNotAbnormal() {
+        let text = DiagnosticsReport.text(input(environmentMessages: nil))
+        XCTAssertTrue(text.contains("还没查过"),
+                      "没说清环境检查压根还没跑过：\n\(text)")
+        XCTAssertFalse(text.contains("不正常"),
+                       "还没查过是正常状态，说成「不正常」是把人往假线索上引：\n\(text)")
+        XCTAssertTrue(text.contains("下一步"),
+                      "只说「还没查过」不说怎么才能查（铁律 6）：\n\(text)")
+    }
+
+    /// 反过来的那一半：**真的查过了却一条输出都没有，那才是不正常**，必须点出来。
+    /// 少了这条，把上面那一支写成「两种情况都说成还没查过」也是绿的。
+    func testACheckThatRanButSaidNothingIsCalledOutAsAbnormal() {
+        let text = DiagnosticsReport.text(input(environmentMessages: []))
+        XCTAssertTrue(text.contains("不正常"),
+                      "环境检查跑过了却一句话都没输出，这确实不正常，诊断里得说出来：\n\(text)")
+        XCTAssertFalse(text.contains("还没查过"),
+                       "查过了却说成「还没查过」，收到这段话的人会让用户再查一遍：\n\(text)")
     }
 
     func testDiagnosticsCarryTheDataDirectoryUsage() {

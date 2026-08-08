@@ -55,14 +55,41 @@ final class FeedbackViewTests: XCTestCase {
         }
     }
 
+    /// 假访达。**按「这儿真的是一个文件夹吗」作答**，与生产实现
+    /// （`AboutPageModel.revealInFinder`，本页复用的就是它）同一条判据。
+    ///
+    /// 这一点是有讲究的：无脑返回 true 的话，「交给访达之前先把目录建出来」
+    /// 那一步删掉也不会红——而那正是这段代码存在的唯一理由
+    /// （全新安装、还没练过一场时，这个目录压根不存在）。
     private final class FinderSpy {
         private(set) var opened: URL?
+        /// 访达那一侧自己失败（`false`）。用来单独制造「目录在、但就是打不开」。
         var succeeds = true
 
         func reveal(_ url: URL) -> Bool {
-            guard succeeds else { return false }
             opened = url
-            return true
+            guard succeeds else { return false }
+            var isDirectory: ObjCBool = false
+            let exists = FileManager.default.fileExists(atPath: url.path,
+                                                        isDirectory: &isDirectory)
+            return exists && isDirectory.boolValue
+        }
+    }
+
+    /// 假 preflight。**绝不接触真实 ChatGPT（铁律 5）。**
+    /// 记调用次数：「重新检查环境」那颗按钮到底有没有真的再查一次，只能问它。
+    private final class PreflightSpy: @unchecked Sendable {
+        private let lock = NSLock()
+        private var invocations = 0
+        private let result: BridgeReadiness
+
+        init(_ result: BridgeReadiness) { self.result = result }
+
+        var calls: Int { lock.withLock { invocations } }
+
+        func run() -> BridgeReadiness {
+            lock.withLock { invocations += 1 }
+            return result
         }
     }
 
@@ -72,13 +99,18 @@ final class FeedbackViewTests: XCTestCase {
                  preflight: { BridgeReadiness(ok: true, messages: messages) })
     }
 
+    private func makeApp(preflight spy: PreflightSpy) -> AppState {
+        AppState(directory: directory, preflight: { spy.run() })
+    }
+
     private func makeModel(app: AppState? = nil,
                            log: LastErrorLog = LastErrorLog(),
+                           directory override: DataDirectory? = nil,
                            pasteboard: PasteboardSpy = PasteboardSpy(),
                            finder: FinderSpy = FinderSpy()) -> FeedbackPageModel {
         FeedbackPageModel(app: app ?? makeApp(),
                           log: log,
-                          directory: directory,
+                          directory: override ?? directory,
                           metadata: AppMetadata(displayName: "IELTS Speaking Coach",
                                                 bundleIdentifier: "com.ielts.speakingcoach",
                                                 shortVersion: "1.0.0", buildNumber: "42",
@@ -157,6 +189,78 @@ final class FeedbackViewTests: XCTestCase {
         XCTAssertTrue(notice.text.contains("下一步"), notice.text)
     }
 
+    /// **全新安装、还没练过一场时这个目录压根不存在**，所以要先建出来再交给访达。
+    ///
+    /// 关于页对同一件事有一条专门的测试
+    /// （`AboutViewTests.testRevealingTheDataDirectoryCreatesItFirstSoFinderHasSomethingToOpen`），
+    /// 这一页照抄了实现却没照抄那条测试：`setUp` 一上来就把目录建好了，
+    /// 于是「目录还不存在」这条路一次都没走过——而那是那行 `createIfNeeded()` 存在的唯一理由。
+    /// 2026-08-08 复审实测：把那一行删掉，完整 `swift test` 全绿。
+    func testRevealingTheDataDirectoryCreatesItFirstSoFinderHasSomethingToOpen() throws {
+        let finder = FinderSpy()
+        let model = makeModel(finder: finder)
+        try FileManager.default.removeItem(at: directory.root)
+
+        model.revealDataDirectory()
+
+        XCTAssertEqual(finder.opened, directory.root, "交给访达的不是数据目录本身")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.root.path),
+                      "目录不存在时没有先建出来，访达打开的会是一个不存在的位置——"
+                          + "而用户看到的是一句「已在访达中打开数据目录」")
+        let notice = try XCTUnwrap(model.notice, "点了按钮却什么反馈都没有")
+        XCTAssertFalse(notice.isFailure, "该成功的一次被报成了失败：\(notice.text)")
+    }
+
+    /// 目录**建不出来**（位置被一个同名文件占了、盘满、只读卷）时必须说话，
+    /// 而且要把系统报的原因带上——`try?` 吞掉再说一句「已打开」正是铁律 7 点名禁止的事。
+    func testRevealingSaysWhyWhenTheFolderCannotEvenBeCreated() throws {
+        let blocked = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "ielts-feedback-blocked-\(UUID().uuidString)")
+        try Data("这是个文件，不是目录".utf8).write(to: blocked)
+        defer { try? FileManager.default.removeItem(at: blocked) }
+
+        let model = makeModel(directory: DataDirectory(root: blocked))
+        model.revealDataDirectory()
+
+        let notice = try XCTUnwrap(model.notice, "打不开却一声不吭（铁律 7）")
+        XCTAssertTrue(notice.isFailure, "明明没打开，却给了一句成功提示：\(notice.text)")
+        XCTAssertTrue(notice.text.contains(blocked.path), "没说是哪个位置：\(notice.text)")
+        XCTAssertTrue(notice.text.contains("系统报的是"),
+                      "把建目录失败的原因吞了。用户只看到「打不开」，不知道是被一个同名文件占了："
+                          + notice.text)
+        XCTAssertTrue(notice.text.contains("下一步"), notice.text)
+    }
+
+    // MARK: - 二之二、重新检查环境：那颗按钮真的会去查，而且查完把占用重新量一遍
+
+    /// 「重新检查环境」按下去要真的再跑一次 preflight，并把数据目录占用重新量一次。
+    ///
+    /// 2026-08-08 复审实测：把 `recheckEnvironment()` 的函数体掏成 `_ = app`，
+    /// 完整 `swift test` 全绿——这颗按钮变成哑巴，没有一条测试发现。
+    /// `testTheThreeButtonsAreWiredToTheThreeActions` 是扫源码的，
+    /// 只能证明按钮调了这个方法，证明不了这个方法干了活。
+    func testRecheckingTheEnvironmentReallyChecksAgainAndRemeasuresTheDirectory() async throws {
+        try Data(repeating: 0x41, count: 3_000).write(to: directory.stateFile)
+        let spy = PreflightSpy(BridgeReadiness(ok: false, messages: ["❌ 某种没见过的失败：errno 42"]))
+        let app = makeApp(preflight: spy)
+        let model = makeModel(app: app)
+        XCTAssertEqual(spy.calls, 0, "还没点呢就查过了？这条测试的前提不成立")
+        XCTAssertNil(model.usage, "这条测试的前提是「还没量过」")
+
+        await model.recheckEnvironment()
+
+        XCTAssertEqual(spy.calls, 1,
+                       "「重新检查环境」按下去根本没再查一次——这颗按钮是个哑巴，"
+                           + "而用户按它正是因为他刚在系统设置里改完权限")
+        XCTAssertTrue(model.diagnosticsText.contains("errno 42"),
+                      "查是查了，新的检查结果却没进诊断文本：\n" + model.diagnosticsText)
+        XCTAssertNotNil(model.usage,
+                        "查完没有把数据目录占用重新量一遍——"
+                            + "用户刚删完录音再来看，那个数字还是进页面那一刻的旧值")
+        XCTAssertTrue(model.diagnosticsText.contains("数据目录占用"),
+                      "量了却没进诊断文本：\n" + model.diagnosticsText)
+    }
+
     // MARK: - 三、诊断文本：带够排障要的东西，一个字练习内容都不带
 
     func testTheDiagnosticsCarryTheEnvironmentCheckOutputOnceThereIsAny() async {
@@ -167,6 +271,25 @@ final class FeedbackViewTests: XCTestCase {
         XCTAssertTrue(model.diagnosticsText.contains("没有辅助功能权限"),
                       "环境检查原文没跟着发出去——「ChatGPT 改版打断自动化」时那几行是最有用的线索：\n"
                       + model.diagnosticsText)
+        XCTAssertFalse(model.diagnosticsText.contains("还没查过"),
+                       "查完了还写着「还没查过」，上面那几行结论会被当成没效：\n"
+                       + model.diagnosticsText)
+    }
+
+    /// 查完之前那几行是「还没查过」，**不是「查过了却一条输出都没有（不正常）」**。
+    ///
+    /// 这两句话的差别不是措辞：后者会让收到这段文字的人从一个假线索查起。
+    /// 关于页此前正是把这两件事混成了一件，于是同一段话里一句说「不正常」、
+    /// 紧接着一句说「设计如此」（2026-08-08 复审）。这一页读的是同一个
+    /// `DiagnosticsReport`，所以同一个坑在这里也要有人守着。
+    func testTheDiagnosticsSayTheEnvironmentIsUncheckedRatherThanAbnormalBeforeAnyCheck() {
+        let app = makeApp()
+        XCTAssertFalse(app.hasCheckedEnvironment, "这条测试的前提是「还没查过」")
+        let text = makeModel(app: app).diagnosticsText
+
+        XCTAssertTrue(text.contains("还没查过"), "没说清环境检查还没跑过：\n\(text)")
+        XCTAssertFalse(text.contains("不正常"),
+                       "还没查过被说成了「不正常」，收到这段话的人会从一个假线索查起：\n\(text)")
     }
 
     func testTheDiagnosticsCarryTheLastErrorAsACodeAndNeverAsItsMessage() {

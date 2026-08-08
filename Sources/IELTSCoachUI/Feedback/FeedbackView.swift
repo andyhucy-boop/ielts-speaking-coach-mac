@@ -94,7 +94,11 @@ public final class FeedbackPageModel {
             portabilityFindingCount: DataPortabilityAudit.audit(state: app.state,
                                                                 directory: directory).count,
             usage: usage,
-            environmentMessages: app.permissionMessages,
+            // **查完之前传 `nil`，不是传那个空数组**：空数组的含义是
+            // 「查过了却一条输出都没有」，那不正常；而查完之前它只是「还没查」。
+            // 两者混成一件事的话，这段要转发给别人的文字会从一个假线索起头
+            // （关于页此前就是这么写的，2026-08-08 复审修）。
+            environmentMessages: app.hasCheckedEnvironment ? app.permissionMessages : nil,
             lastError: log.last))
         if let loadError = app.loadError {
             text += "\n注：读不到训练数据，所以上面「数据量」与「数据可搬迁检查」两行是占位值，"

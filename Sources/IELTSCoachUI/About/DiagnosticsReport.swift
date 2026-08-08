@@ -12,7 +12,18 @@ public struct DiagnosticsInput: Sendable {
     public let usage: DataUsageReport?
     /// 环境检查（preflight）的输出原文。「ChatGPT 改版打断自动化」是已知风险，
     /// 真出问题时这几行就是最有用的线索。
-    public let environmentMessages: [String]
+    ///
+    /// **三种取值是三件不同的事，不许混成两件：**
+    /// - `nil`：**还没查过**。关于页刻意不自动检查（检查要把 ChatGPT 拉到前台，
+    ///   会打断用户手上的事），所以「一条输出都没有」正是它没被点过「重新检查」时的常态。
+    /// - `[]`：查过了，**却一条输出都没有**。那才真是不正常，要在文字里点出来。
+    /// - 非空：原样列出来。
+    ///
+    /// 混成两件的后果本项目实测过（2026-08-08 复审）：关于页把 `nil` 那种情况
+    /// 送进了「没有输出（这本身就不正常）」这一支，然后自己在末尾补一句
+    /// 「打开关于页不会自动检查，所以那一行不是结论」——同一段要转发给别人的文字里，
+    /// 一句说「不正常」，紧接着一句说「设计如此」。
+    public let environmentMessages: [String]?
     /// 最近一次错误。**只有阶段、代号、时间**，一个字的错误原文都没有——
     /// 原文里可能夹着复盘片段，而复盘片段里全是用户说过的英语（见 `LastErrorLog`）。
     public let lastError: DiagnosticsError?
@@ -21,7 +32,7 @@ public struct DiagnosticsInput: Sendable {
                 permission: PermissionState, state: CoachState,
                 portabilityFindingCount: Int,
                 usage: DataUsageReport? = nil,
-                environmentMessages: [String] = [],
+                environmentMessages: [String]? = nil,
                 lastError: DiagnosticsError? = nil) {
         self.metadata = metadata; self.dataDirectory = dataDirectory
         self.systemVersion = systemVersion; self.permission = permission
@@ -72,11 +83,20 @@ public enum DiagnosticsReport {
         if let usage = input.usage {
             lines.append("数据目录占用：\(usage.summaryText)")
         }
-        if input.environmentMessages.isEmpty {
-            lines.append("环境检查：没有输出（这本身就不正常，请一并说明）")
-        } else {
+        // 三支，不是两支：**「还没查过」不是「查过了没出声」。**
+        // 混成两支的话，一段要转发给别人的文字里会同时出现「这本身就不正常」
+        // 和「这是设计如此」，收到的人不知道该信哪一句（2026-08-08 复审实测到过）。
+        switch input.environmentMessages {
+        case nil:
+            lines.append("环境检查：还没查过。查一次要启动 ChatGPT、会打断你手上的事，"
+                + "所以不会自动查——上面「辅助功能」那一行因此不是结论，别照着它排查。"
+                + "下一步：点「重新检查」（问题反馈页上这颗按钮写的是「重新检查环境」），"
+                + "查完再复制一次。")
+        case let messages? where messages.isEmpty:
+            lines.append("环境检查：查过了，但一条输出都没有（这本身就不正常，请一并说明）")
+        case let messages?:
             lines.append("环境检查：")
-            lines += input.environmentMessages.map { "- \($0)" }
+            lines += messages.map { "- \($0)" }
         }
         if let error = input.lastError {
             lines.append("最近一次错误：\(error.summary)")

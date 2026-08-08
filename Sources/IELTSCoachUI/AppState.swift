@@ -14,6 +14,13 @@ public final class AppState {
     /// 环境检查还没出结论。**初值是 true**：一次都还没查过时，`permission` 里的 `.unknown`
     /// 不是结论而是「不知道」，照它渲染会让用户开机第一眼看到「环境检查没通过」。
     public private(set) var isCheckingPermission = true
+    /// 环境检查**已经跑完过至少一次**。初值 false。
+    ///
+    /// 存在的理由是诊断文本（Phase 10 Task 18，2026-08-08 复审修）：`permissionMessages`
+    /// 为空有两种截然不同的成因——「还没查」和「查了却一句都没输出」，后者才不正常。
+    /// 只看那个空数组的话，两者会被写成同一句话发给别人。
+    /// `isCheckingPermission` 顶不上这个用：它初值就是 true，而「正在查」不等于「查完了」。
+    public private(set) var hasCheckedEnvironment = false
     /// 用户点「重新检查」并且**已经查完**的次数。0 表示还没点过。
     ///
     /// 界面靠它给「重新检查」这颗按钮一个反馈：重查结论和上一次一样时，
@@ -180,6 +187,7 @@ public final class AppState {
         let readiness = await Task.detached(priority: .userInitiated) { run() }.value
         permission = PermissionStatus.evaluate(readiness: readiness)
         permissionMessages = readiness.messages
+        hasCheckedEnvironment = true
         isCheckingPermission = false
     }
 

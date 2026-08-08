@@ -319,6 +319,31 @@ final class AboutViewTests: XCTestCase {
                       "环境一次都没查过，诊断里那行「辅助功能」却当成结论发了出去：\(copied)")
     }
 
+    /// **这一段文字里不许出现两句互相矛盾的话。**
+    ///
+    /// 关于页刻意不自动检查环境（检查要把 ChatGPT 拉到前台，会打断用户手上的事），
+    /// 所以「一条检查输出都没有」恰恰是这一页**没被点过「重新检查」时的正常状态**。
+    /// 把它写成「这本身就不正常，请一并说明」，再在同一段话的末尾补一句
+    /// 「打开关于页不会自动检查，所以那一行不是结论」，等于把两句打架的话一起
+    /// 发给了收这段文字的人——他不知道该信哪一句，而这段文字存在的全部意义就是被转发。
+    ///
+    /// 2026-08-08 复审实测：改之前这两句真的一起出现在剪贴板里。
+    func testTheDiagnosticsCallAnUncheckedEnvironmentUncheckedInsteadOfAbnormal() throws {
+        let board = PasteboardSpy()
+        let model = makeModel(pasteboard: board)
+        XCTAssertNil(model.permission,
+                     "这条测试的前提是「这一页还没查过环境」。前提没了，它就在检查另一件事。")
+
+        model.copyDiagnostics()
+        let copied = try XCTUnwrap(board.written)
+
+        XCTAssertFalse(copied.contains("不正常"),
+                       "还没点过「重新检查」是关于页的正常状态，诊断里却说它「不正常」。"
+                           + "收到这段话的人会从一个假线索查起：\n\(copied)")
+        XCTAssertTrue(copied.contains("还没查过"),
+                      "没说清环境检查压根还没跑过，那几行「辅助功能」会被当成结论：\n\(copied)")
+    }
+
     /// 查过之后，检查结果原文要跟着诊断一起发出去——
     /// `.unknown` 那一行的原话是「用「复制诊断信息」把它整段发出来」。
     func testTheCopiedDiagnosticsCarryTheRawCheckMessagesOnceThereAreAny() async throws {
@@ -334,6 +359,9 @@ final class AboutViewTests: XCTestCase {
         XCTAssertTrue(copied.contains("errno 42"),
                       "检查结果原文没跟着发出去，而那一行的下一步正是「用「复制诊断信息」"
                           + "把它整段发出来」：\(copied)")
+        XCTAssertFalse(copied.contains("还没查过"),
+                      "已经查完了，诊断里还写着「还没查过」——上面那几行结论会被当成没效："
+                          + "\n\(copied)")
     }
 
     // MARK: - 四、在访达中显示：先把目录建出来，建不出来要说话

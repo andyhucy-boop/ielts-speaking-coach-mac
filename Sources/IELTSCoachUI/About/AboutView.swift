@@ -211,6 +211,12 @@ public final class AboutPageModel {
     /// 这一页复制出来的文字会同时出现「环境检查：没有输出（这本身就不正常，请一并说明）」
     /// 和一段「检查结果原文：…」——收到这段话的人不知道该信哪一句。
     ///
+    /// **还没查过时传 `nil`，不是传那个空数组**（2026-08-08 复审修）。
+    /// 空数组的含义是「查过了却一条输出都没有」，那确实不正常；而这一页刻意不自动检查，
+    /// 「一条都没有」正是它的常态。两者混成一件事的话，这段文字里会一句说「不正常」、
+    /// 紧接着一句说「设计如此」——本页此前正是这么写的，而这段文字的全部用途就是转发给别人。
+    /// 「还没查过」该说的话现在由 `DiagnosticsReport` 一处说完，本页不再自己补一段。
+    ///
     /// **「最近一次错误」取自 `LastErrorLog.shared`**（问题反馈页记的是同一份）。
     /// 不传的话这一页会无条件写上「最近没有出错」，而那可能是一句假话。
     public var diagnosticsText: String {
@@ -221,13 +227,8 @@ public final class AboutPageModel {
             permission: permission ?? .unknown,
             state: state ?? .empty(),
             portabilityFindingCount: findings.count,
-            environmentMessages: permissionMessages,
+            environmentMessages: permission == nil ? nil : permissionMessages,
             lastError: LastErrorLog.shared.last))
-        if permission == nil {
-            text += "\n注：本页打开后还没做过环境检查（打开关于页不会自动检查，那会把 ChatGPT "
-                + "拉到前台），所以上面「辅助功能」那一行不是结论。"
-                + "下一步：在关于页点「重新检查」，查完再复制一次。"
-        }
         if let loadError {
             text += "\n注：读不到训练数据，所以上面「数据量」与「数据可搬迁检查」两行是占位值，"
                 + "不是真实数字。读盘失败的原文是：\(loadError)"
