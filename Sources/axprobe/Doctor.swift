@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import ChatGPTBridge
 import Foundation
 
 enum Doctor {
@@ -30,13 +31,15 @@ enum Doctor {
             ok = false
         }
 
-        guard let app = AXTree.appElement(bundleID: targetBundleID) else {
+        let access = LiveAXAccess()
+        guard access.isTargetRunning() else {
             print("ℹ️  目标应用未运行。下一步：打开 ChatGPT 并进入一个会话后重跑，才能检查 AX 树。")
             return ok ? 0 : 1
         }
 
-        AXTree.wake(app)
-        if AXTree.findElement(role: "AXTextArea", description: nil) != nil {
+        _ = access.wakeAccessibilityTree(timeout: 8.0)
+        let nodes = access.snapshotTree()
+        if nodes.contains(where: { $0.role == "AXTextArea" }) {
             print("✅ AX 树已唤醒，找到输入框")
         } else {
             print("❌ AX 树唤醒后仍找不到输入框（AXTextArea）。")

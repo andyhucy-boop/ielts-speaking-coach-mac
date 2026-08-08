@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      唯一一条 entitlement：麦克风。
+      Hardened Runtime 打开后，没有它 App 一碰麦克风就会被系统直接拒掉
+      （Phase 5 的「保存我的回答录音」开关会失败，且失败信息很难看懂）。
+
+      为什么没有别的：
+      · 不开 App Sandbox —— 沙盒会切断辅助功能驱动 ChatGPT、也切断读任意题库文件，
+        产品直接不可用。公证不要求沙盒，只有 Mac App Store 要求。
+      · 不加 disable-library-validation —— 实测 otool -L 显示只链接系统库，
+        库校验不会拦任何东西，加了只是白白削弱。
+      · 不加 apple-events —— 本项目全部走 AX API，不发 Apple Event（设计文档 2.2）。
+      · 辅助功能不需要任何 entitlement，它由 TCC 管，不由 Hardened Runtime 管。
+    -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+</dict>
+</plist>

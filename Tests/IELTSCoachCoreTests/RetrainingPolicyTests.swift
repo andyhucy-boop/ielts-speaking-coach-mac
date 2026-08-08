@@ -25,10 +25,55 @@ final class RetrainingPolicyTests: XCTestCase {
             sessionID: "s1", createdAt: "t"))
     }
 
-    func testReturnsNilWhenTargetIDIsBlank() throws {
-        XCTAssertNil(RetrainingPolicy.extractTarget(
-            from: try report(#"{"priority_target":{"id":"  ","label":"x"}}"#),
-            sessionID: "s1", createdAt: "t"))
+    /// **id 缺失或只有空白时不许把目标丢掉。**
+    ///
+    /// 提示词是要求给全的，但没有任何校验拦得住 ChatGPT 漏写一个键。真实后果：
+    /// 复盘报告页照常画那张最显眼的深色卡片「下一次只盯这一个」，`state.targets` 一条不加，
+    /// 用户转身打开复训中心看到的是「还没有待复训的目标。下一步：先完整练一场」——
+    /// 一句在他刚练完一整场、复盘也确实给了目标的前提下**字面上为假**的话。
+    func testABlankTargetIDFallsBackToTheSessionInsteadOfDroppingTheTarget() throws {
+        for json in [#"{"priority_target":{"id":"  ","label":"补一个原因和例子"}}"#,
+                     #"{"priority_target":{"label":"补一个原因和例子"}}"#] {
+            let target = RetrainingPolicy.extractTarget(
+                from: try report(json), sessionID: "2026-08-08-001", createdAt: "t")
+            XCTAssertNotNil(target, "id 缺失就把整个目标丢掉了，改进闭环当场断掉：\(json)")
+            XCTAssertEqual(target?.label, "补一个原因和例子")
+            XCTAssertEqual(target?.targetKey, "target-2026-08-08-001",
+                           "兜底 key 必须只由会话编号决定，否则同一场归档两次会变成两条目标")
+            XCTAssertEqual(target?.sourceSessionId, "2026-08-08-001")
+        }
+    }
+
+    /// 兜底 key 只由会话编号决定——掺进时间戳或随机数的话，同一场复盘归档两次就是两条目标，
+    /// `ReviewArchiver` 那条「同一场重复入库不新增」的幂等当场破掉。
+    func testTheFallbackKeyIsStableAcrossCalls() throws {
+        let value = try report(#"{"priority_target":{"label":"补一个原因和例子"}}"#)
+        let first = RetrainingPolicy.extractTarget(from: value, sessionID: "s1", createdAt: "t1")
+        let second = RetrainingPolicy.extractTarget(from: value, sessionID: "s1", createdAt: "t2")
+        XCTAssertEqual(first?.targetKey, second?.targetKey)
+    }
+
+    /// id 和 label 都没有才算「这份复盘没给目标」——那时连要盯什么都说不出来，兜底也造不出内容。
+    /// 这条不能省：没有它，`extractTarget` 退化成「只要 priority_target 是个对象就造一条」，
+    /// 上面那条照样绿，而档案里会多出一条没有标题、点开什么都没有的目标。
+    func testReturnsNilWhenTheTargetHasNeitherIDNorLabel() throws {
+        for json in [#"{"priority_target":{"status":"new"}}"#,
+                     #"{"priority_target":{"id":" ","label":"  "}}"#,
+                     #"{"priority_target":{}}"#] {
+            XCTAssertNil(RetrainingPolicy.extractTarget(
+                from: try report(json), sessionID: "s1", createdAt: "t"),
+                         "既没有 id 也没有 label，却造出了一条空目标：\(json)")
+        }
+    }
+
+    /// 形状不对（写成字符串、数组）时同样是 nil，而不是崩溃或造出一条空目标。
+    func testReturnsNilWhenTheTargetIsNotAnObject() throws {
+        for json in [#"{"priority_target":"补一个原因和例子"}"#,
+                     #"{"priority_target":["补一个原因和例子"]}"#,
+                     #"{"priority_target":null}"#] {
+            XCTAssertNil(RetrainingPolicy.extractTarget(
+                from: try report(json), sessionID: "s1", createdAt: "t"), json)
+        }
     }
 
     func testDefaultsStatusToNewWhenAbsent() throws {

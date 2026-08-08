@@ -8,11 +8,13 @@ public enum CoachError: Error, Equatable, LocalizedError {
     case stateUnreadable(String)
     case questionBankInvalid(String)
     case planImpossible(String)
+    case invalidSessionID(String)
 
     public var errorDescription: String? {
         switch self {
         case .invalidReviewText(let m), .reviewNotFound(let m), .reviewIncomplete(let m),
-             .stateUnreadable(let m), .questionBankInvalid(let m), .planImpossible(let m):
+             .stateUnreadable(let m), .questionBankInvalid(let m), .planImpossible(let m),
+             .invalidSessionID(let m):
             return m
         }
     }

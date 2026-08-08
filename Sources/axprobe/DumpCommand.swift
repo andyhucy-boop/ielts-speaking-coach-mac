@@ -1,21 +1,39 @@
+import ChatGPTBridge
 import Foundation
 
 enum DumpCommand {
     static func run(outputPath: String?) -> Int32 {
-        guard let app = AXTree.appElement(bundleID: Doctor.targetBundleID) else {
+        let access = LiveAXAccess()
+        guard access.isTargetRunning() else {
             print("❌ 目标应用未在运行。")
             print("   下一步：打开 ChatGPT（新版，bundle id \(Doctor.targetBundleID)）并进入一个会话，再运行本命令。")
             return 1
         }
 
-        AXTree.wake(app)
+        _ = access.wakeAccessibilityTree(timeout: 8.0)
+
+        let nodes = access.snapshotTree()
 
         var lines: [String] = []
         var roleCounts: [String: Int] = [:]
         var textBearing = 0
 
-        AXTree.walk(app) { node, _ in
-            let indent = String(repeating: "  ", count: node.depth)
+        // snapshotTree() 按深度优先前序遍历返回，childCount 足以据此重建缩进层级——
+        // AXNodeSnapshot 本身不带 depth 字段。
+        var pendingChildren: [Int] = []
+        for node in nodes {
+            let depth = pendingChildren.count
+            if !pendingChildren.isEmpty {
+                pendingChildren[pendingChildren.count - 1] -= 1
+            }
+            if node.childCount > 0 {
+                pendingChildren.append(node.childCount)
+            }
+            while let last = pendingChildren.last, last == 0 {
+                pendingChildren.removeLast()
+            }
+
+            let indent = String(repeating: "  ", count: depth)
             var parts = ["\(indent)\(node.role)"]
             if !node.subrole.isEmpty { parts.append("subrole=\(node.subrole)") }
             if !node.identifier.isEmpty { parts.append("id=\(node.identifier)") }

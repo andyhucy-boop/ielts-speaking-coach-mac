@@ -5,9 +5,10 @@ public enum PlanBuilder {
 
     public static func build(questions: [Question], lengthDays: Int,
                              createdAt: String) throws -> TrainingPlan {
+        // 正常路径上这道闸门由 PlanScope.blockingReason 提前拦住（界面预览用的也是它），
+        // 这里是直接调用 build 时的兜底。两处共用同一份文案，不能各写各的。
         guard supportedLengths.contains(lengthDays) else {
-            throw CoachError.planImpossible(
-                "计划天数只支持 7、14、30 天，收到的是 \(lengthDays)。下一步：重新选择一个受支持的天数。")
+            throw CoachError.planImpossible(PlanScope.unsupportedLengthReason(lengthDays: lengthDays))
         }
         guard !questions.isEmpty else {
             throw CoachError.planImpossible(

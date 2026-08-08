@@ -82,6 +82,8 @@ final class QuestionBankImporterTests: XCTestCase {
         XCTAssertEqual(merged.first { $0.id == "dup" }?.topic, "第二次", "同 id 应后者覆盖前者")
     }
 
+    /// ⚠️ 这条只守「位置无关」这一半，**常量 id 也能让它全绿**（复审实测过）。
+    /// 另一半「内容不同 → id 必须不同」在 `QuestionIDTests` 里，JSON 这条路也覆盖到了。
     func testJSONImportProducesPositionIndependentIDs() throws {
         let makeJSON: (Bool) -> String = { withExtraTopicFirst in
             let extra = withExtraTopicFirst

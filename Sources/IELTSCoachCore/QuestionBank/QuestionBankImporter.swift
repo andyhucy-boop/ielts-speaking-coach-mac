@@ -168,7 +168,7 @@ public enum QuestionBankImporter {
 
     /// 确定性哈希（FNV-1a 64 位）。**不能用 Swift 的 hashValue** —— 它每次进程启动
     /// 都换种子，同一份题库两次导入会得到不同 id。
-    private static func stableHash(_ text: String) -> String {
+    static func stableHash(_ text: String) -> String {
         var hash: UInt64 = 0xcbf2_9ce4_8422_2325
         for byte in text.utf8 {
             hash ^= UInt64(byte)
@@ -181,13 +181,18 @@ public enum QuestionBankImporter {
     /// 中间插入或删除一个 topic，后面所有题的 id 都变，merge 会把无关内容
     /// 覆盖到旧 id 上、未变的题被当成新题追加、练习记录错位。
     /// 雅思口语题库每季度换题，二次导入是常态而非边缘情况。
-    private static func questionID(part: Int, topic: String, prompt: String) -> String {
+    ///
+    /// **`internal` 而不是 `private` 是为了让 `PDFQuestionExtractor` 用同一份实现。**
+    /// PDF 导入自己再写一遍哈希，两条路生成的 id 就会对不上：同一道题从 CSV 导一次、
+    /// 从 PDF 再导一次会变成两道，`merge` 也去不掉重。
+    static func questionID(part: Int, topic: String, prompt: String) -> String {
         "p\(part)-\(stableHash("\(topic)|\(prompt)"))"
     }
 
     // MARK: - 合并
 
-    /// 按 id 去重，同 id 时新导入的覆盖旧的；保持「已有在前、新增在后」的稳定顺序。
+    /// 按 id 去重，同 id 时新导入的**内容**覆盖旧的（但「已练」标记留着）；
+    /// 保持「已有在前、新增在后」的稳定顺序。
     public static func merge(existing: [Question], incoming: [Question]) -> [Question] {
         // ⚠️ 不能用 Dictionary(uniqueKeysWithValues:) —— 用户手工拼题库时同一批内
         // 出现重复 id 极常见（复制粘贴忘改编号），那个构造器遇到重复 key 会直接
@@ -196,7 +201,27 @@ public enum QuestionBankImporter {
         for question in incoming { byID[question.id] = question }
         var merged: [Question] = []
         for question in existing {
-            merged.append(byID.removeValue(forKey: question.id) ?? question)
+            guard var updated = byID.removeValue(forKey: question.id) else {
+                merged.append(question)
+                continue
+            }
+            // **`status` 从旧的那份原样带过来，不许被导入文件覆盖。**
+            //
+            // 「练过没有」是用户的进度，不是题库内容。导入器写出来的每道题
+            // `status` 都是 "new"，整条覆盖就等于：换季重新导入一次，
+            // 凡是新包里也有的题（内容一个字没改的那些）「已练」标记全部清零——
+            // 题库页顶上「已经练过」的数字掉下去、每道题右边的勾消失、
+            // 终端列表里的 ✓ 消失、ChatGPT 侧读到的已练数跟着变小，
+            // 全程没有提示、没有报错，而引导页刚保证过「换季重新导入是安全的」。
+            // **雅思题库每季度换题，这是日常，不是边缘情况。**
+            //
+            // 项目自己在 `PlanRegenerator` 的注释里写着「顺手把 status 重置成 new……
+            // 会让用户一次点击丢掉全部历史」——导入这条路曾经正好在犯它。
+            //
+            // 反向也不许：导入文件里写着 practiced 的题，本机没练过就还是没练过，
+            // 否则用户会拿到假的正反馈。
+            updated.status = question.status
+            merged.append(updated)
         }
         // 用 byID.removeValue 取值而不是直接 append 循环变量 question：
         // incoming 内若有重复 id，循环变量会是「第一次出现的那份」，但
