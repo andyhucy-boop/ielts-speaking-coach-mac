@@ -193,7 +193,10 @@ final class LastErrorLogWiringTests: XCTestCase {
             (.needsManualCopy("手动复制说明"), .fetchingReview),
             (.archiving, .archivingReview),
             (.done, .archivingReview),
-            (.failed("出事了。下一步：重试。"), .archivingReview)
+            (.failed("出事了。下一步：重试。"), .archivingReview),
+            // 放弃根本不经过 `fail(_:retry:)`，正常走不到这张表。真走到了，
+            // 那一定是用户在本工具正驱动 ChatGPT 的那几步上按了取消。
+            (.abandoned("这一场已经放弃了。下一步：点「关掉」回到主界面。"), .drivingChatGPT)
         ]
         for (stage, want) in expected {
             XCTAssertEqual(stage.diagnosticsStage, want,

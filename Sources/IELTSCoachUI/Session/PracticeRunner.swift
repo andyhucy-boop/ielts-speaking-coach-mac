@@ -35,6 +35,13 @@ public enum PracticeRetry: Equatable, Sendable, CaseIterable {
     }
 }
 
+/// 用户中途放弃这一场时，还在主线程外面跑着的那条链路用它退场。
+///
+/// **它不是错误，一个字都不许画到屏幕上。** 界面这时已经被 `cancel()` 放到
+/// `.abandoned` 那张交代卡片上了；再画一句「这一步没成功」是对用户撒谎——
+/// 那一步不是没成功，是他自己叫停的。
+struct PracticeAbandoned: Error {}
+
 /// 把一场练习包成可观察的状态流。
 ///
 /// **只依赖 `CoachBridge`，不依赖 `AXDriver`。** 因此整条流转可以用假 Bridge 完整测试，
@@ -118,6 +125,30 @@ public final class PracticeRunner {
     private var startedAt: Date?
     private var samplingTask: Task<Void, Never>?
 
+    /// 「这一场」的代次。`start()` 与 `cancel()` 各把它 +1。
+    ///
+    /// **它是「取消真的取消得掉」这件事的全部依据。** AX 调用是阻塞、不可中断的：
+    /// 已经甩到主线程外面的那一步收不回来，但它跑完之后接着要做的每一步，
+    /// 都得先拿自己出发时的代次和它比一次——对不上就当场退场（`PracticeAbandoned`）。
+    ///
+    /// **为什么不是一个 `isCancelled` 布尔量**：布尔量会被下一次 `start()` 清掉，
+    /// 而那一刻上一条链路可能还挂在某个 AX 调用里；清掉之后它会当作没事继续往下跑，
+    /// 接着去驱动用户那时候正在用的 ChatGPT。代次只增不减，谁也复活不了旧链路。
+    private var generation = 0
+    /// 收尾链路（`finishPractice` / `captureReviewFromClipboard`）是不是正跑着。
+    ///
+    /// **「我练完了」挂着回车快捷键**（`.keyboardShortcut(.defaultAction)`），
+    /// 练完那一刻双击、或者急着结束连按两下回车都非常容易。没有这道守卫的话，
+    /// 两条收尾链路会同时跑起来：复盘请求被打进 ChatGPT 两遍（用户回去会看到同一段
+    /// 一千多字的提示词贴了两次、它也答了两次），而且两条链路会同时驱动同一台
+    /// AX 驱动器——那是一次真实的数据竞争，实测会段错误，这一场的复盘跟着没。
+    private var isWrappingUp = false
+    /// ChatGPT 那边的语音通话有没有可能还开着。
+    ///
+    /// 只用来决定放弃时那句交代要不要提「你得自己去挂断」。宁可多说一次也不能漏：
+    /// 漏了的话，用户的麦克风在 ChatGPT 那边一直开着，而他毫不知情。
+    private var voiceMayBeLive = false
+
     /// 超时值全部与 `coach practice` 保持一致（那几个数是按实测时序定的，见 spec 2.3.7）。
     /// **要短超时请在测试里显式传参，不要改这里的默认值。**
     ///
@@ -164,6 +195,9 @@ public final class PracticeRunner {
         // 但「上一场还在采样、这一场又开一个」的后果是两个 Task 同时往同一个
         // 拼接器里灌，且旧的那个永远没人取消——宁可多停一次。
         stopSampling()
+        // 开新的一场就是新的一代：上一条还挂在某个 AX 调用里的链路从此再也走不动。
+        generation += 1
+        let ticket = generation
         current = setup
         currentRequestID = nil
         currentSessionID = nil
@@ -174,18 +208,37 @@ public final class PracticeRunner {
         recordingNotice = nil
         recordingRelativePath = ""
         isRecording = false
+        voiceMayBeLive = false
         retry = nil
         let prompt = ExaminerPrompt.build(setup: setup)
         do {
-            try await run(.newChat) { try $0.startNewChat() }
-            try await run(.startingVoice) { try $0.startVoice() }
+            try await run(.newChat, ticket: ticket) { try $0.startNewChat() }
+            // **在这一步之前就立起来**：`startVoice()` 是阻塞调用，抛错也可能是
+            // 「按下去了但没等到确认」，那时 ChatGPT 那边的通话已经拨出去了。
+            voiceMayBeLive = true
+            try await run(.startingVoice, ticket: ticket) { try $0.startVoice() }
             let timeout = composerTimeout
-            try await run(.waitingComposer) { _ = try $0.waitForVoiceComposer(timeout: timeout) }
-            try await run(.sendingPrompt) { try $0.sendText(prompt) }
+            try await run(.waitingComposer, ticket: ticket) {
+                _ = try $0.waitForVoiceComposer(timeout: timeout)
+            }
+            try await run(.sendingPrompt, ticket: ticket) { try $0.sendText(prompt) }
             beginCollectingTranscript()
             beginRecording()
             stage = .practicing
         } catch {
+            // **放弃优先于失败。** 代次对不上就说明用户在开练途中按了取消：
+            // 抛出来的既可能是守卫的 `PracticeAbandoned`，也可能是那一步自己的真错误
+            //（他按取消的时候那一步本来就正要失败）。两种都一样处理——
+            // `cancel()` 已经把采样停了、录音收了、那张交代卡片也画好了，
+            // **这里一个字都不能再改**：改了会把它盖成一句「这一步没成功」
+            // 外加一颗「从头再试一次」，而那颗按钮按下去的第一步是新建会话——
+            // 用户刚放弃，它又替他开一场。
+            //
+            // 更要紧的是绝不能继续往下走：往下一步是把考官提示词发给用户此刻
+            // 多半正在用的 ChatGPT，再往下一步 `beginRecording()` 会把麦克风
+            // **重新打开一遍**，而那之后再没有任何人会去调 `finish()`——
+            // 系统状态栏那个橙点会一直亮到用户退出整个应用为止。
+            guard ticket == generation else { return }
             stopSampling()
             // 已经录下的部分不能跟着这次失败一起丢：走到这儿时录音多半还没开始，
             // 但「开始录了之后才失败」这条路存在（`beginRecording` 之后再抛错的将来改动），
@@ -267,6 +320,17 @@ public final class PracticeRunner {
     ///
     /// 「先落盘再解析」不能省：练了半小时换来的复盘，不能因为解析出错就没了（成品标准第 7 条）。
     public func finishPractice() async throws {
+        // **重入守卫，早于一切。** 连点两下「我练完了」（那颗按钮挂着回车快捷键，
+        // 练完那一刻很容易连按）会开出两条收尾链路：复盘请求打进 ChatGPT 两遍，
+        // 两条链路还会同时驱动同一台 AX 驱动器——实测那是一次真实的数据竞争，会段错误。
+        //
+        // 第二下**安静地什么都不做**，这不是静默失败：第一下正跑着，界面上那行阶段说明
+        // 和那列进度清单一直在说它走到哪儿了，用户看得见事情在推进。
+        guard !isWrappingUp else { return }
+        isWrappingUp = true
+        defer { isWrappingUp = false }
+        let ticket = generation
+
         // **第一件事，早于结束语音、早于发复盘请求。** 用户点「我练完了」的那一刻
         // 就已经不说话了，早一点关文件，后面结束语音、请 ChatGPT 写复盘、
         // 等它写完那几十秒就不会被录进去。
@@ -300,29 +364,40 @@ public final class PracticeRunner {
         finishedSessionID = sessionID
 
         do {
+            try ensureStillRunning(ticket)
             // 用户自己在 ChatGPT 里挂断时语音已经结束了。这时再按一次「结束通话」，
             // `AXDriver.endVoice` 会直接抛错（它刻意不把「本来就没在通话」当成成功），
             // 整场练习的复盘就取不回来了。
             let voiceStillOn = await offMain { $0.isVoiceActive() }
+            try ensureStillRunning(ticket)
             if voiceStillOn {
-                try await run(.endingVoice) { try $0.endVoice() }
+                try await run(.endingVoice, ticket: ticket) { try $0.endVoice() }
             }
+            // 走到这里语音一定是关的：要么本来就没开，要么刚刚成功挂断。
+            // 放弃时那句「你得自己去挂断」从此不必再说。
+            voiceMayBeLive = false
 
             let requestID = "gui-\(Int(now().timeIntervalSince1970))"
             currentRequestID = requestID
             let marker = ReviewRequestPrompt.marker(requestID: requestID)
             let request = ReviewRequestPrompt.build(requestID: requestID, focusPart: setup.focusPart)
-            try await run(.requestingReview) { try $0.sendText(request) }
+            try await run(.requestingReview, ticket: ticket) { try $0.sendText(request) }
             let replyTimeout = replyTimeout
-            try await run(.requestingReview) {
+            try await run(.requestingReview, ticket: ticket) {
                 try $0.waitForAssistantReply(timeout: replyTimeout, minimumLength: 60)
             }
 
-            guard let raw = await captureReview(marker: marker.open) else {
+            guard let raw = try await captureReview(marker: marker.open, ticket: ticket) else {
                 return   // 已经转到 .needsManualCopy，等用户手动 ⌘C
             }
+            try ensureStillRunning(ticket)
             try archive(raw: raw, setup: setup, sessionID: sessionID, retryOnFailure: .wrapUp)
         } catch {
+            // 代次对不上 = 用户在等复盘那一分钟里按了「放弃这一场」（「取消」按钮
+            // 在这一步上挂得最久）。**什么都不做就是全部要做的事**：不发复盘请求、
+            // 不动剪贴板、不归档，也不改屏幕。归档下去的后果是他明确放弃的这一场，
+            // 最后在「训练记录」里显示成一场正常完成、带完整复盘报告的练习。
+            guard ticket == generation else { return }
             fail(error, retry: .wrapUp)
             throw error
         }
@@ -330,6 +405,13 @@ public final class PracticeRunner {
 
     /// 两条自动路都断了之后，用户照提示按了 ⌘C，再点一下按钮走这里。
     public func captureReviewFromClipboard() async throws {
+        // 与 `finishPractice()` 共用同一道重入守卫：这颗按钮同样挂着回车快捷键，
+        // 连点两下会读两次剪贴板、归档两次，同一场练习留下两份档案。
+        guard !isWrappingUp else { return }
+        isWrappingUp = true
+        defer { isWrappingUp = false }
+        let ticket = generation
+
         guard let setup = current, let sessionID = currentSessionID else {
             let message = "现在没有正在等待取回的复盘。"
                 + "下一步：关掉这个窗口，回到「今日训练」重新开始一场。"
@@ -342,8 +424,12 @@ public final class PracticeRunner {
             let raw = try await offMainThrowing { [pasteboard] _ in
                 try ClipboardFallback.readReview(from: pasteboard)
             }
+            try ensureStillRunning(ticket)
             try archive(raw: raw, setup: setup, sessionID: sessionID, retryOnFailure: .clipboard)
         } catch {
+            // 读剪贴板那一下里用户按了「放弃这一场」。归档下去的话，他明确放弃的这一场
+            // 会带着完整复盘报告出现在「训练记录」里；改屏幕则会盖掉那张交代卡片。
+            guard ticket == generation else { return }
             // 剪贴板里没有东西 / 内容太短，都还能再复制一次——**别把路堵死成失败态**。
             stage = .needsManualCopy(Self.describeFailure(error, at: .capturingReview))
             retry = .clipboard
@@ -352,23 +438,76 @@ public final class PracticeRunner {
 
     /// 用户中途放弃这一场。
     ///
-    /// 已经发出去的那一步收不回来（AX 调用是阻塞的、不可中断），所以这里只保证两件事：
-    /// 界面立刻回到空闲态，以及**之后不会再有任何一次 ChatGPT 操作**——
-    /// 用户放弃之后多半已经在用 ChatGPT 做别的事了，这时再冒出来按一下「结束通话」很吓人。
+    /// 用户按这颗按钮时想要的是一件很具体的事：**立刻停下，别再动我的 ChatGPT，
+    /// 也别动我的剪贴板。** 所以这里保证三条：
+    ///
+    /// 1. 已经甩到主线程外面的那一步收不回来（AX 调用是阻塞、不可中断的），
+    ///    但**它之后一次 ChatGPT 操作、一次剪贴板操作都不会再有**——
+    ///    靠的是把代次 +1，那条链路每一步之前都要拿出发时的代次比一次。
+    /// 2. 麦克风当场关掉，而且**再也不会被这条链路重新打开**（同上）。
+    /// 3. 界面停在 `.abandoned` 那张交代卡片上，**不是空闲态**：
+    ///    放弃这一刻有三件事必须让用户知道，见下面 `describeCancellation`。
+    ///
+    /// **不去替用户挂断 ChatGPT 那通语音**：那恰恰是他刚叫停的那件事。
+    /// 该做的是如实告诉他通话还开着、请他自己挂——见那句交代。
     public func cancel() {
+        // **第一件事。** 代次一变，还挂在 AX 调用里的那条链路就再也走不动了。
+        generation += 1
         // 不停掉的话，那个 Task 会一直转下去——一边空转，一边把用户放弃之后
         // 在 ChatGPT 里做的别的事采进这一场的逐字稿里。
         stopSampling()
+        // 逐字稿要在 `collector.abandon` 之前数：那之后它就该被当成丢掉的了，
+        // 而「丢掉了多少」正是要对用户交代的东西。
+        let collected = collector.turns.count
         // 放弃这一场也要把录音关掉：不关的话麦克风会一直开着（系统状态栏上那个
         // 橙点会一直亮），已经录下的那几分钟也停在缓冲区里没人写盘。
+        // **注意它可能刚生成一条录音警告**（中途插拔耳机断过、写盘失败），
+        // 所以界面绝不许在同一帧把窗口关掉——那句话会一帧都没画出来就没了。
         finalizeRecording()
         collector.abandon(reason: "你中途取消了这次练习。")
+        // **这一句此前整条取消路径上都没有。** 收集器把「这一场没有正常走完、
+        // 中间有几次没读到界面」那段说明生成出来了，却没有任何人把它交给界面，
+        // 于是采样失败连同「已经记下几条」一起悄悄没了——正是本项目最忌讳的失败形态。
+        transcriptNotice = collector.notice
         current = nil
         currentRequestID = nil
         currentSessionID = nil
         archiveNotice = nil
         retry = nil
-        stage = .idle
+        stage = .abandoned(describeCancellation(discardedTurns: collected))
+    }
+
+    /// 放弃这一场之后，屏幕上那段交代。
+    ///
+    /// **三件事一件都不能省**，它们各自对应一次真实的损失：
+    ///
+    /// - ChatGPT 那通语音本工具不会去挂（挂了就成了「你叫停之后它还在动你的 ChatGPT」），
+    ///   不说的话用户的麦克风在 ChatGPT 那边一直开着，而他毫不知情；
+    /// - 已经采到的逐字稿到底存了还是丢了——按下去的按钮写着「放弃这一场」，
+    ///   多半就是想丢，但**丢没丢得让他知道**；
+    /// - 已经录下的那一段留在磁盘上、不属于任何一场训练记录，得告诉他去哪儿找。
+    private func describeCancellation(discardedTurns: Int) -> String {
+        var lines = ["这一场已经放弃了。本工具不会再操作 ChatGPT，也不会再动你的剪贴板。"]
+        if voiceMayBeLive {
+            lines.append("ChatGPT 那边的语音通话不会被自动挂断——你按的就是别再动它。"
+                + "下一步：切到 ChatGPT 自己把那通语音挂掉，麦克风才会真的停。")
+        }
+        if let sessionID = finishedSessionID {
+            // 收尾走到一半才放弃：这一场早在取复盘之前就落盘了（那是刻意的，
+            // 见 `finishPractice`），删掉它反而是又一次数据损失。如实说它在哪儿。
+            lines.append("这一场已经记进「训练记录」了，编号 \(sessionID)，"
+                + "只是没有复盘报告；已经记下的 \(discardedTurns) 条对话和这次的录音都挂在它上面。")
+        } else if discardedTurns > 0 {
+            lines.append("这一场不会进「训练记录」：已经记下的 \(discardedTurns) 条对话"
+                + "跟着一起丢掉了，没有保留。")
+        }
+        if finishedSessionID == nil, !recordingRelativePath.isEmpty {
+            lines.append("已经录下的那一段留在 \(recordingRelativePath)，"
+                + "没有任何一场训练记录指向它。"
+                + "下一步：到「录音设置」（⌘,）点「打开录音文件夹」就能找到它。")
+        }
+        lines.append("下一步：点「关掉」回到主界面。")
+        return lines.joined(separator: "\n")
     }
 
     // MARK: - 取复盘：三级降级
@@ -378,7 +517,12 @@ public final class PracticeRunner {
     ///
     /// 返回 nil 表示前两级都没走通、已经转入 `.needsManualCopy`。**不抛错**：
     /// 复盘这时完整地留在 ChatGPT 窗口里，一次 ⌘C 就能救回来，判成失败等于让用户白练一场。
-    private func captureReview(marker: String) async -> String? {
+    ///
+    /// **抛 `PracticeAbandoned` 是唯一的例外**：第一级那一下会把用户的剪贴板
+    /// 先清空再写上复盘内容。放弃之后再走这一步，用户刚复制的那段文字/账号/链接就没了，
+    /// 而全程一个字的提示都没有。所以每一级之前都先验一次代次。
+    private func captureReview(marker: String, ticket: Int) async throws -> String? {
+        try ensureStillRunning(ticket)
         // **阶段先设、再 await**（同 `run(_:_:)`）。第一级最长要等 `copyTimeout` 秒，
         // 设在它后面的话，这段时间界面上写的还是上一步那句「正在请 ChatGPT 写复盘…
         // 可能要一分钟左右」——用户会以为还在等 ChatGPT 写字。
@@ -395,11 +539,13 @@ public final class PracticeRunner {
         } catch {
             reasons.append("复制按钮这条路没走通（\(error.localizedDescription)）")
         }
+        try ensureStillRunning(ticket)
         do {
             return try await offMainThrowing { try $0.captureLatestAssistantMessage(expectedMarker: marker) }
         } catch {
             reasons.append("直接读 ChatGPT 窗口也没读到（\(error.localizedDescription)）")
         }
+        try ensureStillRunning(ticket)
 
         stage = .needsManualCopy(
             "自动取复盘的两条路都没走通：\(reasons.joined(separator: "；"))。"
@@ -559,10 +705,25 @@ public final class PracticeRunner {
     ///
     /// 阶段先设、再 await：反过来的话，界面在这一步跑完之前显示的还是上一步，
     /// 最长的那一步（启动语音，实测约 9 秒）就成了一段没有任何提示的空白等待。
-    private func run(_ stage: PracticeStage,
+    ///
+    /// **前后各验一次代次**，两次都不能省：
+    ///
+    /// - 前面那次挡住「上一步跑着的时候用户按了取消，这一步还照发不误」；
+    /// - 后面那次挡住「这一步跑着的时候用户按了取消，回来之后还接着往下走」。
+    ///   收尾链路上最长的一步（等 ChatGPT 写复盘）默认要等 60 秒，
+    ///   而「取消」按钮恰恰在这一步上挂得最久——少了后面那次验，
+    ///   用户按完取消的一分钟里，ChatGPT 还会收到复盘请求、剪贴板还会被覆盖。
+    private func run(_ stage: PracticeStage, ticket: Int,
                      _ body: @escaping @Sendable (any CoachBridge & Sendable) throws -> Void) async throws {
+        try ensureStillRunning(ticket)
         self.stage = stage
         try await offMainThrowing(body)
+        try ensureStillRunning(ticket)
+    }
+
+    /// 这一条链路还是「当前这一场」吗？不是就抛 `PracticeAbandoned` 让它退场。
+    private func ensureStillRunning(_ ticket: Int) throws {
+        guard ticket == generation else { throw PracticeAbandoned() }
     }
 
     private func offMain<T: Sendable>(

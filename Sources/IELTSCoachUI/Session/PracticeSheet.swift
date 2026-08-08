@@ -271,6 +271,8 @@ struct PracticeSheet: View {
         case .failed: return "exclamationmark.triangle"
         case .needsManualCopy: return "doc.on.clipboard"
         case .practicing: return "waveform"
+        // 放弃不是故障，是用户自己的选择：给一个中性的「停」，不给三角警告。
+        case .abandoned: return "stop.circle"
         default: return "circle"
         }
     }
@@ -284,11 +286,12 @@ struct PracticeSheet: View {
         }
     }
 
-    /// 走到第几步了。失败时不画：`PracticeStage.failed.order` 是 -1，一格都不会打勾，
-    /// 画出来只是一列灰圈，反而把那句真正要读的错误信息挤下去。
+    /// 走到第几步了。失败与放弃时不画（`PracticeStage.showsChecklist`）：
+    /// 这两种收场的 `order` 都是 -1，一格都不会打勾，画出来只是一列灰圈，
+    /// 反而把那段真正要读的话（错误信息 / 放弃之后的交代）挤下去。
     @ViewBuilder
     private var checklist: some View {
-        if case .failed = runner.stage {
+        if !runner.stage.showsChecklist {
             EmptyView()
         } else {
             let steps = runner.stage.order > PracticeStage.practicing.order
@@ -358,6 +361,15 @@ struct PracticeSheet: View {
                     .tint(Palette.accent)
                     .keyboardShortcut(.defaultAction)
 
+            case .abandoned:
+                // **放弃之后停在这里，不在同一帧关窗**（见 `abandon()`）。
+                // 上面那段交代（逐字稿去哪儿了、录音留在哪儿、ChatGPT 那通语音要不要
+                // 自己挂）和那张录音警告卡片，得有一帧画得出来才算数。
+                // 这里只留「关掉」一颗：这个状态下再没有别的事可做了。
+                Button("关掉") { onClose() }
+                    .buttonStyle(.bordered)
+                    .keyboardShortcut(.defaultAction)
+
             case .idle:
                 Button("关掉") { onClose() }
                     .buttonStyle(.bordered)
@@ -404,9 +416,17 @@ struct PracticeSheet: View {
         Task { await begin(makeSetup(question)) }
     }
 
+    /// 「放弃这一场」/「取消」。
+    ///
+    /// **这里不关窗口，一帧都不许提前关。** `runner.cancel()` 恰好在这一刻做三件事：
+    /// 关掉录音（可能因此生成一条「中途插拔耳机断过」「写盘失败，已录到的部分存在某处」
+    /// 的警告）、把已经采到的逐字稿定案、写出那段「这一场已经放弃了…」的交代。
+    /// 在同一帧调 `onClose()` 的话，这三样一个像素都画不出来——
+    /// 真发生过的录音故障，唯一的出口被同一次点击关掉了（复审第 6 条）。
+    ///
+    /// 关窗口归 `.abandoned` 那条分支里的「关掉」，由用户看完再点。
     private func abandon() {
         runner.cancel()
-        onClose()
     }
 }
 

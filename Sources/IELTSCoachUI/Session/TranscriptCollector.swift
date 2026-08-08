@@ -71,8 +71,14 @@ public final class TranscriptCollector {
         refresh()
     }
 
-    /// 练习失败或被取消时停止收集。**已经采到的内容一个字都不丢**——
+    /// 练习失败或被取消时停止收集。**已经采到的内容在这个对象里一个字都不丢**——
     /// 用户练到一半出错，前面说过的话仍然是他的练习记录。
+    ///
+    /// **但这不等于它一定会被存下来。** 这个类只管「采到了什么」，
+    /// 「这一场进不进训练记录」是 `PracticeRunner` 的事：中途取消时那一场根本不落盘，
+    /// 采到的话就地丢掉。所以下面那句「下一步」**不许承诺它会被存进训练记录**——
+    /// 复审第 6 条实测：这里原来写着「仍然会存进「训练记录」，不会丢」，
+    /// 而取消路径上的实现与它正相反。留没留下由放弃时那段交代逐字说明。
     public func abandon(reason: String) {
         guard isCollecting else { return }
         isCollecting = false
@@ -85,7 +91,8 @@ public final class TranscriptCollector {
         refresh()
         let existing = notice.map { $0 + " " } ?? ""
         notice = existing + "这一场没有正常走完：\(reason) "
-            + "下一步：上面这些已经记下来的对话仍然会存进「训练记录」，不会丢。"
+            + "已经记下的 \(turns.count) 条对话就到这里为止，后面没有再采样。"
+            + "下一步：这几条对话留没留下，看这一屏上那段「这一场已经放弃了…」的交代，那里逐条写明了。"
     }
 
     private func refresh() {

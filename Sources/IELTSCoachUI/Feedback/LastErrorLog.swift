@@ -116,6 +116,10 @@ extension PracticeStage {
         // 那一步，所以正常走不到；真走到了说明是一次失败之后又失败了一次，
         // 而那一定发生在收尾阶段。
         case .done, .failed: return .archivingReview
+        // 放弃同样不是「正在做的事」，而且它根本不经过 `fail(_:retry:)`（`cancel()` 直接
+        // 把阶段设成 `.abandoned`），所以正常也走不到这里。真走到了，那一定是用户在
+        // 本工具正驱动 ChatGPT 的那几步上按了取消——`cancel()` 只有在那时才有意义。
+        case .abandoned: return .drivingChatGPT
         }
     }
 }

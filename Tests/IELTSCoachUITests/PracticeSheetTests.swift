@@ -253,6 +253,56 @@ final class PracticeSheetTests: XCTestCase {
         }
     }
 
+    // MARK: - 放弃这一场：不许在同一帧把窗口关掉
+
+    /// **复审第 6 条的界面这一半。**
+    ///
+    /// `runner.cancel()` 恰好在被点的那一刻做三件事：关掉录音（很可能因此生成一条
+    /// 「录音中途因为插拔耳机断了一下」「写盘失败，已录到的部分保存在某处」的警告）、
+    /// 把已经采到的逐字稿定案、写出那段「这一场已经放弃了…」的交代。
+    ///
+    /// 修之前 `abandon()` 是 `runner.cancel(); onClose()` 两句连着写的——
+    /// 那三样东西**一帧都没画出来**就被同一次点击关掉了。
+    /// 真发生过的录音故障，唯一的出口被同一次点击关掉，这是本项目最忌讳的那种静默。
+    ///
+    /// 关窗口归 `.abandoned` 那条分支里的「关掉」，由用户看完再点。
+    func testAbandoningDoesNotCloseTheWindowInTheSameFrame() throws {
+        let abandon = try SourceGuard.memberBody(of: "private func abandon", in: SourceGuard.code(Self.sheet))
+        XCTAssertTrue(abandon.contains("runner.cancel("),
+                      "「放弃这一场」没有接到 `runner.cancel()` 上，这条路是死的。实际取到的是：\n\(abandon)")
+        XCTAssertFalse(abandon.contains("onClose()"),
+                       "放弃之后在同一帧就把窗口关掉了。`cancel()` 这一刻刚生成的录音警告、"
+                           + "刚写好的那段「逐字稿去哪儿了 / 录音留在哪儿 / ChatGPT 那通语音"
+                           + "要不要自己挂」的交代，一个像素都画不出来。"
+                           + "下一步：把 `onClose()` 从这里拿掉——`.abandoned` 那条分支里"
+                           + "已经有一颗「关掉」，让用户看完再点。实际取到的是：\n\(abandon)")
+    }
+
+    /// 放弃之后那个状态必须有**自己**的一条分支，而且那条分支里是「关掉」。
+    ///
+    /// 落进 `default:` 的话，用户看到的是那颗「取消」——按下去又调一次 `abandon()`，
+    /// 窗口永远关不掉。上面那条 `testEveryPracticeStageHasAWayOut` 拦不住这一种：
+    /// `default:` 里那颗「取消」在它眼里是一颗合格的出口。
+    func testTheAbandonedStateHasItsOwnBranchWhoseButtonActuallyCloses() throws {
+        let actions = try SourceGuard.memberBody(of: "private var actions",
+                                                 in: SourceGuard.code(Self.sheet))
+        let branches = try SourceGuard.switchBranches(over: "runner.stage", in: actions)
+        guard let branch = branches.first(where: { $0.cases.contains("abandoned") }) else {
+            return XCTFail("按钮那一段里没有单独处理 `.abandoned`，它会落进 `default:` 那颗「取消」——"
+                           + "按下去又是一次 `abandon()`，窗口永远关不掉。"
+                           + "下一步：给它一条自己的分支，里面放一颗「关掉」。")
+        }
+        XCTAssertFalse(branch.isDefault, "`.abandoned` 落在了 `default:` 上，见上一条的理由")
+        let exits = SourceGuard.unconditionalButtons(in: branch.body).filter(\.isWired)
+        XCTAssertEqual(exits.map(\.label), [#""关掉""#],
+                       "`.abandoned` 这条分支里该只有一颗「关掉」，实际是 \(exits.map(\.label))。"
+                           + "这个状态下再没有别的事可做了：这一场已经停了，"
+                           + "摆一颗「取消」或「我练完了」只会把用户绕回去。")
+        XCTAssertTrue(branch.body.contains("onClose()"),
+                      "`.abandoned` 那颗按钮没有接到 `onClose()` 上，按下去窗口不会关。"
+                          + "实际取到的是：\n\(branch.body)")
+    }
+
     /// 存档之后那句交代（错题本几条、词汇本几条、原文存哪儿、有没有字段没读进去）必须显示。
     /// 只画一个「✅ 完成」的话，`ArchiveOutcome.skipped` 那种「复盘写得完整、档案纹丝不动」
     /// 的静默失败就永远没人看得见——那是本项目已知最危险的失败形态。

@@ -322,6 +322,51 @@ final class RetrainingFlowViewTests: XCTestCase {
                       "「已记录几条对话」没了，用户没有任何办法确认逐字稿在正常记。")
     }
 
+    // MARK: - 放弃这一趟：不许在同一帧把窗口关掉
+
+    /// **复审第 6 条的界面这一半，和 `PracticeSheetTests` 那条是同一件事。**
+    ///
+    /// `runner.cancel()` 恰好在被点的那一刻关掉录音（很可能因此生成一条
+    /// 「录音中途因为插拔耳机断了一下」的警告）、写出那段「这一场已经放弃了…」的交代。
+    /// 修之前 `abandon()` 是 `runner?.cancel(); onClose()` 两句连着写的——
+    /// 上面那条 `testTheSpeakingStepAlwaysShowsWhatIsHappening` 钉住了这两样确实画在
+    /// 第三步上，可它们**一帧都没机会画出来**就被同一次点击关掉了。
+    func testAbandoningDoesNotCloseTheWindowInTheSameFrame() throws {
+        let code = try Self.viewCode()
+        let abandon = try SourceGuard.memberBody(of: "private func abandon", in: code)
+        XCTAssertTrue(abandon.contains("cancel()"),
+                      "「放弃这一场」没有接到 `runner?.cancel()` 上，这条路是死的。实际取到的是：\n\(abandon)")
+        XCTAssertFalse(abandon.contains("onClose()"),
+                       "放弃之后在同一帧就把窗口关掉了。`cancel()` 这一刻刚生成的录音警告、"
+                           + "刚写好的那段「逐字稿去哪儿了 / 录音留在哪儿 / ChatGPT 那通语音"
+                           + "要不要自己挂」的交代，一个像素都画不出来。"
+                           + "下一步：把 `onClose()` 从这里拿掉——`.abandoned` 那条分支里"
+                           + "已经有一颗「关掉」，让用户看完再点。实际取到的是：\n\(abandon)")
+    }
+
+    /// 放弃之后那个状态必须有**自己**的一条分支，而且那条分支里是「关掉」。
+    ///
+    /// 落进 `default:` 的话，用户看到的是那颗「取消」——按下去又调一次 `abandon()`，
+    /// 窗口永远关不掉。上面那条 `testEveryPracticeStageLeavesTheUserAWayOut` 拦不住这一种：
+    /// `default:` 里那颗「取消」在它眼里是一颗合格的出口。
+    func testTheAbandonedStateHasItsOwnBranchWhoseButtonActuallyCloses() throws {
+        let actions = try SourceGuard.memberBody(of: "private var speakingActions",
+                                                 in: try Self.viewCode())
+        let branches = try SourceGuard.switchBranches(over: "runner.stage", in: actions)
+        guard let branch = branches.first(where: { $0.cases.contains("abandoned") }) else {
+            return XCTFail("按钮那一段里没有单独处理 `.abandoned`，它会落进 `default:` 那颗「取消」——"
+                           + "按下去又是一次 `abandon()`，窗口永远关不掉。"
+                           + "下一步：给它一条自己的分支，里面放一颗「关掉」。")
+        }
+        XCTAssertFalse(branch.isDefault, "`.abandoned` 落在了 `default:` 上，见上一条的理由")
+        let exits = SourceGuard.unconditionalButtons(in: branch.body).filter(\.isWired)
+        XCTAssertEqual(exits.map(\.label), [#""关掉""#],
+                       "`.abandoned` 这条分支里该只有一颗「关掉」，实际是 \(exits.map(\.label))")
+        XCTAssertTrue(branch.body.contains("onClose()"),
+                      "`.abandoned` 那颗按钮没有接到 `onClose()` 上，按下去窗口不会关。"
+                          + "实际取到的是：\n\(branch.body)")
+    }
+
     /// **这条守的是本项目已知最危险的失败形态**（`RetrainingCoordinator` 自己的注释这么写的）：
     /// 这一场练完了、复盘也存了，却一个字都没挂进复训台账——进度纹丝不动，
     /// 而界面上看不出任何异样。所以第三步和结果卡片上都必须原样显示 `coordinator.failure`。

@@ -31,6 +31,28 @@ final class FakeBridge: CoachBridge, @unchecked Sendable {
     var copyGate: DispatchSemaphore?
     let copyStarted = DispatchSemaphore(value: 0)
 
+    /// 卡在**任意一次**调用上的闸门（`copyGate` 只卡得住取复盘那一级）。
+    ///
+    /// 设上 `gateAt` 与 `gate` 之后，那次调用一进来先放行 `gateReached`，
+    /// 再卡在 `gate` 上等测试 `signal()`。**没有它，「取消之后它还在操作 ChatGPT」
+    /// 这条根本复现不出来**：那个缺陷只发生在「一步已经甩到主线程外面跑着、
+    /// 用户这时按下取消」的那一瞬，而不设闸门的话每一步都是瞬间跑完的。
+    ///
+    /// 卡的是后台线程，主线程照常跑——测试因此能在这一瞬里调 `runner.cancel()`。
+    var gateAt: String?
+    var gate: DispatchSemaphore?
+    let gateReached = DispatchSemaphore(value: 0)
+
+    /// **等待带上限（铁律 5：禁止无限等待）。** 无上限的话，实现一退化成
+    /// 「同一道闸被两条链路各卡一次」，测试就会挂死在这里而不是红在断言上——
+    /// 挂死的测试等于没有测试：CI 上只看得到超时，看不到哪一条守卫失效了。
+    private func passGateIfNeeded(_ name: String) {
+        let waiting: DispatchSemaphore? = lock.withLock { gateAt == name ? gate : nil }
+        guard let waiting else { return }
+        gateReached.signal()
+        _ = waiting.wait(timeout: .now() + .seconds(10))
+    }
+
     private let lock = NSLock()
     private var recordedCalls: [String] = []
     private var recordedTexts: [String] = []
@@ -44,6 +66,7 @@ final class FakeBridge: CoachBridge, @unchecked Sendable {
 
     private func step(_ name: String, _ stage: PracticeStage) throws {
         lock.withLock { recordedCalls.append(name) }
+        passGateIfNeeded(name)
         if failAt == stage {
             throw BridgeError.actionFailed("假装失败。下一步：这是测试用的。")
         }
@@ -68,7 +91,13 @@ final class FakeBridge: CoachBridge, @unchecked Sendable {
         try step("sendText", isFirst ? .sendingPrompt : .requestingReview)
     }
 
-    func isVoiceActive() -> Bool { lock.withLock { voiceActive } }
+    /// **刻意不记进 `recordedCalls`**：已有好几条测试逐字比对整份调用序列
+    /// （「必须先结束语音再请复盘」那条），多记一项会把它们全部推红，
+    /// 而那和这次要守的事毫无关系。闸门照挂——它不改变序列。
+    func isVoiceActive() -> Bool {
+        passGateIfNeeded("isVoiceActive")
+        return lock.withLock { voiceActive }
+    }
 
     func endVoice() throws { try step("endVoice", .endingVoice) }
 
@@ -84,6 +113,12 @@ final class FakeBridge: CoachBridge, @unchecked Sendable {
     func copyLatestAssistantMessage(pasteboard: any PasteboardAccess,
                                     timeout: TimeInterval) throws -> String {
         lock.withLock { recordedCalls.append("copy") }
+        // **和真的那台驱动器一样，第一件事是清空剪贴板**
+        //（`AXDriver.copyLatestAssistantMessage` 里那句 `pasteboard.clear()`，
+        // 为的是「按钮按了但 ChatGPT 没写剪贴板」时不会拿到上一次的旧内容）。
+        // 这里不照做的话，「取消之后不许再动用户的剪贴板」那条断言就是恒真的——
+        // 而用户刚复制的那段文字/账号/链接，正是在这一步没的。
+        pasteboard.clear()
         if let copyGate {
             copyStarted.signal()
             copyGate.wait()
@@ -563,7 +598,15 @@ final class PracticeRunnerTests: XCTestCase {
 
         try await runner.start(setup: Self.setup())
         runner.cancel()
-        XCTAssertEqual(runner.stage, .idle)
+        // **原来这里断言的是 `.idle`。改成 `.abandoned` 不是把断言放宽，是把它收紧**：
+        // `.idle` 那句话写着「下一步：点「开始练习」」，而放弃之后界面上根本没有这颗按钮；
+        // 更要紧的是 `.idle` 一个字都交代不了「逐字稿去哪儿了、录音留在哪儿、
+        // ChatGPT 那通语音还要不要自己挂」。那三件事现在由 `.abandoned` 带的那段话说清
+        //（逐条断言在 `PracticeCancelTests` 里）。
+        guard case .abandoned(let said) = runner.stage else {
+            return XCTFail("取消之后界面该停在「已经放弃」那张交代卡片上，实际停在 \(runner.stage)")
+        }
+        XCTAssertTrue(said.contains("下一步"), "放弃之后那段交代得说清下一步做什么：\(said)")
 
         bridge.clearCalls()
         try? await runner.finishPractice()
@@ -583,7 +626,8 @@ final class PracticeRunnerTests: XCTestCase {
     static let allStages: [PracticeStage] = [
         .idle, .newChat, .startingVoice, .waitingComposer, .sendingPrompt, .practicing,
         .endingVoice, .requestingReview, .capturingReview, .needsManualCopy("手动复制说明"),
-        .archiving, .done, .failed("出事了。下一步：重试。")
+        .archiving, .done, .failed("出事了。下一步：重试。"),
+        .abandoned("这一场已经放弃了。下一步：点「关掉」回到主界面。")
     ]
 
     static let rawReview = """

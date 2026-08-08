@@ -598,6 +598,13 @@ struct RetrainingFlowView: View {
                     .tint(Palette.accent)
                     .keyboardShortcut(.defaultAction)
 
+            case .abandoned:
+                // **放弃之后停在这里，不在同一帧关窗**（见 `abandon()`）：
+                // `stageCard` 上那段交代和下面那张录音警告卡片，得有一帧画得出来才算数。
+                Button("关掉") { onClose() }
+                    .buttonStyle(.bordered)
+                    .keyboardShortcut(.defaultAction)
+
             case .needsManualCopy:
                 Button("放弃这一场") { abandon() }
                     .buttonStyle(.bordered)
@@ -739,9 +746,17 @@ struct RetrainingFlowView: View {
         advance(to: .rehearsal)
     }
 
+    /// 「放弃这一场」/「取消」。
+    ///
+    /// **这里不关窗口，一帧都不许提前关**，理由与 `PracticeSheet.abandon()` 逐字相同：
+    /// `cancel()` 就在这一刻收掉录音（可能因此生成一条本该被看见的录音警告）、
+    /// 给出「逐字稿去哪儿了、录音留在哪儿、ChatGPT 那通语音要不要自己挂」那段交代。
+    /// 同一帧 `onClose()` 会把它们连同那条警告一起抹掉。
+    ///
+    /// 关窗口归 `.abandoned` 那条分支里的「关掉」，由用户看完再点。
+    /// 驱动器还没造出来（`runner == nil`）时这颗按钮画不出来，走不到这里。
     private func abandon() {
         runner?.cancel()
-        onClose()
     }
 
     /// 「这个问题我不用再练了」。**系统永远不会替用户做这个决定**（计划的「决定 4」）：

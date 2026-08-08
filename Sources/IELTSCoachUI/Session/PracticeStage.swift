@@ -28,14 +28,23 @@ public enum PracticeStage: Equatable, Sendable {
     case archiving
     case done
     case failed(String)
+    /// 用户中途按了「放弃这一场」或「取消」，这一场就此打住。
+    ///
+    /// **它不是 `.idle` 的同义词，专门分出来是有原因的**：`.idle` 那句话写着
+    /// 「下一步：点「开始练习」」，而放弃之后界面上根本没有这颗按钮，用户照着找会找不到
+    /// （铁律 4）。更要紧的是，放弃这一刻有三件事必须当场交代清楚，而 `.idle` 一件都说不了：
+    /// ChatGPT 那边的语音通话还要不要用户自己挂、已经采到的逐字稿去哪儿了、
+    /// 已经录下的那一段留在哪儿。带的这段字符串就是那份交代。
+    case abandoned(String)
 
     /// 这一步在整场练习里的先后次序，**只**用于界面把已经走完的步骤打上勾。
     ///
-    /// `failed` 给 -1：失败时不该有任何一步显示成「已完成」，那会让用户以为只差最后一点点。
+    /// `failed` 与 `abandoned` 给 -1：这两种收场都不该有任何一步显示成「已完成」，
+    /// 那会让用户以为只差最后一点点。
     /// `needsManualCopy` 与 `capturingReview` 同格：它就停在取复盘这一步上等人。
     public var order: Int {
         switch self {
-        case .failed: return -1
+        case .failed, .abandoned: return -1
         case .idle: return 0
         case .newChat: return 1
         case .startingVoice: return 2
@@ -83,6 +92,19 @@ public enum PracticeStage: Equatable, Sendable {
                 + "或者直接关掉这个窗口。"
         case .failed(let message):
             return message
+        case .abandoned(let message):
+            return message
+        }
+    }
+
+    /// 这一步该不该画那列进度清单。
+    ///
+    /// **失败与放弃都不画**：两者的 `order` 都是 -1，一格都不会打勾，
+    /// 画出来只是一列灰圈，反而把真正要读的那段话（失败原因 / 放弃之后的交代）挤下去。
+    public var showsChecklist: Bool {
+        switch self {
+        case .failed, .abandoned: return false
+        default: return true
         }
     }
 
@@ -104,13 +126,14 @@ public enum PracticeStage: Equatable, Sendable {
         case .archiving: return "存档复盘"
         case .done: return "完成"
         case .failed: return "失败"
+        case .abandoned: return "放弃"
         }
     }
 
     /// 这一步还在自动跑（界面要显示转圈），还是在等用户动作 / 已经走完。
     public var isBusy: Bool {
         switch self {
-        case .idle, .practicing, .needsManualCopy, .done, .failed: return false
+        case .idle, .practicing, .needsManualCopy, .done, .failed, .abandoned: return false
         default: return true
         }
     }

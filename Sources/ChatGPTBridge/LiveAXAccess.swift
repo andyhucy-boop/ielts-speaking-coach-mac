@@ -28,9 +28,47 @@ public final class LiveAXAccess: AXAccess, @unchecked Sendable {
     /// 当前代次。**只递增，从不重置**——`snapshotTree()` 每次调用都 +1，
     /// 并把新值盖到本次遍历产生的所有 `AXElementRef` 上。`press`/`setValue`
     /// 拒绝任何代次不匹配的引用，防止跨快照复用旧引用时静默命中新树里同编号的另一个元素。
-    private var currentEpoch = 0
+    ///
+    /// **不是 `private`，是为了让并发安全那条测试问得出「+1 到底加了几次」。**
+    /// 快照返回的节点列表在 ChatGPT 没运行时是空的（测试环境正是如此，铁律 3），
+    /// 代次因此没有别的出口；而丢掉的那几次 +1 恰恰是这个类不加锁时最要命的后果。
+    private(set) var currentEpoch = 0
 
-    public init() {}
+    /// 这三样可变状态的锁。
+    ///
+    /// **`@unchecked Sendable` 是一句承诺，不是一道保护。** 这个类此前把
+    /// `elementMap` / `nextID` / `currentEpoch` 裸露在多线程下：`PracticeRunner`
+    /// 每一步都把阻塞的 AX 调用甩到 `Task.detached` 上跑，而「我练完了」那颗按钮
+    /// 挂着回车快捷键——连按两下就有两条链路同时进来。后果分两层：
+    ///
+    /// - `elementMap` 是 Swift 原生字典，两条线程同时改它会当场段错误
+    ///   （复审用逐字复刻同一套无锁写法的替身证过：8 次运行 8 次段错误，
+    ///   ThreadSanitizer 明确报数据竞争）；
+    /// - `currentEpoch += 1` 不是原子操作，丢掉一次 +1 就意味着**一个本该作废的
+    ///   旧引用会被当成有效的**，于是 `press` 按到新树里同编号的另一个控件上——
+    ///   用户看到的是「按钮明明在，按下去没反应」，或者更糟：按到了别的东西。
+    ///
+    /// 重入的那一层已经由 `PracticeRunner` 的守卫堵住了，这里是第二道：
+    /// 逐字稿采样器、命令行、将来任何一个并发调用点都不该再有机会踩这一脚。
+    private let lock = NSLock()
+
+    /// 「找到目标 App 的那个 AXUIElement」这一步。
+    ///
+    /// **做成一道可替换的接缝只为一件事**：并发安全那组测试要把这个类的可变状态
+    ///（rawID 映射、代次）真真切切地跑上几千次，而开发机上 ChatGPT 十有八九正开着——
+    /// 照原样跑会去遍历它的真实无障碍树（几千趟，慢得离谱，而且等于在碰真实 ChatGPT，
+    /// 铁律 3）。测试换成一句「找不到目标」，走的仍然是这个类自己那几行加锁逻辑，
+    /// 一行都不掺假。生产代码走的永远是下面那个默认实现。
+    private let locateApp: () -> AXUIElement?
+
+    public init() {
+        self.locateApp = LiveAXAccess.runningTargetApplication
+    }
+
+    /// **仅供测试**（`internal`，不进公开 API）。见 `locateApp` 的说明。
+    init(locateApp: @escaping () -> AXUIElement?) {
+        self.locateApp = locateApp
+    }
 
     // MARK: - AXAccess
 
@@ -39,7 +77,7 @@ public final class LiveAXAccess: AXAccess, @unchecked Sendable {
     }
 
     public func isTargetRunning() -> Bool {
-        appElement() != nil
+        locateApp() != nil
     }
 
     public func isAccessibilityTrusted() -> Bool {
@@ -73,7 +111,12 @@ public final class LiveAXAccess: AXAccess, @unchecked Sendable {
 
     /// 深度优先遍历当前树，返回全部节点快照。
     /// **每次调用都清空并重建 rawID 映射，并开启新的代次**——此前取得的 `AXElementRef` 随即失效。
+    ///
+    /// **整趟遍历都在锁里**：中途放锁的话，另一条线程的 `snapshotTree()` 会一边清空
+    /// `elementMap` 一边让这一趟往里塞，那正是段错误的现场。
     public func snapshotTree() -> [AXNodeSnapshot] {
+        lock.lock()
+        defer { lock.unlock() }
         elementMap.removeAll()
         nextID = 0
         currentEpoch += 1
@@ -84,15 +127,21 @@ public final class LiveAXAccess: AXAccess, @unchecked Sendable {
     }
 
     public func setValue(_ text: String, on element: AXElementRef) -> Bool {
-        guard element.epoch == currentEpoch else { return false }
-        guard let axElement = elementMap[element.rawID] else { return false }
+        // 「验代次」和「取元素」必须在同一把锁里：分开的话，两句之间来一次
+        // `snapshotTree()`，验过的代次就已经作废，取到的是新树里同编号的另一个元素。
+        lock.lock()
+        let axElement = element.epoch == currentEpoch ? elementMap[element.rawID] : nil
+        lock.unlock()
+        guard let axElement else { return false }
         return AXUIElementSetAttributeValue(axElement, kAXValueAttribute as CFString, text as CFTypeRef) == .success
     }
 
     /// **注意：返回 true 不等于动作生效**，调用方必须另行验证状态变化。
     public func press(_ element: AXElementRef) -> Bool {
-        guard element.epoch == currentEpoch else { return false }
-        guard let axElement = elementMap[element.rawID] else { return false }
+        lock.lock()
+        let axElement = element.epoch == currentEpoch ? elementMap[element.rawID] : nil
+        lock.unlock()
+        guard let axElement else { return false }
         return AXUIElementPerformAction(axElement, kAXPressAction as CFString) == .success
     }
 
@@ -106,9 +155,12 @@ public final class LiveAXAccess: AXAccess, @unchecked Sendable {
 
     // MARK: - 内部实现
 
-    private func appElement() -> AXUIElement? {
+    private func appElement() -> AXUIElement? { locateApp() }
+
+    /// 生产环境真正用的那一步：在正在运行的进程里找目标 App。
+    private static func runningTargetApplication() -> AXUIElement? {
         guard let app = NSWorkspace.shared.runningApplications
-            .first(where: { $0.bundleIdentifier == Self.targetBundleID }) else { return nil }
+            .first(where: { $0.bundleIdentifier == targetBundleID }) else { return nil }
         return AXUIElementCreateApplication(app.processIdentifier)
     }
 
