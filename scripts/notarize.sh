@@ -40,7 +40,7 @@ for arg in "$@"; do
         --execute) MODE="execute" ;;
         -h|--help) MODE="help" ;;
         *)
-            echo "❌ 不认识的参数「$arg」。"
+            echo "❌ 不认识的参数「${arg}」。"
             echo "   下一步：只能传 --dry-run（默认）、--execute 或 --help。"
             exit 2
             ;;
@@ -57,7 +57,7 @@ if [[ "$MODE" == "help" ]]; then
 fi
 
 echo "════════════════════════════════════════════════════════════"
-echo " 公证（模式：$MODE）"
+echo " 公证（模式：${MODE}）"
 echo "════════════════════════════════════════════════════════════"
 echo
 echo "⚠️  换成 Developer ID 证书会改变签名的「指定要求」。"
@@ -124,7 +124,7 @@ check $HAS_PROFILE "公证凭据档案名（环境变量 IELTS_NOTARY_PROFILE）
 
 if [[ -d "$APP" ]]; then HAS_APP=0; else HAS_APP=1; fi
 check $HAS_APP "已有打好的 .app" \
-    "找不到 $APP。" \
+    "找不到 ${APP}。" \
     "先跑 ./scripts/package-app.sh"
 
 DEV_ID_DISPLAY="${DEV_ID:-<Developer ID Application: 你的名字 (TEAMID)>}"
@@ -208,7 +208,7 @@ if [[ -z "$NEW_DESIGNATED" ]]; then
 fi
 
 if [[ ! -f "$BASELINE" ]]; then
-    echo "❌ 找不到签名基线文件 $BASELINE。"
+    echo "❌ 找不到签名基线文件 ${BASELINE}。"
     echo "   发生了什么：packaging/ 目录不完整。缺了它，build-app.sh 会把下次签出来的东西"
     echo "   直接当成基线记下来——万一那时签名已经退化成 ad-hoc，这道闸门就永远绿灯了。"
     echo "   下一步：git checkout -- packaging/expected-designated-requirement.txt 恢复它，再跑一次。"

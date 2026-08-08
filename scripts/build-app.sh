@@ -133,7 +133,7 @@ plutil -lint "$APP/Contents/Info.plist" >/dev/null || {
 registered_scheme="$(plutil -extract CFBundleURLTypes.0.CFBundleURLSchemes.0 raw \
     "$APP/Contents/Info.plist" 2>/dev/null || true)"
 if [ "$registered_scheme" != "ieltscoach" ]; then
-    echo "❌ Info.plist 里没有正确注册 ieltscoach:// 这个 URL scheme（读到的是「$registered_scheme」）。"
+    echo "❌ Info.plist 里没有正确注册 ieltscoach:// 这个 URL scheme（读到的是「${registered_scheme}」）。"
     echo "   下一步：检查 build-app.sh 里 CFBundleURLTypes 那一段是否完整。"
     echo "   不修的话，MCP 的 open_dashboard 会永远打不开窗口，而且不报错。"
     exit 1
@@ -265,7 +265,7 @@ elif [[ "$DESIGNATED" != "$(cat "$BASELINE")" ]]; then
     echo "   发生了什么：系统会把这次打出来的 App 当成另一个程序，"
     echo "   之前授予的辅助功能权限会失效，用户得回系统设置重新勾一次。"
     echo "   下一步（二选一）："
-    echo "     A. 你不是故意换证书：确认 login 钥匙串里的「$SIGN_IDENTITY」证书还在、没被重新生成，修好后重打。"
+    echo "     A. 你不是故意换证书：确认 login 钥匙串里的「${SIGN_IDENTITY}」证书还在、没被重新生成，修好后重打。"
     echo "     B. 你是故意换证书（例如换成 Developer ID 准备公证）：把新值写进"
     echo "        $BASELINE 并提交，然后到 系统设置 › 隐私与安全性 › 辅助功能 里"
     echo "        删掉旧条目、重新勾选一次。"
@@ -273,5 +273,5 @@ elif [[ "$DESIGNATED" != "$(cat "$BASELINE")" ]]; then
 fi
 
 echo "✅ 已生成 $APP"
-echo "   版本 $APP_VERSION（构建 $BUILD_NUMBER，提交 $BUILD_COMMIT，通道 $SIGNATURE_CHANNEL）"
+echo "   版本 ${APP_VERSION}（构建 ${BUILD_NUMBER}，提交 ${BUILD_COMMIT}，通道 ${SIGNATURE_CHANNEL}）"
 echo "   $DESIGNATED"

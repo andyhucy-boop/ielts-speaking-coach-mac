@@ -129,7 +129,7 @@ fi
 
 if [[ "$VERSION1" != "$FIRST_BUILD_NUMBER" || "$VERSION2" != "$SECOND_BUILD_NUMBER" ]]; then
     echo "❌ 构建号没有按要求写进包里。"
-    echo "   要求的是 $FIRST_BUILD_NUMBER / $SECOND_BUILD_NUMBER，包里读到的是「$VERSION1」/「$VERSION2」。"
+    echo "   要求的是 $FIRST_BUILD_NUMBER / ${SECOND_BUILD_NUMBER}，包里读到的是「${VERSION1}」/「${VERSION2}」。"
     echo "   发生了什么：build-app.sh 没把 IELTS_BUILD_NUMBER 写进 Info.plist 的 CFBundleVersion，"
     echo "   这两个包不是按预期打出来的，后面的比较不算数。"
     echo "   下一步：检查 build-app.sh 里读 IELTS_BUILD_NUMBER 的那一段，与 Info.plist 里的 CFBundleVersion。"
@@ -137,14 +137,14 @@ if [[ "$VERSION1" != "$FIRST_BUILD_NUMBER" || "$VERSION2" != "$SECOND_BUILD_NUMB
 fi
 
 if [[ "$VERSION1" == "$VERSION2" ]]; then
-    echo "❌ 两次打包用的是同一个构建号（都是 $VERSION1）。"
+    echo "❌ 两次打包用的是同一个构建号（都是 ${VERSION1}）。"
     echo "   发生了什么：两次打的其实是同一个版本，这次比较什么都没验证到。"
     echo "   下一步：把本脚本开头的 FIRST_BUILD_NUMBER 与 SECOND_BUILD_NUMBER 改回两个不同的号。"
     FAILED=1
 fi
 
 if [[ "$HASH1" == "$HASH2" ]]; then
-    echo "❌ 两次打包的 CDHash 一模一样（$HASH1）。"
+    echo "❌ 两次打包的 CDHash 一模一样（${HASH1}）。"
     echo "   发生了什么：两次签的是内容完全相同的包，这次比较什么都没验证到。"
     echo "   下一步：确认 build-app.sh 真的把 IELTS_BUILD_NUMBER 写进了 Info.plist 的 CFBundleVersion。"
     FAILED=1
@@ -180,7 +180,7 @@ if [[ $FAILED -ne 0 ]]; then exit 1; fi
 echo "✅ 连打两次，两个内容确实不同的包都通过了 build-app.sh 的「指定要求」闸门，"
 echo "   复核两次的值也逐字一致、与基线相符："
 echo "   $DR2"
-echo "   两次的构建号分别是 $VERSION1 / $VERSION2，CDHash 分别是 $HASH1 / $HASH2"
+echo "   两次的构建号分别是 $VERSION1 / ${VERSION2}，CDHash 分别是 $HASH1 / $HASH2"
 echo "   （构建号与 CDHash 两两都不同，说明比的是两个不同的包，不是拿同一个包自己比自己）"
 echo "   说明：判定由 build-app.sh 做，本脚本负责让两次打包的内容确实不同；"
 echo "   上面那句「复核」在正常路径下必然成立，别把它当成守门的那一道（见开头「职责划分」）。"

@@ -67,7 +67,7 @@ lines=$(wc -l < "$WORK/out.jsonl" | tr -d ' ')
 
 for tool in initialize_ielts_workspace open_dashboard set_training_selection \
             get_training_context save_session_review list_practice_history get_dashboard_data; do
-    grep -q "\"$tool\"" "$WORK/out.jsonl" || fail "tools/list 的结果里没有 $tool。下一步：检查 Sources/IELTSCoachMCP/ToolCatalog.swift 里 7 个工具是否都装配上了。"
+    grep -q "\"$tool\"" "$WORK/out.jsonl" || fail "tools/list 的结果里没有 ${tool}。下一步：检查 Sources/IELTSCoachMCP/ToolCatalog.swift 里 7 个工具是否都装配上了。"
 done
 
 grep -q -- '-32700' "$WORK/out.jsonl" || fail "半截 JSON 没有换来 -32700 解析错误。下一步：检查 MCPServer.handle(line:) 对解析失败的分支，坏消息必须回一条错误而不是被丢掉。"
@@ -78,7 +78,7 @@ grep -q -- '-32601' "$WORK/out.jsonl" || fail "未知方法 resources/list 没�
 if command -v python3 >/dev/null 2>&1; then
     while IFS= read -r line; do
         printf '%s' "$line" | python3 -c 'import json,sys; json.loads(sys.stdin.read())' \
-            >/dev/null 2>&1 || fail "stdout 里有不是 JSON 的行：$line。下一步：把这行内容改写到 stderr——stdout 只许出现协议消息。"
+            >/dev/null 2>&1 || fail "stdout 里有不是 JSON 的行：${line}。下一步：把这行内容改写到 stderr——stdout 只许出现协议消息。"
     done < "$WORK/out.jsonl"
 else
     echo "ℹ️  本机没有 python3，跳过「每行都是合法 JSON」这一项逐行校验。"
@@ -93,11 +93,11 @@ startup_log="$(grep '已启动' "$WORK/err.log" || true)"
 
 # 版本号：真机上「Codex 用的是哪个版本的服务器」只能靠它回答。不写死具体版本，只要求形如 x.y.z。
 printf '%s' "$startup_log" | grep -Eq '[0-9]+\.[0-9]+\.[0-9]+' \
-    || fail "启动日志里没有版本号，实际是：$startup_log。下一步：在 main.swift 的启动日志里带上 MCPServer.serverVersion。"
+    || fail "启动日志里没有版本号，实际是：${startup_log}。下一步：在 main.swift 的启动日志里带上 MCPServer.serverVersion。"
 
 # 数据目录：写错目录时（比如没读环境变量、回退到了用户真实的 Application Support），
 # 这一行是唯一能看出来的线索，所以必须校验它等于本次真正生效的目录。
 printf '%s' "$startup_log" | grep -qF "$IELTS_SPEAKING_DATA_DIR" \
-    || fail "启动日志里的数据目录不是本次指定的 $IELTS_SPEAKING_DATA_DIR，实际是：$startup_log。下一步：确认 main.swift 打印的是 DataDirectory.resolve() 解析出来的 root 路径，而不是写死的路径。"
+    || fail "启动日志里的数据目录不是本次指定的 ${IELTS_SPEAKING_DATA_DIR}，实际是：${startup_log}。下一步：确认 main.swift 打印的是 DataDirectory.resolve() 解析出来的 root 路径，而不是写死的路径。"
 
 echo "✅ MCP stdio 冒烟测试通过：5 条响应、7 个工具齐全、坏消息之后仍存活、读到 EOF 自行退出、stdout 干净。"
