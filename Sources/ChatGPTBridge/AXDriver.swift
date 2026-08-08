@@ -78,8 +78,17 @@ public final class AXDriver: CoachBridge, Sendable {
         return BridgeReadiness(ok: true, messages: messages)
     }
 
-    public func sendText(_ text: String) throws {
-        let composer = try locator.waitForComposer(timeout: shortTimeout)
+    public func sendText(_ text: String, into target: ComposerTarget) throws {
+        let composer: AXNodeSnapshot
+        switch target {
+        case .voice:
+            // **必须重新定位，不能复用 waitForVoiceComposer 那一次的返回值**：
+            // 每次 snapshotTree() 都会开启新代次，先前取得的引用会失效。
+            // 这里要的是「此刻语音框的最新引用」。
+            composer = try waitForVoiceComposer(timeout: shortTimeout)
+        case .any:
+            composer = try locator.waitForComposer(timeout: shortTimeout)
+        }
         guard access.setValue(text, on: composer.element) else {
             throw BridgeError.actionFailed("写入 ChatGPT 输入框失败。"
                 + "下一步：确认 ChatGPT 窗口没有被弹窗挡住，然后重试。")

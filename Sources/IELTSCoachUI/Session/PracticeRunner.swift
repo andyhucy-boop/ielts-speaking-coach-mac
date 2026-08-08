@@ -221,7 +221,7 @@ public final class PracticeRunner {
             try await run(.waitingComposer, ticket: ticket) {
                 _ = try $0.waitForVoiceComposer(timeout: timeout)
             }
-            try await run(.sendingPrompt, ticket: ticket) { try $0.sendText(prompt) }
+            try await run(.sendingPrompt, ticket: ticket) { try $0.sendText(prompt, into: .voice) }
             beginCollectingTranscript()
             beginRecording()
             stage = .practicing
@@ -381,7 +381,8 @@ public final class PracticeRunner {
             currentRequestID = requestID
             let marker = ReviewRequestPrompt.marker(requestID: requestID)
             let request = ReviewRequestPrompt.build(requestID: requestID, focusPart: setup.focusPart)
-            try await run(.requestingReview, ticket: ticket) { try $0.sendText(request) }
+            // 复盘请求发在 endVoice 之后，那时语音框已经不在了，用 .any。
+            try await run(.requestingReview, ticket: ticket) { try $0.sendText(request, into: .any) }
             let replyTimeout = replyTimeout
             try await run(.requestingReview, ticket: ticket) {
                 try $0.waitForAssistantReply(timeout: replyTimeout, minimumLength: 60)

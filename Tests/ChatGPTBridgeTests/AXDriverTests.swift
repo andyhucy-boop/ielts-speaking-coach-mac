@@ -126,7 +126,7 @@ final class AXDriverTests: XCTestCase {
         access.onPress = { _, nodes in
             for i in nodes.indices where nodes[i].role == "AXTextArea" { nodes[i].value = "" }
         }
-        try driver(access).sendText("你好")
+        try driver(access).sendText("你好", into: .any)
         XCTAssertEqual(access.setValues.count, 1)
         XCTAssertEqual(access.setValues[0].1, "你好")
         XCTAssertEqual(access.pressedElements.map(\.rawID), [2], "必须按下 Send 按钮")
@@ -143,7 +143,7 @@ final class AXDriverTests: XCTestCase {
         access.onPress = { _, nodes in
             for i in nodes.indices where nodes[i].role == "AXTextArea" { nodes[i].value = "" }
         }
-        try driver(access).sendText("你好")
+        try driver(access).sendText("你好", into: .any)
         XCTAssertEqual(access.returnKeyCount, 0, "Send 按钮在时必须走按钮，不能绕过去模拟回车")
     }
 
@@ -156,7 +156,7 @@ final class AXDriverTests: XCTestCase {
         access.onSendReturnKey = { nodes in
             for i in nodes.indices where nodes[i].role == "AXTextArea" { nodes[i].value = "" }
         }
-        try driver(access).sendText("你好")
+        try driver(access).sendText("你好", into: .any)
         XCTAssertEqual(access.returnKeyCount, 1, "没有 Send 按钮时必须退回模拟回车")
         XCTAssertTrue(access.pressedElements.isEmpty, "没有按钮可按，不该留下任何 press 记录")
     }
@@ -190,7 +190,7 @@ final class AXDriverTests: XCTestCase {
             ]
         }
 
-        try driver(access, sendButtonTimeout: 1.0).sendText("你好")
+        try driver(access, sendButtonTimeout: 1.0).sendText("你好", into: .any)
 
         XCTAssertEqual(access.pressedElements.map(\.rawID), [2],
                        "Send 按钮是写完文字之后才出现的，必须等它出现再按，不能立刻退回回车")
@@ -224,7 +224,7 @@ final class AXDriverTests: XCTestCase {
         }
 
         let started = Date()
-        try driver(access, sendButtonTimeout: 0.05).sendText("考官提示词")
+        try driver(access, sendButtonTimeout: 0.05).sendText("考官提示词", into: .any)
         let elapsed = Date().timeIntervalSince(started)
 
         XCTAssertEqual(access.returnKeyCount, 1, "等满之后必须真的退回回车，否则这段等待没有意义")
@@ -242,7 +242,7 @@ final class AXDriverTests: XCTestCase {
     func testSendTextFailsActionablyWhenNeitherButtonNorReturnKeyClearsComposer() {
         let access = FakeAXAccess()
         access.nodes = [composer(1)]   // 没有 Send 按钮；onSendReturnKey 保持默认（什么都不做）
-        XCTAssertThrowsError(try driver(access).sendText("考官提示词")) { error in
+        XCTAssertThrowsError(try driver(access).sendText("考官提示词", into: .any)) { error in
             XCTAssertTrue("\(error)".contains("下一步"))
         }
         XCTAssertEqual(access.returnKeyCount, 1, "仍应该尝试过回车这条路")
@@ -252,7 +252,7 @@ final class AXDriverTests: XCTestCase {
     func testSendTextFailsWhenComposerStillHoldsTheText() {
         let access = FakeAXAccess()
         access.nodes = [composer(1), sendButton(2)]   // 按了 Send，但输入框没被清空 —— 模拟「发送没生效」
-        XCTAssertThrowsError(try driver(access).sendText("考官提示词")) { error in
+        XCTAssertThrowsError(try driver(access).sendText("考官提示词", into: .any)) { error in
             XCTAssertTrue("\(error)".contains("下一步"))
         }
     }
@@ -270,7 +270,7 @@ final class AXDriverTests: XCTestCase {
                 nodes[i].value = "考官提示词\n"
             }
         }
-        XCTAssertThrowsError(try driver(access).sendText("考官提示词")) { error in
+        XCTAssertThrowsError(try driver(access).sendText("考官提示词", into: .any)) { error in
             XCTAssertTrue("\(error)".contains("下一步"),
                           "输入框只是内容被规范化、并未清空时必须继续判定为未发送")
         }
@@ -289,7 +289,7 @@ final class AXDriverTests: XCTestCase {
                 nodes[i].value = "\nMessage ChatGPT"
             }
         }
-        try driver(access).sendText("你好")
+        try driver(access).sendText("你好", into: .any)
         XCTAssertEqual(access.pressedElements.map(\.rawID), [2],
                        "占位符状态必须被识别为「已发送」，不能超时")
     }
@@ -302,7 +302,7 @@ final class AXDriverTests: XCTestCase {
         access.onPress = { _, nodes in
             nodes.removeAll { $0.role == "AXTextArea" }
         }
-        XCTAssertThrowsError(try driver(access).sendText("考官提示词")) { error in
+        XCTAssertThrowsError(try driver(access).sendText("考官提示词", into: .any)) { error in
             XCTAssertTrue("\(error)".contains("下一步"))
         }
     }
@@ -761,15 +761,15 @@ final class AXDriverTests: XCTestCase {
         let probes: [PacingProbe] = [
             PacingProbe(step: "sendText 等 Send 按钮出现（sendButtonTimeout）",
                         atLeast: sendButtonWait * 0.8, expectsFailure: false) {
-                try sut(composerWithoutSendButton).sendText("考官提示词")
+                try sut(composerWithoutSendButton).sendText("考官提示词", into: .any)
             },
             PacingProbe(step: "sendText 找 ChatGPT 输入框（shortTimeout）",
                         atLeast: short * 0.8, expectsFailure: true) {
-                try sut(emptyTreeForSendText).sendText("考官提示词")
+                try sut(emptyTreeForSendText).sendText("考官提示词", into: .any)
             },
             PacingProbe(step: "sendText 验证输入框回到空态（shortTimeout）",
                         atLeast: short * 0.8, expectsFailure: true) {
-                try sut(composerThatNeverClears).sendText("考官提示词")
+                try sut(composerThatNeverClears).sendText("考官提示词", into: .any)
             },
             PacingProbe(step: "startNewChat 找「新建会话」按钮（shortTimeout）",
                         atLeast: short * 0.8, expectsFailure: true) {

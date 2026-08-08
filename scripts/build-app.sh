@@ -275,3 +275,41 @@ fi
 echo "✅ 已生成 $APP"
 echo "   版本 ${APP_VERSION}（构建 ${BUILD_NUMBER}，提交 ${BUILD_COMMIT}，通道 ${SIGNATURE_CHANNEL}）"
 echo "   $DESIGNATED"
+
+# ---------------------------------------------------------------------------
+# 装到 ~/Applications
+#
+# **`.build/` 是构建产物目录，不是能住人的地方。** 2026-08-08 实测：
+# 用户重启一次之后就找不到这个应用了——Spotlight 搜不到、Finder 也进不去。
+# 三个原因叠在一起：
+#   1. 目录名以点开头，Finder 默认隐藏，「系统设置 › 辅助功能」里点「+」浏览不到它
+#   2. 构建目录不进 Spotlight 索引，所以搜「IELTS」什么都搜不出来
+#   3. `rm -rf .build` 就没了——开发过程中这条命令跑过好几次
+#
+# 装到 ~/Applications（不是 /Applications：那里要管理员密码，而这是个人自用工具）。
+# **辅助功能授权不会因为换位置而失效**：TCC 记的是签名的「指定要求」
+# （identifier + 证书 leaf），不是路径——这一点上面那道闸门每次打包都在验。
+INSTALLED="$HOME/Applications/$APP_NAME.app"
+mkdir -p "$HOME/Applications"
+
+# 先删后拷，不用 cp -R 覆盖：覆盖会把上一版残留的文件留在包里
+# （比如某个版本有、下个版本删掉的资源），签名当场作废。
+rm -rf "$INSTALLED"
+if ! cp -R "$APP" "$INSTALLED"; then
+    echo "⚠️  拷到 ~/Applications 失败，但 .build 里那份是好的。"
+    echo "    下一步：手动把 $APP 拖进「访达 › 前往 › 个人 › Applications」，"
+    echo "    或者直接从 .build 打开（用 open \"$APP\"）。"
+    exit 0
+fi
+
+# 拷完再验一次签名：cp -R 在极少数情况下会破坏扩展属性，
+# 而破坏了的包打开时只会报一句含糊的「已损坏」，查起来很费劲。
+if ! codesign --verify --strict "$INSTALLED" 2>/dev/null; then
+    echo "❌ 拷到 ~/Applications 之后签名坏了。"
+    echo "   下一步：从 .build 那一份打开（open \"$APP\"），并把这条报错告诉开发者。"
+    exit 1
+fi
+
+echo "✅ 已装到 $INSTALLED"
+echo "   现在可以用 Spotlight（⌘空格）搜「IELTS」打开它，"
+echo "   「系统设置 › 隐私与安全性 › 辅助功能」里点「+」也能浏览到这个位置。"

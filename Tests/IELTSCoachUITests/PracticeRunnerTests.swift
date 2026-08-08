@@ -83,7 +83,11 @@ final class FakeBridge: CoachBridge, @unchecked Sendable {
         return AXNodeSnapshot(element: AXElementRef(rawID: 1, epoch: 0), role: "AXTextArea")
     }
 
-    func sendText(_ text: String) throws {
+    /// 记下每段文字发进了哪个框——真机缺陷（提示词打进文字会话而不是语音会话）
+    /// 就出在这儿，不记的话假件永远选不错。
+    private(set) var sendTargets: [ComposerTarget] = []
+    func sendText(_ text: String, into target: ComposerTarget) throws {
+        sendTargets.append(target)
         // 考官提示词与复盘请求走的是同一个方法，按次序区分：第一次是开练时的考官提示词，
         // 之后都是收尾时的复盘请求。用 `failAt` 去猜的话，`failAt = .requestingReview`
         // 会连开练那一次 sendText 一起打掉，测试就跑不到收尾阶段了。
@@ -711,5 +715,38 @@ final class PracticeRunnerTests: XCTestCase {
         for url in createdDirectories { try? FileManager.default.removeItem(at: url) }
         createdDirectories = []
         super.tearDown()
+    }
+}
+
+/// 守住 2026-08-08 真机发现的那个缺陷：**考官提示词必须发进语音会话的输入框。**
+///
+/// 现象是用户报的：新建对话 → 点语音 → 又冒出一个文字对话，提示词进了那里，
+/// 而语音那边一个字都没收到。整场练习变成对着一个什么都不知道的聊天机器人说话，
+/// 而界面显示一切正常。
+///
+/// 根因：`sendText` 此前只会「找一个输入框」，取的是无障碍树里排在前面的那个；
+/// 语音起来之后普通聊天的输入框仍在树里且往往排在前面。
+/// 项目里本来就有 `waitForVoiceComposer`，注释还写明了这个坑，只是没人接上。
+///
+/// **单元测试当时全绿，因为假件里只有一个框子，永远选不错。**
+/// 所以这条测试问的不是「有没有发」，而是「发进了哪个框」。
+@MainActor
+final class ExaminerPromptGoesIntoTheVoiceComposerTests: XCTestCase {
+
+    func testTheExaminerPromptIsSentIntoTheVoiceComposerAndNotJustAnyComposer() async throws {
+        let bridge = FakeBridge()
+        let runner = PracticeRunner(bridge: bridge, pasteboard: FakePasteboard(contents: ""))
+
+        try? await runner.start(setup: Self.setup())
+
+        XCTAssertEqual(bridge.sendTargets.first, .voice,
+                       "考官提示词必须发进语音会话的输入框（.voice）。发成 .any 的话，"
+                       + "它会被打进那个仍然留在树里的普通聊天输入框——用户练完一整场才会发现"
+                       + "语音那边根本没收到提示词。")
+    }
+
+    private static func setup() -> SessionSetup {
+        SessionSetup(question: Question(id: "q1", part: 1, topic: "Home", prompt: "P"),
+                     focusPart: .part1, durationMinutes: 5, goal: "")
     }
 }

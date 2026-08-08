@@ -78,7 +78,7 @@ enum PracticeCommand {
             try driver.waitForVoiceComposer(timeout: 20)
 
             print("▶︎ 正在把考官提示词发给 ChatGPT…")
-            try driver.sendText(ExaminerPrompt.build(setup: setup))
+            try driver.sendText(ExaminerPrompt.build(setup: setup), into: .voice)
             print("\n✅ 开练了。跟 ChatGPT 说话就行。")
             print("   练完之后在 ChatGPT 里结束通话即可；也可以回到这里按回车。\n")
 
@@ -97,7 +97,8 @@ enum PracticeCommand {
             // 还会出现在同一条消息的 [SYNC_REQUEST_ID:...] 行里，匹配会变弱。
             let marker = ReviewRequestPrompt.marker(requestID: requestID)
             print("▶︎ 正在请 ChatGPT 生成复盘…")
-            try driver.sendText(ReviewRequestPrompt.build(requestID: requestID, focusPart: focusPart))
+            try driver.sendText(ReviewRequestPrompt.build(requestID: requestID, focusPart: focusPart),
+                                into: .any)
 
             print("▶︎ 等 ChatGPT 写完复盘…")
             try driver.waitForAssistantReply(timeout: 60)

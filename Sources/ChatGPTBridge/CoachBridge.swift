@@ -29,7 +29,19 @@ public protocol CoachBridge {
     /// 新建一个空会话，见 `AXDriver.startNewChat`。**每次练习前都要先调用它**——
     /// Live 语音只能在还没发送过任何消息的会话里启动。
     func startNewChat() throws
-    func sendText(_ text: String) throws
+    /// 把文字写进输入框并发出去。
+    ///
+    /// **`target` 没有默认值是刻意的：调用方必须想清楚这段文字该进哪个框。**
+    ///
+    /// 2026-08-08 真机发现的缺陷就出在这里：此前 `sendText` 只会「找一个输入框」，
+    /// 而 `ChatGPTLabels.composer(among:)` 取的是树里排在前面的那个。语音起来之后，
+    /// 普通聊天的输入框仍然在树里且往往排在前面，于是考官提示词被打进了那个
+    /// **属于文字会话的框**——用户看到的是「新建对话 → 点语音 → 又新建了一个对话 →
+    /// 提示词发进了那个文字会话」，而语音那边一个字都没收到。
+    ///
+    /// 项目里本来就有 `waitForVoiceComposer`，注释还写明了这个坑，只是没人接上。
+    /// 给个默认值等于把这个坑原样留着——所以不给。
+    func sendText(_ text: String, into target: ComposerTarget) throws
     func startVoice() throws
     /// 等语音模式的输入框出现，见 `AXDriver.waitForVoiceComposer`。
     @discardableResult

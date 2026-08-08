@@ -446,7 +446,7 @@ private struct InertBridge: CoachBridge, Sendable {
         BridgeReadiness(ok: false, messages: ["这是 Xcode 预览，不驱动真实的 ChatGPT。"])
     }
     func startNewChat() throws { throw refuse }
-    func sendText(_ text: String) throws { throw refuse }
+    func sendText(_ text: String, into target: ComposerTarget) throws { throw refuse }
     func startVoice() throws { throw refuse }
     func waitForVoiceComposer(timeout: TimeInterval) throws -> AXNodeSnapshot { throw refuse }
     func isVoiceActive() -> Bool { false }
