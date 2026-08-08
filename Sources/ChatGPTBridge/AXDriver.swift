@@ -85,7 +85,12 @@ public final class AXDriver: CoachBridge, Sendable {
             // **必须重新定位，不能复用 waitForVoiceComposer 那一次的返回值**：
             // 每次 snapshotTree() 都会开启新代次，先前取得的引用会失效。
             // 这里要的是「此刻语音框的最新引用」。
-            composer = try waitForVoiceComposer(timeout: shortTimeout)
+            //
+            // **超时用 stateTimeout 而不是 shortTimeout。** 实测语音输入框要等到
+            // 第 12 秒左右才出现（spec 2.3.7：语音标志第 9 秒，输入框还要再晚约 3 秒），
+            // 而 shortTimeout 是 5 秒——正好卡在它出来之前。
+            // 用户报的就是这个：「压根没有等到语音对话中提示框出现的那一刻」。
+            composer = try waitForVoiceComposer(timeout: stateTimeout)
         case .any:
             composer = try locator.waitForComposer(timeout: shortTimeout)
         }
