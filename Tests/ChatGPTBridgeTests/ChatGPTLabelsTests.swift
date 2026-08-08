@@ -92,17 +92,30 @@ final class ChatGPTLabelsTests: XCTestCase {
     }
 
     // voiceComposer(among:) 是【发进错误的输入框】那条修复的核心判据：实测第 9~11 秒
-    // 窗口里语音已经启动，但界面上摆的仍是普通输入框，voiceComposer 不能像 composer(among:)
-    // 那样把它也算数——必须精确匹配语音态描述。
-    func testVoiceComposerOnlyMatchesVoiceDescription() {
-        let normal = AXNodeSnapshot(element: AXElementRef(rawID: 1, epoch: 0), role: "AXTextArea",
-                                    descriptionText: ChatGPTLabels.normalComposerDescription)
-        let voice = AXNodeSnapshot(element: AXElementRef(rawID: 2, epoch: 0), role: "AXTextArea",
-                                   descriptionText: ChatGPTLabels.voiceComposerDescription)
-        XCTAssertNil(ChatGPTLabels.voiceComposer(among: [normal]),
-                     "只有普通输入框时不能被误认成语音输入框")
-        XCTAssertEqual(ChatGPTLabels.voiceComposer(among: [normal, voice])?.element,
-                       AXElementRef(rawID: 2, epoch: 0))
+    // **这条测试的前提在 2026-08-08 被真机 dump 更正过。**
+    //
+    // 原来写的是「必须精确匹配语音态描述」，前提是两种状态的输入框叫不同的名字。
+    // 实测这一版 ChatGPT **两种状态下都叫 `Work with ChatGPT`**，那个判据在空对话里
+    // 就成立——`waitForVoiceComposer` 立刻返回、根本不等，考官提示词被打进旧对话的框。
+    // 用户报的「压根就没有等到语音对话中提示框出现的那一刻」就是它。
+    //
+    // 现在的判据是同一行上的通话控制按钮。
+    func testVoiceComposerNeedsTheCallControlsNotJustTheDescription() {
+        let composer = AXNodeSnapshot(element: AXElementRef(rawID: 2, epoch: 0), role: "AXTextArea",
+                                      descriptionText: ChatGPTLabels.voiceComposerDescription)
+        let startVoice = AXNodeSnapshot(element: AXElementRef(rawID: 3, epoch: 0), role: "AXButton",
+                                        descriptionText: "Start new voice chat",
+                                        childCount: 1, childRoles: ["AXImage"])
+        let stopVoice = AXNodeSnapshot(element: AXElementRef(rawID: 4, epoch: 0), role: "AXButton",
+                                       descriptionText: "Stop voice chat",
+                                       childCount: 1, childRoles: ["AXImage"])
+
+        XCTAssertNil(ChatGPTLabels.voiceComposer(among: [composer, startVoice]),
+                     "空对话那一屏：输入框名字虽然一样，但摆的是 Start new voice chat，"
+                     + "不能当成语音输入框——认了就等于不等，提示词会发进旧对话")
+        XCTAssertEqual(ChatGPTLabels.voiceComposer(among: [composer, stopVoice])?.element,
+                       AXElementRef(rawID: 2, epoch: 0),
+                       "通话中那一屏：摆的是 Stop voice chat，这时才是真的语音输入框")
     }
 
     func testComposerRefusesToGuessAmongMultipleTextAreas() {

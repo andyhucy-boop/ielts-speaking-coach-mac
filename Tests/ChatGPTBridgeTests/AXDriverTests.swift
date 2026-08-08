@@ -25,9 +25,28 @@ final class AXDriverTests: XCTestCase {
     }
     // 语音模式下的输入框（description = "Work with ChatGPT"），与 composer(_:) 区分开——
     // 后者用的是普通聊天态的描述，两者不能互相冒充。
-    private func voiceComposer(_ id: Int) -> AXNodeSnapshot {
-        AXNodeSnapshot(element: AXElementRef(rawID: id, epoch: 0), role: "AXTextArea",
-                       descriptionText: ChatGPTLabels.voiceComposerDescription)
+    /// **通话中那一屏**：输入框 + 通话控制按钮。
+    ///
+    /// 2026-08-08 真机 dump 推翻了「靠 description 区分状态」这个前提——
+    /// 这一版 ChatGPT 的输入框在空对话和通话中都叫 `Work with ChatGPT`。
+    /// 真正随状态变的是同一行上的按钮（空对话有 `Start new voice chat`，
+    /// 通话中有 `Stop voice chat`），所以造树时必须把它们摆上，
+    /// 否则造出来的是一棵**现实中不存在**的树。
+    private func voiceComposerTree(_ id: Int) -> [AXNodeSnapshot] {
+        [
+            AXNodeSnapshot(element: AXElementRef(rawID: id, epoch: 0), role: "AXTextArea",
+                           descriptionText: ChatGPTLabels.voiceComposerDescription),
+            control(9001, "Stop voice chat"),
+        ]
+    }
+
+    /// **空对话那一屏**：同样的输入框，但摆的是 `Start new voice chat`。
+    private func idleComposerTree(_ id: Int) -> [AXNodeSnapshot] {
+        [
+            AXNodeSnapshot(element: AXElementRef(rawID: id, epoch: 0), role: "AXTextArea",
+                           descriptionText: ChatGPTLabels.voiceComposerDescription),
+            control(9002, "Start new voice chat"),
+        ]
     }
     // 修复轮第 4 条（我在上一轮报告里提出的疑虑）：brief 原版 helper 没有覆盖默认的
     // shortTimeout(5.0)/stateTimeout(当时是 8.0，本轮改成 25.0，见下方
@@ -344,18 +363,21 @@ final class AXDriverTests: XCTestCase {
 
     func testWaitForVoiceComposerFindsVoiceComposerWhenAlreadyPresent() throws {
         let access = FakeAXAccess()
-        access.nodes = [voiceComposer(1)]
+        access.nodes = voiceComposerTree(1)
         let found = try driver(access).waitForVoiceComposer(timeout: 0.5)
         XCTAssertEqual(found.element.rawID, 1)
     }
 
-    // 【发进错误的输入框】的核心场景，本次故障的直接现场：树里只有普通输入框
-    // "Message ChatGPT" 时必须继续等，不能提前返回；等语音输入框
-    // "Work with ChatGPT" 出现才能返回。这条测试改回旧的「转发 waitForComposer」实现时
-    // 会立刻变红——旧实现见到 composer(1) 就直接返回了，根本不会等 voiceComposer(2) 出现。
+    // 【发进错误的输入框】的核心场景。**前提在 2026-08-08 被真机 dump 更正过：**
+    // 原来以为空对话的输入框叫 "Message ChatGPT"、语音的叫 "Work with ChatGPT"，
+    // 靠名字就能分辨。实测这一版 ChatGPT 两种状态下都叫 "Work with ChatGPT"——
+    // 于是旧判据在空对话那一屏就成立，根本不等，考官提示词被打进旧对话的输入框。
+    // 现在两屏的区别只有同行的按钮（Start new voice chat / Stop voice chat）。
     func testWaitForVoiceComposerKeepsWaitingWhileOnlyNormalComposerIsPresent() throws {
         let access = FakeAXAccess()
-        access.nodes = [composer(1)]   // 只有 "Message ChatGPT"——实测第 9~11 秒那个窗口
+        // 空对话那一屏：输入框已经在了（而且和通话中同名），但摆的是 Start new voice chat。
+        // 这正是缺陷现场——旧判据只看 description，在这里就会返回，根本不等。
+        access.nodes = idleComposerTree(1)
         // 直接构造节点而不是调用 self.voiceComposer(_:)：DispatchQueue.global().asyncAfter
         // 的闭包是 @Sendable 的，捕获 self（非 Sendable 的 XCTestCase 子类）会触发警告；
         // 与本文件另一处 asyncAfter 用例
@@ -367,8 +389,16 @@ final class AXDriverTests: XCTestCase {
         // 按采样序号摆状态即可（见 FakeAXAccess），但 AXLocatorTests 里还有三处同样的写法，
         // 应当一并处理，不适合在这条复审里顺手改。
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) {
-            access.nodes = [AXNodeSnapshot(element: AXElementRef(rawID: 2, epoch: 0), role: "AXTextArea",
-                                           descriptionText: ChatGPTLabels.voiceComposerDescription)]
+            // 切到通话中那一屏：输入框换了一个（新会话），并且摆上了 Stop voice chat。
+            // 描述文字与上一屏**完全相同**——这正是真机的样子，也正是为什么
+            // 判据不能靠 description。
+            access.nodes = [
+                AXNodeSnapshot(element: AXElementRef(rawID: 2, epoch: 0), role: "AXTextArea",
+                               descriptionText: ChatGPTLabels.voiceComposerDescription),
+                AXNodeSnapshot(element: AXElementRef(rawID: 9001, epoch: 0), role: "AXButton",
+                               descriptionText: "Stop voice chat",
+                               childCount: 1, childRoles: ["AXImage"]),
+            ]
         }
         let found = try driver(access).waitForVoiceComposer(timeout: 1.0)
         XCTAssertEqual(found.element.rawID, 2,

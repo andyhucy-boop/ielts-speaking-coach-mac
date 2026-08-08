@@ -9,12 +9,15 @@ public enum ChatGPTLabels {
     public static let stopVoice = ["Stop voice chat"]
     /// 语音进行中的标志。实测为会话级常驻，静默不消失（spec 2.3.3）。
     public static let voiceActiveIndicator = "Voice chat active"
-    /// 输入框的 description **随状态而变**（实测）：普通聊天是 "Message ChatGPT"，
-    /// 语音会话进行中是 "Work with ChatGPT"。此前只认后者，是因为最初的 AX 结构
-    /// 全部在语音会话中采集，把语音态特征当成了通用特征。
-    /// 普通聊天状态的输入框。
+    /// 输入框的 description。
+    ///
+    /// **⚠️ 别再拿它区分「普通聊天」和「语音通话」——2026-08-08 实测这一版
+    /// ChatGPT 两种状态下都叫 `Work with ChatGPT`。** 要判断状态请用
+    /// `isInVoiceCall(_:)`（看的是同行的通话控制按钮）。
+    ///
+    /// 两个取值都保留：`Message ChatGPT` 是更早的版本用的，用户机器上的版本
+    /// 未必一致，多认一个不会错——但**它们不再承担区分状态的职责**。
     public static let normalComposerDescription = "Message ChatGPT"
-    /// 语音模式下的输入框。**实测比 Voice chat active 还晚约 3 秒出现。**
     public static let voiceComposerDescription = "Work with ChatGPT"
     /// 两者合集，供通用查找使用。
     public static let composerDescriptions = [normalComposerDescription, voiceComposerDescription]
@@ -99,10 +102,38 @@ public enum ChatGPTLabels {
         return textAreas.count == 1 ? textAreas[0] : nil
     }
 
-    /// 专门找**语音模式**的输入框。不能用通用的 composer(among:) —— 语音起来后
-    /// 有约 3 秒窗口界面上摆的仍是普通输入框，那时发送会发进错误的框。
+    /// 界面此刻是不是真的处在语音通话里。
+    ///
+    /// **判据是通话控制按钮，不是输入框的 description。**
+    ///
+    /// 2026-08-08 真机实测（两份 AX dump 对比）推翻了此前的假设：
+    /// 这一版 ChatGPT 的输入框在**两种状态下都叫 `Work with ChatGPT`**。
+    /// 真正随状态变化的是输入框那一行工具栏上的按钮——
+    ///
+    /// | | 空对话 | 通话中 |
+    /// |---|---|---|
+    /// | 输入框 desc | `Work with ChatGPT` | `Work with ChatGPT` |
+    /// | 同行按钮 | `Dictate`、`Start new voice chat` | `Mute speakers`、`Mute microphone`、`Stop voice chat` |
+    ///
+    /// 两个条件都要：`Stop voice chat` 在（通话真的开着），
+    /// 且 `Start new voice chat` 不在（界面确实已经切到通话那一屏，
+    /// 而不是还停在旧对话上、通话在别处开着）。
+    public static func isInVoiceCall(_ nodes: [AXNodeSnapshot]) -> Bool {
+        matchControl(stopVoice, among: nodes) != nil
+            && matchControl(startVoice, among: nodes) == nil
+    }
+
+    /// 专门找**语音会话里那个**输入框。
+    ///
+    /// **不能靠 description 认**（见 `isInVoiceCall`）：两种状态同名，
+    /// 那个判据一开始就成立，`waitForVoiceComposer` 会立刻返回、根本不等，
+    /// 于是考官提示词被打进旧对话的输入框——用户报的正是这个：
+    /// 「压根就没有等到语音对话中提示框出现的那一刻」「又另外创建了一个文字对话」。
+    ///
+    /// 现在的做法是先确认界面真的在通话里，再取输入框。
     public static func voiceComposer(among nodes: [AXNodeSnapshot]) -> AXNodeSnapshot? {
-        nodes.first { $0.role == "AXTextArea" && $0.descriptionText == voiceComposerDescription }
+        guard isInVoiceCall(nodes) else { return nil }
+        return composer(among: nodes)
     }
 
     /// 界面上全部的文本框。`composer` 找不到时用于给出可执行的诊断。
