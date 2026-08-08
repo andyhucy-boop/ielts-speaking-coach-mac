@@ -2,7 +2,10 @@
 
 日期：2026-08-08
 对应计划：`docs/superpowers/plans/2026-08-06-phase10-packaging-and-distribution.md` 的 **Task 11**（第 3123 行起）
-代码基线：分支 `phase2-bridge`，最后一条提交 `5ca5514`（数据目录搬迁的自动化验证）
+代码基线：分支 `phase2-bridge`。写这份清单时 HEAD 是 `5ca5514`（数据目录搬迁的自动化验证）、
+构建号 `303`——**这两个数字在本文件自己被提交的那一刻就作废了**（提交它就多一条提交），
+所以下文所有「构建号 / 提交应当是多少」的判据一律让你**现场跑命令取值再比**，一处都不写死。
+见第 1 节第十一条。
 自动化测试现状：`swift test` **1744 条全绿**，18.60 秒（2026-08-08 实跑两次）
 
 ---
@@ -47,7 +50,7 @@ Task 11 是 Phase 10 里**不能由子代理代劳**的那一个。前面十个�
 
 ---
 
-## 1. ⚠️ 开工前必须先知道的十件事
+## 1. ⚠️ 开工前必须先知道的十一件事
 
 全部是 2026-08-08 在本机实读、实跑得到的，不是猜的。不先看，第 3、5、6、8 节都会当场卡住，
 或者让你记下一条假缺陷。
@@ -55,17 +58,22 @@ Task 11 是 Phase 10 里**不能由子代理代劳**的那一个。前面十个�
 ### 一、`.build` 里现在那份 `.app` 是**旧的**，别拿它当验收对象
 
 ```
-.build/IELTS Speaking Coach.app/Contents/Info.plist
+.build/IELTS Speaking Coach.app/Contents/Info.plist   ← 2026-08-08 实读
   CFBundleShortVersionString  1.0.0
   CFBundleVersion             296
   IELTSBuildCommit            1e630de
   IELTSBuildDate              2026-08-07T22:46:51Z
-
-git rev-parse --short HEAD    5ca5514
-git rev-list --count HEAD     303
 ```
 
-它是 `1e630de`（Task 16 那次重构）打的，之后又提交了八次。
+自己跑这两条，看 HEAD 比包里那两行新了多少（**别抄我写清单时的值**——那时是 `5ca5514` / `303`，
+你跑出来一定更大，第 1 节第十一条）：
+
+```bash
+git rev-parse --short HEAD     # 重打之后 IELTSBuildCommit 应当等于它
+git rev-list --count HEAD      # 重打之后 CFBundleVersion 应当等于它
+```
+
+包是 `1e630de`（Task 16 那次重构）打的，之后又提交了好几次。
 **Step 3 那条「提交与 `git rev-parse --short HEAD` 一致」现在必然对不上**——
 那不是缺陷，是这份包还没重打。Step 2 会重打，所以照顺序走就行。
 
@@ -81,8 +89,8 @@ git rev-list --count HEAD     303
 Step 5 若直接沿用这个包，发给别人的也是 90002。
 
 **下一步：Step 2 结束、确认过不用重新授权之后，再跑一次干净的 `./scripts/build-app.sh`**
-（不带 `IELTS_BUILD_NUMBER`），构建号会回到 `git rev-list --count HEAD`，
-现在是 **303**。这一步已经写进第 4 节的操作里了。
+（不带 `IELTS_BUILD_NUMBER`），构建号会回到 `git rev-list --count HEAD` **当场算出来的那个值**
+（现场跑一下取，别抄数字，第 1 节第十一条）。这一步已经写进第 4 节的操作里了。
 
 再打一次包**不会**让辅助功能授权失效——那正是 Step 2 要证明的事。
 
@@ -209,7 +217,8 @@ Step 4 那句 `defaults delete` 到那时是空操作，除非你在 Step 2/3 �
 
 ### 七、Step 2 有一个**前置条件**，不满足的话它验的是另一回事
 
-Step 2 的判据是「不重新授权直接打开，仍然显示「环境就绪」」。
+Step 2 的判据是「不重新授权直接打开，不再要求你去系统设置勾选任何东西」
+（**具体看屏幕上哪句话，见第 4 节——不是「环境就绪」，计划原文那句是错的**）。
 这句话成立的前提是**这台机器上已经给过这个 `.app` 辅助功能授权**。
 
 **开工第一件事**：打开「系统设置 › 隐私与安全性 › 辅助功能」，确认列表里有
@@ -237,8 +246,8 @@ Step 2 的判据是「不重新授权直接打开，仍然显示「环境就绪�
 
 ```
 IELTS Speaking Coach 诊断信息
-版本：1.0.0（构建 303）
-提交：5ca5514
+版本：1.0.0（构建 <当场的 git rev-list --count HEAD>）
+提交：<当场的 git rev-parse --short HEAD>
 构建时间：…
 签名：自签名（未经 Apple 公证）（身份：IELTS Coach Dev）
 标识：com.ielts.speakingcoach
@@ -271,6 +280,27 @@ IELTS Speaking Coach 诊断信息
 不同的硬件、以及「另一台机器上根本没有这套开发环境」这件事本身。
 
 **报告里必须写清你用的是第二台机器还是第二个账号**，两者的结论强度不一样。
+
+### 十一、**构建号与提交是活的，本清单里一个都不写死**——期望值请现场取
+
+`scripts/build-app.sh:50` 用 `git rev-list --count HEAD` 定构建号、`:52` 用
+`git rev-parse --short HEAD` 定提交。也就是说：**每多一条提交，这两个期望值就都变了**——
+包括提交这份清单自己的那一条：写清单时是 `303` / `5ca5514`，清单被提交（`3f50c7e`）之后当场变成
+`304`，此后每提交一次再加一。**你跑出来的值只会更大，一律以你跑出来的为准。**
+
+所以第 4、5、9 节里所有涉及构建号 / 提交的判据，写的都是**「与当场跑出来的值一致」**，
+不是某个具体数字。核对方法固定用这两条（**没有输出才算过**）：
+
+```bash
+diff <(git rev-list --count HEAD) \
+     <(plutil -extract CFBundleVersion raw ".build/IELTS Speaking Coach.app/Contents/Info.plist")
+diff <(git rev-parse --short HEAD) \
+     <(plutil -extract IELTSBuildCommit raw ".build/IELTS Speaking Coach.app/Contents/Info.plist")
+```
+
+**若你在验收过程中又提交了东西**（比如中途改了 `open-instructions.txt`），
+上面两条就会开始报差异——那不是缺陷，是包比 HEAD 旧了，重跑一次 `./scripts/build-app.sh` 再比。
+本文件里凡是出现具体数字的地方，都只是「写清单时的基线」，**已逐处标明会过期**。
 
 ---
 
@@ -361,9 +391,23 @@ open ".build/IELTS Speaking Coach.app"
 ```
 
 **Expected**：不再要求你去系统设置勾选任何东西。
-按第 1 节第六条，你现在多半会落进**首次引导**——引导的第二步（「让它能替你操作 ChatGPT」）
-顶上那行字应当是 **「环境就绪」**（`PermissionStatus.title(for: .ready)`）。
-若显示的是「还差一步：辅助功能权限」，**立刻停下并报告**。
+按第 1 节第六条，你现在多半会落进**首次引导**。点「开始设置」走到第二步
+（「让它能替你操作 ChatGPT」），**判据是这一步正文下面那张卡片写了什么**：
+
+- ✅ **通过（授权保住了）**：一张带勾的绿色卡片，第一行逐字是
+  **「这台电脑已经给过辅助功能授权了」**，下面接「所以上面那段「先跳过」这次用不上，
+  这一步不用做什么。下一步：直接往下走。……」；底下只有「上一步」和一颗「下一步」
+- ⛔ **失败（授权没了）**：顶上出现 **「还差一步：辅助功能权限」**，下面是
+  「打开系统设置」「重新检查」「复制诊断信息」「先跳过」四颗按钮。**立刻停下并报告**
+
+> **别去找「环境就绪」那四个字——授权还在的时候它根本不会出现。**
+> 「环境就绪」（`PermissionStatus.title(for: .ready)`）只印在 `PermissionGateView` 顶上
+> （`PermissionGateView.swift:60`），而那一页**只在环境不就绪时才摆**：
+> `WelcomeFlowView.swift:235` 是 `private var showsPermissionGate: Bool { app.permission != .ready }`。
+> 就绪时走的是 `:254` 起的 `permissionReadyCard`，也就是上面那张绿卡。
+> 计划原文 Step 2 写的「仍然显示「环境就绪」」是错的，附录 A 第 5 行记着。
+> 而它偏偏是本阶段的一票否决判据（见下），**判据必须是屏幕上真会出现的那句话**——
+> 照着找一句不会出现的，只会白折腾，或者记下一条假缺陷。
 
 > ⛔ **这一条一票否决。** 授权真的失效了，说明加 Hardened Runtime 之后签名不稳定，
 > 整个打包方案要重做，后面的验收都没有意义。停下来，把
@@ -377,8 +421,12 @@ open ".build/IELTS Speaking Coach.app"
 
 ```bash
 ./scripts/build-app.sh
-plutil -extract CFBundleVersion raw ".build/IELTS Speaking Coach.app/Contents/Info.plist"   # 应当是 303
-plutil -extract IELTSBuildCommit raw ".build/IELTS Speaking Coach.app/Contents/Info.plist"  # 应当是 5ca5514
+
+# 期望值现场取，不写死（第 1 节第十一条）。两条都**没有输出**才算过。
+diff <(git rev-list --count HEAD) \
+     <(plutil -extract CFBundleVersion raw ".build/IELTS Speaking Coach.app/Contents/Info.plist")
+diff <(git rev-parse --short HEAD) \
+     <(plutil -extract IELTSBuildCommit raw ".build/IELTS Speaking Coach.app/Contents/Info.plist")
 ```
 
 再开一次，**确认这一次同样不要求重新授权**（这才是「日常重新打包」的真实场景，90001/90002 不是）。
@@ -388,9 +436,9 @@ plutil -extract IELTSBuildCommit raw ".build/IELTS Speaking Coach.app/Contents/I
 | 脚本是否 ✅ | |
 | designated 是否与基线逐字相同 | |
 | 打开后是否要求重新授权 | |
-| 引导第二步顶上那行字 | |
+| 引导第二步显示的是哪一张（绿卡「已经给过辅助功能授权了」／权限页「还差一步」） | |
 | 重打干净包之后是否仍不要求授权 | |
-| 重打后的构建号 / 提交 | |
+| 重打后的构建号 / 提交（抄两条 `diff` 的结果，空输出就写「一致」） | |
 
 ---
 
@@ -401,8 +449,8 @@ plutil -extract IELTSBuildCommit raw ".build/IELTS Speaking Coach.app/Contents/I
 
 | 看什么 | 判据 | 你的结果 |
 |---|---|---|
-| 版本 | `1.0.0（构建 303）`，与 `CFBundleShortVersionString` / `CFBundleVersion` 一致 | |
-| 提交 | 与 `git rev-parse --short HEAD`（`5ca5514`）一致 | |
+| 版本 | `1.0.0（构建 N）`，N 与 `plutil -extract CFBundleVersion raw …/Info.plist` 一致；刚重打过干净包，所以它同时应当等于**当场跑出来的** `git rev-list --count HEAD`。**别抄清单里的数字**（第 1 节第十一条） | |
+| 提交 | 与**当场跑出来的** `git rev-parse --short HEAD` 一致 | |
 | 标识 | `com.ielts.speakingcoach` | |
 | 签名 | 「自签名（未经 Apple 公证）」，且下面那句说清了别人怎么打开 | |
 | 辅助功能 | 与实际状态一致 | |
@@ -475,13 +523,29 @@ swift test --filter AppearanceContrastTests    # 两套外观 × 15 组配对的
 | 1 | 视图里没有字面颜色/字号/圆角 | `DesignTokenSweepTests` | |
 | 2 | 正文与次要文字对比度 ≥ 4.5:1 | `AppearanceContrastTests`（合成 alpha 之后算） | |
 | 3 | 没有 emoji 当图标 | 眼睛 | |
-| 4 | 每个列表的空状态都有「说明 + 下一步 + 按钮」 | 眼睛（关于页没有列表；引导页看题库那一步） | |
+| 4 | 每个列表的空状态都有「说明 + 下一步 + 按钮」 | **不适用：本轮没有可验的对象**，见表下那段 | |
 | 5 | 每页只有一个主行动 | 眼睛 | |
 | 6 | Tab 能走遍所有可点元素，焦点环可见 | **键盘，必须真按**。关于页三颗按钮 + 引导页的主按钮与「先跳过」 | |
 | 7 | 打开系统「减弱动态效果」后无动画且功能正常 | **必须真开**。系统设置 › 辅助功能 › 显示 › 减弱动态效果；然后看引导页的步骤切换 | |
 | 8 | 系统文字调到最大时不截断、不重叠 | **必须真调**。关于页的致谢与许可那几段最长，最容易出问题 | |
 | 9 | 所有超过 300ms 的操作都有进度提示 | 眼睛：「重新检查」那九秒里，那一行是不是一直在说「正在检查…」 | |
 | 10 | 统计数字用等宽数字，变化时不抖动 | 眼睛（关于页数字少，这条主要归 Task 19 的首页） | |
+
+> **第 4 条为什么标「不适用」，而不是让你去引导页找。** Task 11 的范围只有关于页与引导页：
+> 关于页没有列表；引导页里唯一沾边的是「先把你的题库导进来」那一步，而它两头都不成立——
+>
+> 1. **它在这台机器上根本不渲染。** `Sources/IELTSCoachUI/Onboarding/OnboardingFlow.swift` 的
+>    `steps()` 里写着 `if questionCount == 0 { steps.append(.questionBank) }`，你的题库有 1 题
+>    （第 1 节第四条），所以这一步被跳过——第 8 节和第 10 节也正是这么写的
+>    （「**不该出现**「先把你的题库导进来」」）。
+> 2. **就算渲染出来，它也不是列表空状态**，只是一张说明卡（`WelcomeFlowView.questionBankStep`），
+>    没有列表、没有独立按钮。
+>
+> 真正有列表空状态的是首页、历史、错题本、我的词汇那几页，**归 Task 19 验**。
+> 本轮唯一可能顺带看到那一步的机会，是第 9 节在第二台机器上**没有**把数据目录拷过去时
+> （那时题库为空，引导会变成五步）——若碰上了就顺手看一眼，记在报告里。
+> **本行不要写「通过」**，写「不适用（本轮无对象）」或你实际看到的情况。
+> 指一个渲染不出来的东西比不写还糟，这和 `RenderReachabilitySweepTests` 拦的是同一类问题。
 
 ---
 
@@ -520,7 +584,8 @@ open ".build/IELTS Speaking Coach.app"
 ./scripts/package-app.sh
 ```
 
-它会先重新 `build-app.sh`（所以构建号是真实的 303），再用 `ditto -c -k --keepParent` 压包，
+它会先重新 `build-app.sh`（所以构建号是真实的那个，即**当场的** `git rev-list --count HEAD`，
+不是 90002，也不是清单里写过的任何数字），再用 `ditto -c -k --keepParent` 压包，
 **并自己解压回来验一次签名**。产出：
 
 ```
@@ -550,7 +615,7 @@ xattr -p com.apple.quarantine ~/Downloads/"IELTS Speaking Coach.zip"
 | 按「如何打开.txt」能不能打开 | **能**。若说明里的系统设置路径在这台机器的 macOS 版本上不存在，**把实际路径记下来并改说明**（改 `packaging/open-instructions.txt`） | |
 | 打开后 | 出现首次引导（欢迎开始，四步或五步取决于有没有题库） | |
 | 程序坞图标 | 不是白纸（`AppIcon.icns` 在 `Contents/Resources/`，200 KB） | |
-| 授予辅助功能后 | 环境那一步显示「环境就绪」 | |
+| 授予辅助功能后 | **同样别找「环境就绪」四个字**（理由见第 4 节那段注）。两条路都算通过：**(a)** 就在引导里点「重新检查」——查完（约九秒）引导会**自己往前走一步**到「要不要录下你的回答？」，不会停在环境步（`OnboardingFlowModel.consumeRecheckResult`）；**(b)** 退出 App 再重开——环境那一步显示绿卡「这台电脑已经给过辅助功能授权了」。若点完「重新检查」既没前进、也没变绿卡，那才是缺陷 | |
 | 用的是第二台机器还是第二个账号 | **必须写清**（第 1 节第十条） | |
 
 ---
@@ -654,10 +719,10 @@ git commit -m "docs: Phase 10 真机验收结果"
 
 ---
 
-## 附录 A：本清单与计划原文的四处出入
+## 附录 A：本清单与计划原文的六处出入
 
-写清单时逐条核对源码与本机实际状态发现的。**四处都以本清单为准**，
-理由都在第 1 节，报告里若与计划原文冲突，按这里写的判。
+写清单时逐条核对源码与本机实际状态发现的（第 5、6 行是 2026-08-08 复审补的）。
+**六处都以本清单为准**，理由都在第 1 节与第 4 节，报告里若与计划原文冲突，按这里写的判。
 
 | # | 计划原文 | 实际 | 依据 |
 |---|---|---|---|
@@ -665,6 +730,8 @@ git commit -m "docs: Phase 10 真机验收结果"
 | 2 | Step 1：`swift test` 总耗时 2 秒以内 | **18.60 秒 / 1744 条**；进 Phase 10 之前（Phase 9 验收）已经是 12.36 秒 / 1490 条 | 2026-08-08 两次实跑；`docs/phase9-acceptance-checklist.md` 抬头 |
 | 3 | Step 2 之后直接做 Step 3、Step 5 | 中间必须补一次干净的 `build-app.sh`，否则包的构建号是 **90002** | `scripts/verify-signature-stability.sh:77-78` |
 | 4 | Step 9：结果写进 `docs/phase10-acceptance.md` | 文件名沿用，但**清单**另存为 `phase10-acceptance-checklist.md`，与 Phase 4–9 一致 | `docs/` 下六份既有清单 |
+| 5 | Step 2「仍然显示「环境就绪」」、Step 5「授予辅助功能后显示「环境就绪」」 | **授权还在时屏幕上不会出现「环境就绪」**。就绪走的是绿卡「这台电脑已经给过辅助功能授权了」；在引导里点「重新检查」转就绪，还会自动前进一步 | `WelcomeFlowView.swift:235`（`showsPermissionGate = app.permission != .ready`）、`:254` 的 `permissionReadyCard`、`PermissionGateView.swift:60`、`OnboardingFlowModel.consumeRecheckResult` |
+| 6 | Step 8 第 4 条：去「引导页看题库那一步」验列表空状态 | **那一步在本机不渲染**（题库 1 题），而且它本来也不是列表空状态。本轮标「不适用」 | `OnboardingFlow.steps()` 的 `if questionCount == 0`、`WelcomeFlowView.questionBankStep` |
 
 ## 附录 B：这一轮我**没有**替你跑的东西，以及为什么
 
