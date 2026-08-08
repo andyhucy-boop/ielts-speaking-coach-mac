@@ -3,7 +3,7 @@ import Foundation
 /// 首次使用引导的一步。
 ///
 /// **每一步的三句文案（标题、正文、主按钮）都在这里，不在视图里。**
-/// 理由和 `SidebarItem.placeholderDescription` 一样：视图里的 `switch` 写漏一支只会安静地
+/// 理由和 `DiagnosticsStage.title` 一样：视图里的 `switch` 写漏一支只会安静地
 /// 返回空字符串，没人看得见；收在枚举上，`OnboardingFlowTests` 才能把每一档都数一遍。
 public enum OnboardingStep: String, CaseIterable, Identifiable, Sendable {
     case welcome

@@ -577,8 +577,15 @@ public final class PracticeRunner {
         return try await Task.detached(priority: .userInitiated) { try body(bridge) }.value
     }
 
+    /// 一场练习里所有失败的唯一出口。
+    ///
+    /// **「问题反馈」页的「最近一次错误」就在这里记一笔**（Phase 10 Task 18）：
+    /// 只记阶段与错误代号，`error` 的消息一个字都不进去——它里面完全可能夹着复盘原文，
+    /// 而复盘原文里全是用户说过的英语（见 `LastErrorLog`）。
+    /// 屏幕上那句给用户看的话仍然是完整的 `describeFailure`，两者互不影响。
     private func fail(_ error: any Error, retry: PracticeRetry) {
         let failedAt = stage
+        LastErrorLog.shared.record(error, at: failedAt.diagnosticsStage)
         stage = .failed(Self.describeFailure(error, at: failedAt))
         self.retry = retry
     }

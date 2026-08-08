@@ -160,6 +160,11 @@ public final class PendingReviewViewModel {
             // 用户会连读到两句「下一步」，第一句指着一颗全 App 都找不到的按钮，
             // 然后一直找（铁律 4：下一步必须是真做得到的一步）。
             // `PracticeRunner` 与 `ReviewReportLoader` 早就各自这么退让过，这一页此前漏了。
+            //
+            // 「问题反馈」页的「最近一次错误」在这里记一笔（Phase 10 Task 18）：
+            // **只记阶段与错误代号**。这一处尤其不能记原文——解析失败的错误消息里
+            // 常常带着复盘正文的片段，而那里全是用户说过的英语。
+            LastErrorLog.shared.record(error, at: .parsingReview)
             notice = "「\(row.sessionID)」还是解析不了：\(PracticeRunner.diagnosisOnly(error))。"
                 + "下一步：点「查看原文」看看 ChatGPT 到底输出了什么；"
                 + "若确实不是标准格式，回 ChatGPT 里让它按要求重新输出一次，"

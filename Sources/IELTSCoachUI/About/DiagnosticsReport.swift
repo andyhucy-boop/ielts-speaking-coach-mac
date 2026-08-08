@@ -8,13 +8,26 @@ public struct DiagnosticsInput: Sendable {
     public let permission: PermissionState
     public let state: CoachState
     public let portabilityFindingCount: Int
+    /// 数据目录占了多少地。Task 18 追加，**带默认值**——Task 5 的既有调用点一行都不用改。
+    public let usage: DataUsageReport?
+    /// 环境检查（preflight）的输出原文。「ChatGPT 改版打断自动化」是已知风险，
+    /// 真出问题时这几行就是最有用的线索。
+    public let environmentMessages: [String]
+    /// 最近一次错误。**只有阶段、代号、时间**，一个字的错误原文都没有——
+    /// 原文里可能夹着复盘片段，而复盘片段里全是用户说过的英语（见 `LastErrorLog`）。
+    public let lastError: DiagnosticsError?
 
     public init(metadata: AppMetadata, dataDirectory: URL, systemVersion: String,
                 permission: PermissionState, state: CoachState,
-                portabilityFindingCount: Int) {
+                portabilityFindingCount: Int,
+                usage: DataUsageReport? = nil,
+                environmentMessages: [String] = [],
+                lastError: DiagnosticsError? = nil) {
         self.metadata = metadata; self.dataDirectory = dataDirectory
         self.systemVersion = systemVersion; self.permission = permission
         self.state = state; self.portabilityFindingCount = portabilityFindingCount
+        self.usage = usage; self.environmentMessages = environmentMessages
+        self.lastError = lastError
     }
 }
 
@@ -56,6 +69,21 @@ public enum DiagnosticsReport {
             lines.append("数据可搬迁检查：发现 \(input.portabilityFindingCount) 处问题。"
                 + "下一步：回到关于页，「数据可搬迁检查」那一行会写清是哪一处、该怎么改。")
         }
+        if let usage = input.usage {
+            lines.append("数据目录占用：\(usage.summaryText)")
+        }
+        if input.environmentMessages.isEmpty {
+            lines.append("环境检查：没有输出（这本身就不正常，请一并说明）")
+        } else {
+            lines.append("环境检查：")
+            lines += input.environmentMessages.map { "- \($0)" }
+        }
+        if let error = input.lastError {
+            lines.append("最近一次错误：\(error.summary)")
+        } else {
+            lines.append("最近一次错误：最近没有出错")
+        }
+        lines.append("——错误只记阶段与代号，不记原文；原文里可能有你说过的英语。")
         lines.append("——以上只有数量，不含任何练习内容。要看具体内容请直接打开数据目录。")
         return lines.joined(separator: "\n")
     }

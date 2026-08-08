@@ -20,7 +20,7 @@ import SwiftUI
 struct TodayView: View {
     let app: AppState
     /// 空状态那个按钮要把用户送到「训练题库」。导航状态在 `RootView` 手上，所以由它传进来，
-    /// 与 `ReviewReportView`、`PlaceholderView` 的做法一致——这一页自己不持有导航状态。
+    /// 与 `ReviewReportView` 的做法一致——这一页自己不持有导航状态。
     let onGo: (SidebarItem) -> Void
     /// 「改目标」那颗按钮要把设置窗口停到哪一栏。
     ///

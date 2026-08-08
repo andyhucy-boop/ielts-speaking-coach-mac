@@ -205,6 +205,14 @@ public final class AboutPageModel {
     /// **凡是这一页没拿到的东西，都要在文字里说明白。** `DiagnosticsReport` 收的是一份
     /// `CoachState` 与一个 `PermissionState`，两者在「读盘失败」「还没检查」时都只有占位值；
     /// 不加说明就等于把凭空的 0 和一句没查过的结论一起发给了别人。
+    ///
+    /// **检查结果原文走 `environmentMessages` 这个参数，不再由本页自己在末尾拼一段。**
+    /// Task 18 把「环境检查」那几行收进了 `DiagnosticsReport` 本体；两处各拼一份的话，
+    /// 这一页复制出来的文字会同时出现「环境检查：没有输出（这本身就不正常，请一并说明）」
+    /// 和一段「检查结果原文：…」——收到这段话的人不知道该信哪一句。
+    ///
+    /// **「最近一次错误」取自 `LastErrorLog.shared`**（问题反馈页记的是同一份）。
+    /// 不传的话这一页会无条件写上「最近没有出错」，而那可能是一句假话。
     public var diagnosticsText: String {
         var text = DiagnosticsReport.text(DiagnosticsInput(
             metadata: metadata,
@@ -212,15 +220,13 @@ public final class AboutPageModel {
             systemVersion: systemVersion,
             permission: permission ?? .unknown,
             state: state ?? .empty(),
-            portabilityFindingCount: findings.count))
+            portabilityFindingCount: findings.count,
+            environmentMessages: permissionMessages,
+            lastError: LastErrorLog.shared.last))
         if permission == nil {
             text += "\n注：本页打开后还没做过环境检查（打开关于页不会自动检查，那会把 ChatGPT "
                 + "拉到前台），所以上面「辅助功能」那一行不是结论。"
                 + "下一步：在关于页点「重新检查」，查完再复制一次。"
-        }
-        if !permissionMessages.isEmpty {
-            text += "\n检查结果原文：\n"
-                + permissionMessages.map { "- \($0)" }.joined(separator: "\n")
         }
         if let loadError {
             text += "\n注：读不到训练数据，所以上面「数据量」与「数据可搬迁检查」两行是占位值，"

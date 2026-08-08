@@ -19,12 +19,28 @@ final class NavigationTests: XCTestCase {
         // 而空页面会让人以为程序坏了。
         // Phase 4 把「训练记录」加了进来，Phase 6 把「复训中心」加了进来，
         // Phase 7 Task 6 把「问题档案」加了进来，Task 7 把「我的词汇」加了进来，
-        // Phase 8 Task 9 把「学习计划」加了进来，Phase 10 Task 17 把「功能升级」加了进来。
-        // 后续阶段各自往里加自己的那一项，不要把别人加的删掉：Phase 10 Task 18 加 .feedback。
+        // Phase 8 Task 9 把「学习计划」加了进来，Phase 10 Task 17 把「功能升级」加了进来，
+        // Task 18 把「问题反馈」加了进来——十项到此全齐。
         let implemented = SidebarItem.allCases.filter(\.isImplemented)
         XCTAssertEqual(Set(implemented),
                        [.today, .questionBank, .reviewReports, .history, .retraining, .issues,
-                        .vocabulary, .plan, .upgrade])
+                        .vocabulary, .plan, .upgrade, .feedback])
+    }
+
+    /// 同上，钉住「问题反馈」这一页（Phase 10 Task 18）。
+    func testFeedbackPageIsUnlocked() {
+        XCTAssertTrue(SidebarItem.feedback.isImplemented, "问题反馈页已实现，必须在侧边栏可点")
+    }
+
+    func testEverySidebarItemIsImplementedByTheEndOfPhase10() {
+        // Phase 3 起，未实现的页面显示占位。Phase 10 Task 17 / 18 之后，
+        // 十项应当全部有内容——PlaceholderView 就此变成死代码。
+        let missing = SidebarItem.allCases.filter { !$0.isImplemented }
+        XCTAssertTrue(missing.isEmpty,
+                      "这几项还是占位：\(missing.map(\.title))。"
+                      + "若它们属于前面某个阶段（训练记录归 Phase 4、复训中心归 Phase 6、"
+                      + "问题档案与我的词汇归 Phase 7、学习计划归 Phase 8），"
+                      + "**不要改这条测试**——去把那个阶段补上，或者停下来报告。")
     }
 
     /// 问题档案页已经做出来了，侧边栏必须点得进去。
@@ -70,60 +86,17 @@ final class NavigationTests: XCTestCase {
         }
     }
 
-    /// 还没做的那几页必须说清「还没做」「将来会有什么」和**现在该干什么**。
-    /// 空白页会让用户以为程序坏了——这条与错误信息的标准是同一条（成品标准第 8 条）。
-    ///
-    /// 「下一步」这一句不是可选的：只说「将来会有」等于把用户扔在一页死路上。
-    /// 铁律 6 把「发生了什么 + 下一步做什么」明确扩展到了空状态与界面提示。
-    func testEveryUnimplementedPageSaysWhatWillBeThereAndWhatToDoNow() {
-        let unimplemented = SidebarItem.allCases.filter { !$0.isImplemented }
-        // Phase 4 交付「训练记录」之后从 7 降到 6，Phase 6 交付「复训中心」之后降到 5，
-        // Phase 7 Task 6 交付「问题档案」之后降到 4，Task 7 交付「我的词汇」之后降到 3，
-        // Phase 8 Task 9 交付「学习计划」之后降到 2，Phase 10 Task 17 交付「功能升级」之后降到 1。
-        // **这个数字只许降，不许升**——升上去意味着有人把一页已经做出来的又标回了「还没做」。
-        XCTAssertEqual(unimplemented.count, 1)
-        for item in unimplemented {
-            XCTAssertFalse(item.placeholderDescription.isEmpty,
-                           "「\(item.title)」的占位页会是一片空白，用户会以为程序坏了")
-            XCTAssertTrue(item.placeholderDescription.contains("将来"),
-                          "「\(item.title)」的占位文案没说清将来会有什么："
-                          + item.placeholderDescription)
-            XCTAssertTrue(item.placeholderDescription.contains("下一步"),
-                          "「\(item.title)」的占位文案只说了「将来」，没说用户现在能做什么："
-                          + item.placeholderDescription)
-        }
-    }
-
-    /// DESIGN-SYSTEM 第 4 节「空状态（必须有，不能留白）」要三样东西：
-    /// 一句现状、一句下一步、**一个能直接点的按钮**。上面那条测试守前两样，这条守第三样。
-    ///
-    /// 按钮的落点必须是一页**真做出来了**的页面：把用户从一个「还没做」送到另一个「还没做」，
-    /// 比不给按钮更气人。
-    func testEveryUnimplementedPageHasAButtonThatLeadsSomewhereThatExists() throws {
-        for item in SidebarItem.allCases.filter({ !$0.isImplemented }) {
-            let target = try XCTUnwrap(
-                item.placeholderFallback,
-                "「\(item.title)」的占位页上没有任何能点的东西，用户读完只能自己乱翻侧边栏")
-            XCTAssertTrue(
-                target.isImplemented,
-                "「\(item.title)」的按钮把用户送到同样还没做的「\(target.title)」，等于原地打转")
-            XCTAssertTrue(
-                item.placeholderActionTitle.contains(target.title),
-                "「\(item.title)」的按钮文字没说清点下去会到哪一页：" + item.placeholderActionTitle)
-            XCTAssertTrue(
-                item.placeholderDescription.contains(target.title),
-                "「\(item.title)」的「下一步」那句话和按钮指的不是同一页，用户不知道该信哪个："
-                    + item.placeholderDescription)
-        }
-    }
-
-    /// 已经做出来的页面不该冒出一个「先去别处」的按钮——那是在告诉用户这页也没做。
-    func testImplementedPagesCarryNoPlaceholderAction() {
-        for item in SidebarItem.allCases.filter(\.isImplemented) {
-            XCTAssertNil(item.placeholderFallback, "「\(item.title)」已经做出来了，不该再劝用户走开")
-            XCTAssertTrue(item.placeholderActionTitle.isEmpty, "同上：\(item.placeholderActionTitle)")
-        }
-    }
+    // 占位页那三条测试（「还没做的页面要说清将来会有什么 / 现在能干什么 / 给一颗按钮」
+    // 与「已实现的页面不该冒出劝人走开的按钮」）在 Phase 10 Task 18 里删掉了。
+    //
+    // **不是放宽断言，是被测的东西没有了**：十项全部实现之后
+    // `SidebarItem.allCases.filter { !$0.isImplemented }` 恒为空，那三条会退化成
+    // 空循环——本项目已经消灭过 15 处这种「对任何实现都亮绿灯」的测试，不该再添三处。
+    // `PlaceholderView` 与 `SidebarItem.placeholder*` 三个属性也一并删了。
+    //
+    // 顶上那条 `testEverySidebarItemIsImplementedByTheEndOfPhase10` 是它们的替代品：
+    // 谁把某一页标回「还没做」，那条会直接点名是哪一页；而
+    // `RootView.detail` 那个穷尽的 `switch` 让「加了一页却没给内容」变成编译错误。
 
     // MARK: - 根视图什么时候挡、什么时候放行
 

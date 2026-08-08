@@ -15,7 +15,7 @@ import SwiftUI
 struct ReviewReportView: View {
     let app: AppState
     /// 空状态那个按钮要把用户送到「今日训练」。导航状态在 `RootView` 手上，所以由它传进来，
-    /// 与 `PlaceholderView` 的做法一致——这一页自己不持有导航状态。
+    /// 与 `TodayView` 的做法一致——这一页自己不持有导航状态。
     let onGo: (SidebarItem) -> Void
     /// 从「训练记录」点「看这次的复盘」跳过来时，要看的是哪一场（由 `RootView` 传）。
     /// 平时是 nil，那时这一页照旧落回最近的那一次。

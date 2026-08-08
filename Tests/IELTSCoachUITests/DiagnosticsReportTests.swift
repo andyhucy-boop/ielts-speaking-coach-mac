@@ -43,13 +43,19 @@ final class DiagnosticsReportTests: XCTestCase {
     }
 
     private func input(permission: PermissionState = .ready,
-                       findings: Int = 0) -> DiagnosticsInput {
+                       findings: Int = 0,
+                       usage: DataUsageReport? = nil,
+                       environmentMessages: [String] = [],
+                       lastError: DiagnosticsError? = nil) -> DiagnosticsInput {
         DiagnosticsInput(metadata: metadata(),
                          dataDirectory: URL(fileURLWithPath: "/Users/tester/Library/Application Support/IELTS Speaking Coach"),
                          systemVersion: "macOS 26.5.2",
                          permission: permission,
                          state: loadedState(),
-                         portabilityFindingCount: findings)
+                         portabilityFindingCount: findings,
+                         usage: usage,
+                         environmentMessages: environmentMessages,
+                         lastError: lastError)
     }
 
     func testContainsWhatSomeoneWouldNeedToDiagnoseIt() {
@@ -105,11 +111,54 @@ final class DiagnosticsReportTests: XCTestCase {
 
     func testNoLineIsBlankOrEndsWithADanglingLabel() {
         // 「版本：」后面空着，比不写还糟：用户会以为程序坏了。
-        let text = DiagnosticsReport.text(input())
-        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+        // 例外只有一种：以「：」结尾但下一行是列表项（如「环境检查：」后面跟着 - 开头的几行）。
+        let text = DiagnosticsReport.text(input(environmentMessages: ["✅ 找到 ChatGPT"]))
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        for (index, line) in lines.enumerated() {
             XCTAssertFalse(line.trimmingCharacters(in: .whitespaces).isEmpty, "有空行：\n\(text)")
-            XCTAssertFalse(line.hasSuffix("："), "有标签后面没内容：「\(line)」")
+            guard line.hasSuffix("：") else { continue }
+            let next = index + 1 < lines.count ? String(lines[index + 1]) : ""
+            XCTAssertTrue(next.hasPrefix("- "),
+                          "「\(line)」后面既没有内容也没有列表：\n\(text)")
         }
+    }
+
+    // MARK: - Phase 10 Task 18 追加的四行：占用、环境检查原文、最近一次错误
+
+    func testDiagnosticsCarryTheEnvironmentCheckOutput() {
+        // 「ChatGPT 改版打断自动化」是已知风险（ROADMAP 第 6 节）。
+        // 真出问题时，preflight 的原文就是最有用的那几行。
+        let text = DiagnosticsReport.text(
+            input(environmentMessages: ["✅ 找到 ChatGPT", "❌ 没有辅助功能权限"]))
+        XCTAssertTrue(text.contains("没有辅助功能权限"), text)
+    }
+
+    func testDiagnosticsCarryTheDataDirectoryUsage() {
+        let usage = DataUsageReport(totalBytes: 2_048, stateBytes: 48, reportBytes: 1_000,
+                                    recordingBytes: 1_000, pendingReviewBytes: 0, fileCount: 3)
+        XCTAssertTrue(DiagnosticsReport.text(input(usage: usage)).contains("KB"),
+                      "占用要写成人看得懂的单位")
+    }
+
+    /// `LastErrorLog` 是 `@MainActor` 的（它是 `@Observable`，界面直接读），
+    /// 所以这一条要标 `@MainActor`，否则 Swift 6 的并发检查过不去。
+    @MainActor
+    func testTheLastErrorNeverCarriesTheErrorMessageItself() {
+        // 这一条是「最近一次错误」这个新字段唯一的存在条件。
+        // CoachError 的消息里完全可能带着复盘原文，而复盘原文里全是用户说过的英语。
+        let log = LastErrorLog()
+        log.record(CoachError.invalidReviewText("复盘里出现了 \(secretAnswer)"),
+                   at: .parsingReview, now: Date(timeIntervalSince1970: 1_785_931_530))
+        let text = DiagnosticsReport.text(input(lastError: log.last))
+
+        XCTAssertFalse(text.contains(secretAnswer), "诊断信息把错误原文带出去了：\n\(text)")
+        XCTAssertTrue(text.contains("review-invalid-text"), "错误代号没带上，等于没记：\n\(text)")
+    }
+
+    func testSaysSoWhenNothingHasGoneWrongYet() {
+        // 「最近一次错误：」后面空着，比不写还糟。
+        let text = DiagnosticsReport.text(input(lastError: nil))
+        XCTAssertTrue(text.contains("最近没有出错"), text)
     }
 
     /// **这段文字绝不自己往外发。** 它只负责把环境与错误拼成一段话；

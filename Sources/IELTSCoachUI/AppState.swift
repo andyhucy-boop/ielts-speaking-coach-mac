@@ -133,6 +133,10 @@ public final class AppState {
             state = try store.load()
             loadError = nil
         } catch {
+            // 「问题反馈」页的「最近一次错误」在这里记一笔（Phase 10 Task 18）：
+            // **只记阶段与错误代号**，`error` 的消息一个字都不进去。
+            // 屏幕上那句给用户看的话仍然是完整的 `describeLoadFailure`。
+            LastErrorLog.shared.record(error, at: .readingState)
             loadError = Self.describeLoadFailure(error, stateFile: directory.stateFile)
         }
     }
@@ -200,6 +204,8 @@ public final class AppState {
             reload()
             return nil
         } catch {
+            // 同 `reload()`：只记阶段与代号，不记原文（Phase 10 Task 18）。
+            LastErrorLog.shared.record(error, at: .writingState)
             return Self.describeMutationFailure(error, stateFile: directory.stateFile)
         }
     }

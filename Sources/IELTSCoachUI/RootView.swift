@@ -303,45 +303,20 @@ public struct RootView: View {
                 // 这一页不读 `app`：它显示的是「你手上这份 App 是哪一版、改了什么」，
                 // 全部来自 `AppMetadata` 与 `Changelog` 那张常量表。
             case .upgrade: UpgradeView()
-            default: PlaceholderView(item: current, onGo: { go(to: $0) })
+                // 这一页要读 `app`：诊断信息里有环境检查的结论与原文、训练数据的**数量**
+                // （只有数量，没有内容）。数据目录由它自己解析（与关于页同一条路径）。
+            case .feedback: FeedbackView(app: app)
             }
+            // **这个 `switch` 是穷尽的，没有 `default:`。** 十项全部有了内容之后，
+            // `PlaceholderView` 连同 `SidebarItem.placeholder*` 一起删掉了。
+            // 将来万一真要动侧边栏，编译器会在这里当场报错，而不是默默显示一个空页面。
         }
     }
 }
 
-/// 未实现页面的占位。按 DESIGN-SYSTEM 第 4 节「空状态（必须有，不能留白）」给足三样：
-/// **一句现状**（「还没做」）、**一句下一步**（现在真做得到的事，见 `placeholderDescription`）、
-/// **一个能直接点的按钮**（跳到那件事所在的页面）。
-///
-/// 只有前两样也不够：光写一句「可以先去今日训练」，用户读完还得自己回去翻侧边栏。
-struct PlaceholderView: View {
-    let item: SidebarItem
-    /// 点了按钮之后把侧边栏选中项换到哪一页。由 `RootView` 提供——
-    /// 占位页自己不持有导航状态。
-    let onGo: (SidebarItem) -> Void
-
-    var body: some View {
-        VStack(spacing: Spacing.md) {
-            Image(systemName: item.systemImage)
-                .font(Typography.pageTitle)
-                .foregroundStyle(Palette.textSecondary)
-            Text("「\(item.title)」还没做")
-                .font(Typography.sectionTitle)
-                .foregroundStyle(Palette.textPrimary)
-            Text(item.placeholderDescription)
-                .font(Typography.secondary)
-                .foregroundStyle(Palette.textSecondary)
-                .multilineTextAlignment(.center)
-            if let target = item.placeholderFallback {
-                Button(item.placeholderActionTitle) { onGo(target) }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Palette.accent)
-            }
-        }
-        .padding(Spacing.xl)
-        .frame(maxWidth: 480)
-    }
-}
+// `PlaceholderView` 在 Phase 10 Task 18 里删掉了：十项侧边栏全部有了内容，
+// 它成了永远走不到的死代码。上面那个 `switch` 因此变成穷尽的——
+// 将来真要往侧边栏加一项，编译器会当场报错，而不是默默摆出一页空白。
 
 /// 预览一律走注入：假的环境检查（不碰真的 ChatGPT）+ 临时目录（不碰用户真实的训练数据）
 /// + 只活在内存里的引导进度（不往真实偏好设置里写「引导看过了」）。
