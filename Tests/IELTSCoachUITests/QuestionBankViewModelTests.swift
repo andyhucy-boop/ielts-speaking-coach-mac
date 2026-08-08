@@ -273,4 +273,70 @@ final class QuestionBankViewModelTests: XCTestCase {
         XCTAssertEqual(feedback.tone, .failed)
         XCTAssertEqual(feedback.message, text, "失败原因被改写或截断，用户就照着做不了了")
     }
+
+    // MARK: - 题库重建模：那两句必须说出来的话
+
+    /// 题库还是「一问一题」时，页面上必须主动说一句，并指向这一页真有的那颗按钮。
+    ///
+    /// **不说的话，用户永远停在旧结构上。** 重建模发生在导入那一刻，不是打开 App
+    /// 自动改数据（那是把他没要求过的事做了，还没法撤销）。代价就是他得再导一次，
+    /// 而他不会知道要这么做。
+    func testTheBankPageSaysSoWhileTheBankIsStillOneQuestionPerRow() throws {
+        let legacy = QuestionBankViewModel(questions: [
+            q("a", 1, "Music"), q("b", 1, "Music"), q("c", 2, "人物")
+        ])
+        let notice = try XCTUnwrap(legacy.legacyShapeNotice,
+                                   "题库还是旧结构，页面上却一句话都没有")
+        XCTAssertTrue(notice.contains("2 道"), "得说清有多少道是旧结构的：\(notice)")
+        XCTAssertTrue(notice.contains("下一步"), "铁律 4：必须说下一步做什么：\(notice)")
+        XCTAssertTrue(notice.contains("导入题库…"),
+                      "下一步指的按钮必须是这一页上真有的那颗（叫「导入题库…」）：\(notice)")
+    }
+
+    /// 反面：已经是新结构了就闭嘴。一直挂着的提示等于没有提示。
+    func testTheBankPageStaysQuietOnceTheBankIsRemodelled() {
+        let remodelled = QuestionBankViewModel(questions: [
+            TopicQuestions.part1(topic: "Music", prompts: ["a?", "b?"]),
+            q("c", 2, "人物")
+        ])
+        XCTAssertNil(remodelled.legacyShapeNotice)
+    }
+
+    /// 一次导入吸收掉旧题时，交代里必须同时说清**题库为什么变小**与**历史记录去哪了**。
+    ///
+    /// 用户导入前 1265 道、导入后 258 道。少掉一千多道没有一句解释的话，
+    /// 他只会认为导入把题库弄坏了——而实际上一个问句都没丢。
+    func testTheImportSummaryExplainsWhyTheBankSuddenlyGotSmaller() throws {
+        let outcome = QuestionBankImportOutcome(
+            importedCount: 257, totalCount: 258, warnings: [],
+            absorbedCount: 1165, remappedReferenceCount: 3)
+        let summary = outcome.summary
+
+        XCTAssertTrue(summary.contains("1165 道"), "没说吸收了多少道：\(summary)")
+        XCTAssertTrue(summary.contains("一句没丢"), "没说清问句其实都还在：\(summary)")
+        XCTAssertTrue(summary.contains("3 处"), "没说历史记录搬了多少处：\(summary)")
+        XCTAssertTrue(summary.contains("下一步"), "\(summary)")
+    }
+
+    /// 有警告时那句交代也不许被挤掉——题库总数变化比某几行解析失败更要紧，
+    /// 而且它自带的「下一步」不能变成两个互相矛盾的下一步。
+    func testTheRemodelExplanationSurvivesEvenWhenThereAreWarnings() {
+        let outcome = QuestionBankImportOutcome(
+            importedCount: 257, totalCount: 258, warnings: ["某一行没进来"],
+            absorbedCount: 1165, remappedReferenceCount: 0)
+        let summary = outcome.summary
+
+        XCTAssertTrue(summary.contains("1165 道"), "有警告时那句交代被挤掉了：\(summary)")
+        XCTAssertTrue(summary.contains("1 条警告"), "\(summary)")
+        XCTAssertEqual(summary.components(separatedBy: "下一步").count - 1, 1,
+                       "出现了两个「下一步」，用户不知道该照哪个做：\(summary)")
+    }
+
+    /// 反面：没吸收任何旧题的普通导入（绝大多数），一个字都不该多说。
+    func testAnOrdinaryImportSaysNothingAboutRemodelling() {
+        let outcome = QuestionBankImportOutcome(importedCount: 10, totalCount: 10, warnings: [])
+        XCTAssertNil(outcome.remodelNotice)
+        XCTAssertEqual(outcome.summary,
+                       "已导入 10 道题，题库现共 10 道题。下一步：到「今日训练」页开始练习。")
+    }
 }

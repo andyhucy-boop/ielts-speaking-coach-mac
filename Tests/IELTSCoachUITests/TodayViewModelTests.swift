@@ -124,22 +124,47 @@ final class TodayViewModelTests: XCTestCase {
 
     /// 副标题描述的操作步骤得和弹层里真有的东西对得上（复审第 9 条）。
     ///
-    /// 「从题库自由选题」从前的副标题写着「先选 Part，再挑具体题目」——
-    /// 那是一个**不存在的两步选择**：弹层里只有一张平铺列表，没有 Part 筛选器，
-    /// 也没有搜索框，季度题库几百道题时要一直滚。用户会先去找那个筛选器。
-    func testTheFreePickSubtitleDoesNotDescribeAPickerThatIsNotThere() throws {
+    /// ## 这条测试的来历，和它现在为什么是双向的
+    ///
+    /// 副标题一度写着「先选 Part，再挑具体题目」，而那时弹层里只有一张平铺列表——
+    /// 一个**不存在的两步选择**，用户会先去找那个筛选器。当时的修法是把话改成一步，
+    /// 并留下一条「哪天筛选器真做出来了，这条会红」的单向断言。
+    ///
+    /// **那一天到了**（用户原话：「首先应该可以选择是训练 part one part two 还是
+    /// part three」），`PracticeSheet.partSection` 里现在真有一个绑到 `$partSelection`
+    /// 的分段控件。所以这条改成**双向**的：
+    ///
+    /// - 副标题说了「先选 Part」，弹层里却没有那个控件 → 红（老毛病回来了）；
+    /// - 弹层里有那个控件，副标题却只字不提 → 也红（用户不知道还能筛，仍旧一路滚）。
+    ///
+    /// 突变证明：把 `partSection` 里那个 `Picker` 换成 `EmptyView()` 这条会红；
+    /// 只把副标题改回一步的说法，这条也会红。
+    func testTheFreePickSubtitleMatchesWhatTheSheetActuallyHas() throws {
         let subtitle = PracticeRoute.freePick.subtitle
-        XCTAssertFalse(subtitle.contains("先选 Part"),
-                       "副标题描述了一个不存在的两步选择：\(subtitle)")
-
-        // 前提：那个弹层今天确实没有筛选器/搜索框。
-        // 哪天真做出来了，这条会红，逼人回头把副标题一起改回去。
         let sheet = try SourceGuard.code("Session/PracticeSheet.swift")
-        XCTAssertFalse(sheet.contains("Picker("),
-                       "挑题弹层里出现了 Picker——要是 Part 筛选器做出来了，"
-                           + "「从整份题库里挑一道题」这句副标题就该改回两步的说法。")
-        XCTAssertFalse(sheet.contains("searchable"),
-                       "挑题弹层里出现了搜索框，副标题该跟着说。")
+
+        // 「弹层里真的有一个 Part 筛选器」的判据：一个绑到 `$partSelection` 的 Picker。
+        // 只问 `contains("Picker(")` 不够——那样随便哪个别的 Picker 都能把它凑绿。
+        let hasPartPicker = sheet.contains("Picker(") && sheet.contains("selection: $partSelection")
+        let subtitlePromisesPartStep = subtitle.contains("Part")
+
+        XCTAssertTrue(
+            hasPartPicker,
+            "挑题弹层里没有绑到 `$partSelection` 的 Picker 了。用户要的第一件事就是"
+                + "「先选练 Part 1 / 2 / 3」，没有它，258 道题只能一路滚。"
+                + "下一步：把 `PracticeSheet.partSection` 里那个分段控件放回去；"
+                + "真要撤掉这个功能，副标题（`PracticeRoute.freePick.subtitle`）也得一起改回一步的说法。"
+                + "实际扫到的是：\(sheet.contains("Picker(") ? "有 Picker 但没绑 $partSelection" : "一个 Picker 都没有")")
+
+        XCTAssertEqual(
+            subtitlePromisesPartStep, hasPartPicker,
+            "副标题说的步骤和弹层里真有的东西对不上。副标题：「\(subtitle)」；"
+                + "弹层里\(hasPartPicker ? "有" : "没有") Part 筛选器。"
+                + "下一步：两边改成一致——有筛选器就在副标题里说清「先选 Part 再挑题」，"
+                + "没有就别写，否则用户会去找一个不存在的控件（复审第 9 条就是这么来的）。")
+
+        XCTAssertFalse(subtitle.contains("搜索") && !sheet.contains("searchable"),
+                       "副标题提到了搜索，弹层里却没有搜索框：\(subtitle)")
     }
 
     // MARK: - 点「开始练习」到底要练哪道题、按什么设置练

@@ -7,8 +7,10 @@ guard let command = args.first else {
 
     用法：
       coach doctor                  检查环境是否就绪
-      coach questions import <文件>  导入题库（CSV 或 JSON）
+      coach questions import <文件>  导入题库（.csv / .json / .pdf）
       coach questions list [part]   列出题库
+      coach questions remodel       把旧结构题库改成「一个话题一道题」
+                                    （默认只预演，加 --apply 才写盘，写盘前自动备份）
       coach practice <题目id>        开始一次练习
       coach reimport                把已保存但未入库的复盘重新归档
       coach portability             检查数据目录能否原样搬到另一台电脑

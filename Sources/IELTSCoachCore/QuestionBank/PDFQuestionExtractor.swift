@@ -15,6 +15,12 @@ import Foundation
 ///
 /// 第 4 条是本文件的核心难点：不处理折行的话，`(not a teacher)` 会变成一道独立的「题」，
 /// 而真正的题目缺一截——提出来的东西看着有几百条，其实大半是残片。
+///
+/// ## 抽出来的是什么形状
+///
+/// **一个话题一道题**（规则与理由见 `TopicQuestions`），不是一个问句一道题。
+/// 拿用户那份 81 页的季度题库实测：Part 1 抽出 59 道（59 个话题，280 条参考问句）、
+/// Part 2 99 张 cue card、Part 3 99 道（一张卡一道，885 条参考问句）。
 public enum PDFQuestionExtractor {
 
     // MARK: - 对外入口
@@ -221,10 +227,17 @@ public enum PDFQuestionExtractor {
         private(set) var questions: [Question] = []
 
         private var region: Region = .none
-        private var part1Topic: String?
+        private var part1: PendingTopic?
         private var category = ""
         private var cue: PendingCue?
         private var cueSlot: CueSlot = .beforeBullets
+
+        /// 攒到一半的 Part 1 话题。**一个话题攒成一道题**（见 `TopicQuestions`）：
+        /// 题库里列在话题下面的那些问句是给考官挑的参考，不是一道道题。
+        private struct PendingTopic {
+            var topic: String
+            var prompts: [String] = []
+        }
 
         /// 攒到一半的 cue card。
         private struct PendingCue {
@@ -259,8 +272,8 @@ public enum PDFQuestionExtractor {
             switch PDFQuestionExtractor.classify(line) {
             case .sectionHeader(let newRegion):
                 flushCue()
+                flushPart1()
                 region = newRegion
-                part1Topic = nil
                 category = ""
                 sawSectionHeader = true
 
@@ -277,11 +290,13 @@ public enum PDFQuestionExtractor {
             case .numbered(let body):
                 switch region {
                 case .part1:
-                    // 极少数情况下编号行本身就是问题（题目自带序号）。以问号结尾就按题目算。
+                    // 极少数情况下编号行本身就是问题（题目自带序号）。以问号结尾就按问句算，
+                    // 归到当前话题下；不以问号结尾的才是新话题的开始。
                     if body.hasSuffix("?") {
                         appendPart1(prompt: body)
                     } else {
-                        part1Topic = body
+                        flushPart1()
+                        part1 = PendingTopic(topic: body)
                     }
                 case .part23:
                     flushCue()
@@ -298,7 +313,7 @@ public enum PDFQuestionExtractor {
             case .text:
                 switch region {
                 case .part1:
-                    guard part1Topic != nil else { orphanLines += 1; break }
+                    guard part1 != nil else { orphanLines += 1; break }
                     appendPart1(prompt: line)
                 case .part23:
                     guard cue != nil else { orphanLines += 1; break }
@@ -313,20 +328,40 @@ public enum PDFQuestionExtractor {
             }
         }
 
-        mutating func finish() { flushCue() }
+        mutating func finish() {
+            flushCue()
+            flushPart1()
+        }
 
         private mutating func appendPart1(prompt: String) {
-            let topic = part1Topic ?? ""
-            questions.append(Question(
-                id: QuestionBankImporter.questionID(part: 1, topic: topic, prompt: prompt),
-                part: 1, topic: topic, prompt: prompt,
+            part1?.prompts.append(prompt)
+        }
+
+        /// 把攒完的 Part 1 话题落成**一道**题。
+        ///
+        /// 底下那些问句进 `followups`，因为考官只从中挑 3–4 个问
+        /// （真实考法见 `TopicQuestions` 的注释）。
+        ///
+        /// **一个问句都没有的话题照样落地**，不是丢掉：题库里确实有这个话题，
+        /// 拿它开一场 Part 1 练习是能练的（考官会自己出题）；
+        /// 而悄悄丢掉的话，用户对着题库数话题会发现少了一个，没有任何解释（铁律 7）。
+        private mutating func flushPart1() {
+            guard let finished = part1 else { return }
+            part1 = nil
+            questions.append(TopicQuestions.part1(
+                topic: finished.topic, prompts: finished.prompts,
                 source: sourceTitle, sourceUrl: sourceUrl))
         }
 
-        /// 把攒完的 cue card 落成一道 Part 2 加若干道 Part 3。
+        /// 把攒完的 cue card 落成一道 Part 2，外加**至多一道** Part 3。
         ///
-        /// Part 3 追问的 `topic` 用的是**它所属 cue card 的题干**：追问单独拿出来练时
+        /// Part 3 不再是一句一道题：那一组追问是考官的参考，其中一部分他还会
+        /// 根据考生上一个回答临场编。所以一张卡的追问合成一道题，
+        /// `topic` 指向它所属的 cue card——追问单独拿出来练时
         /// 「你觉得这种品质重要吗」没有上下文就没法答，得知道它跟着哪张卡。
+        ///
+        /// 这张卡底下一条追问都没有时**不造那道 Part 3**：一道既没有题干、
+        /// 又没有参考问句的题，练起来跟直接练 Part 2 没有区别，只是把题数撑大。
         private mutating func flushCue() {
             guard let finished = cue else { return }
             cue = nil
@@ -337,13 +372,10 @@ public enum PDFQuestionExtractor {
                 part: 2, topic: finished.topic, prompt: finished.prompt,
                 followups: finished.followups,
                 source: sourceTitle, sourceUrl: sourceUrl))
-            for prompt in finished.part3 {
-                questions.append(Question(
-                    id: QuestionBankImporter.questionID(part: 3, topic: finished.prompt,
-                                                        prompt: prompt),
-                    part: 3, topic: finished.prompt, prompt: prompt,
-                    source: sourceTitle, sourceUrl: sourceUrl))
-            }
+            guard !finished.part3.isEmpty else { return }
+            questions.append(TopicQuestions.part3(
+                cueCard: finished.prompt, prompts: finished.part3,
+                source: sourceTitle, sourceUrl: sourceUrl))
         }
 
         // MARK: - 警告

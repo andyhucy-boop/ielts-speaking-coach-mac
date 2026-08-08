@@ -40,7 +40,7 @@ final class QuestionStatusAcrossImportsTests: XCTestCase {
                                  status: "practiced")]
         let incoming = [Question(id: "q1", part: 1, topic: "Work", prompt: "Do you work?")]
 
-        let merged = QuestionBankImporter.merge(existing: existing, incoming: incoming)
+        let merged = QuestionBankImporter.merge(existing: existing, incoming: incoming).questions
 
         XCTAssertEqual(merged.first?.status, "practiced",
                        "换季重新导入把「已练」标记抹回「没练过」了，而且不可恢复")
@@ -55,7 +55,7 @@ final class QuestionStatusAcrossImportsTests: XCTestCase {
                                  followups: ["f1"], source: "2026 秋季")]
 
         let merged = try? XCTUnwrap(QuestionBankImporter.merge(existing: existing,
-                                                               incoming: incoming).first)
+                                                               incoming: incoming).questions.first)
         XCTAssertEqual(merged?.topic, "新话题", "题库内容该更新的还得更新")
         XCTAssertEqual(merged?.prompt, "新题干")
         XCTAssertEqual(merged?.followups, ["f1"])
@@ -70,14 +70,14 @@ final class QuestionStatusAcrossImportsTests: XCTestCase {
         let incoming = [Question(id: "q1", part: 1, topic: "Work", prompt: "Do you work?",
                                  status: "practiced")]
 
-        XCTAssertEqual(QuestionBankImporter.merge(existing: existing, incoming: incoming).first?.status,
+        XCTAssertEqual(QuestionBankImporter.merge(existing: existing, incoming: incoming).questions.first?.status,
                        "new", "本机没练过的题被导入文件标成练过了")
     }
 
     /// 新题就是新题，不许被这道闸误标成练过。
     func testABrandNewQuestionIsStillNew() {
         let merged = QuestionBankImporter.merge(
-            existing: [], incoming: [Question(id: "q9", part: 2, topic: "T", prompt: "P")])
+            existing: [], incoming: [Question(id: "q9", part: 2, topic: "T", prompt: "P")]).questions
         XCTAssertEqual(merged.first?.status, "new")
     }
 
@@ -93,7 +93,7 @@ final class QuestionStatusAcrossImportsTests: XCTestCase {
                                                            sourceTitle: "2026 夏季")
         try store.mutate { state in
             state.questions = QuestionBankImporter.merge(existing: state.questions,
-                                                         incoming: lastSeason.questions)
+                                                         incoming: lastSeason.questions).questions
             state.questions[0].status = "practiced"
             state.sessions = [PracticeSession(
                 id: "2026-08-06-001", questionId: state.questions[0].id, focusPart: .part1,
@@ -108,7 +108,7 @@ final class QuestionStatusAcrossImportsTests: XCTestCase {
             sourceTitle: "2026 秋季")
         try store.mutate { state in
             state.questions = QuestionBankImporter.merge(existing: state.questions,
-                                                         incoming: thisSeason.questions)
+                                                         incoming: thisSeason.questions).questions
         }
 
         let reloaded = try StateStore(directory: directory).load()
@@ -141,7 +141,7 @@ final class QuestionStatusAcrossImportsTests: XCTestCase {
         let afterImport = QuestionBankImporter.merge(
             existing: [Question(id: "q1", part: 1, topic: "Work", prompt: "Do you work?",
                                 status: "practiced")],
-            incoming: [Question(id: "q1", part: 1, topic: "Work", prompt: "Do you work?")])
+            incoming: [Question(id: "q1", part: 1, topic: "Work", prompt: "Do you work?")]).questions
 
         XCTAssertEqual(
             CoachState.reconcilePracticedStatus(questions: afterImport, sessions: []).first?.status,

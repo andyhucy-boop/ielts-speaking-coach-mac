@@ -379,4 +379,35 @@ final class QuestionBankViewTests: XCTestCase {
                     + "下一步：把它放回 `questionRow`。实际取到的函数体是：\n\(questionRow)")
         }
     }
+
+    // MARK: - 「你的题库还是旧结构」那句话得真的画在页面上
+
+    /// 文案本身在 `QuestionBankViewModel.legacyShapeNotice` 里，那边可测；
+    /// **这一页有没有真的把它摆上屏幕，只有扫源码能守。**
+    ///
+    /// 写好一段渲染却没接进 `body` 是本项目的老毛病（见 `RenderReachabilitySweepTests`）。
+    /// 那条全模块守卫只问「从 body 走不走得到这个成员」，答得了「摆没摆上去」，
+    /// 答不了「摆在了列表前面还是几十个话题之后」——而这句话要解释的正是
+    /// 下面那张列表为什么长成那样（一个话题下面挂着六道几乎一样的「题」），
+    /// 摆在列表之后等于没写。
+    func testTheLegacyShapeNoticeIsPaintedAboveTheQuestionList() throws {
+        SourceGuard.assertRenders(
+            "legacyShapeCard", inBodyOf: "var body", of: Self.view, atLeast: 1,
+            because: "题库还是旧结构时那句提示没有摆进渲染树，用户永远不会知道"
+                + "该再导入一次，题库就一直停在「一问一题」上。")
+        SourceGuard.assertRenders(
+            "model.legacyShapeNotice", in: Self.view,
+            because: "这一页没有去读那句提示，卡片是空的。")
+
+        // 顺序：提示必须排在题目列表 `bank` 前面。
+        let code = try Self.viewCode()
+        let bodyStart = try XCTUnwrap(code.range(of: "var body"))
+        let tail = code[bodyStart.upperBound...]
+        let notice = try XCTUnwrap(tail.range(of: "legacyShapeCard"),
+                                   "body 里没有 legacyShapeCard")
+        let list = try XCTUnwrap(tail.range(of: "bank"), "body 里没有 bank")
+        XCTAssertTrue(notice.lowerBound < list.lowerBound,
+                      "提示排在了题目列表后面。题库有几十个话题时列表远超一屏，"
+                          + "排在后面的解释用户看不到。")
+    }
 }

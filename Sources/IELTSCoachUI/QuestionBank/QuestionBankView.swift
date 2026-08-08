@@ -39,6 +39,7 @@ struct QuestionBankView: View {
                 if model.counts.total == 0 {
                     emptyBank
                 } else {
+                    legacyShapeCard
                     bank
                     importCard
                 }
@@ -77,6 +78,30 @@ struct QuestionBankView: View {
             Text(caption)
                 .font(Typography.label)
                 .foregroundStyle(Palette.textSecondary)
+        }
+    }
+
+    // MARK: - 题库还是旧结构时的提醒
+
+    /// 题库仍是「一问一题」时摆在列表上方的一句话。已经是新结构就整块不显示。
+    ///
+    /// **摆在列表上方而不是页面底部。** 它要解释的正是下面那张列表为什么长成那样
+    /// （一个话题下面挂着六道几乎一样的「题」），放在几十个话题之后等于没写。
+    /// 文案本身在 `QuestionBankViewModel.legacyShapeNotice` 里，那边可测；
+    /// 这里只负责把它摆上屏幕。
+    @ViewBuilder
+    private var legacyShapeCard: some View {
+        if let notice = model.legacyShapeNotice {
+            CoachCard {
+                HStack(alignment: .top, spacing: Spacing.md) {
+                    Image(systemName: "rectangle.stack.badge.person.crop")
+                        .foregroundStyle(Palette.accent)
+                    Text(notice)
+                        .font(Typography.secondary)
+                        .foregroundStyle(Palette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
         }
     }
 

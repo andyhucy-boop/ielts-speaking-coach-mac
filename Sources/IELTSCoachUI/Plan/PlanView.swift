@@ -322,8 +322,28 @@ struct PlanView: View {
             .labelsHidden()
             .font(Typography.body)
             .foregroundStyle(Palette.textPrimary)
+            Text(Self.focusScopeNote)
+                .font(Typography.label)
+                .foregroundStyle(Palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
+
+    /// 「重点 Part」与开练时那排 Part 按钮的关系。
+    ///
+    /// **这句话必须有。** App 里现在有两处能选 Part：这里，和「今日训练」页点
+    /// 「开始练习」之后那张弹层上的分段控件（`PracticeSheet.partSection`）。
+    /// 不说清各管什么，用户会以为它们是同一个设置的两份界面，然后开始怀疑
+    /// 「我在这儿选了 Part 2，为什么那边还能选 Part 1」。
+    ///
+    /// 两者的实际关系写在 `PracticePicker` 的文档里：这里决定**排计划时挑哪些题**，
+    /// 那里决定**这一次自由选题时列出哪些题**；那张弹层的默认档位跟着这里走，
+    /// 但在那儿切档不会回写这里。文案里提到的「开始练习」是真按钮
+    ///（`TodayView.actionTitle`），弹层上那排按钮也真的存在。
+    static let focusScopeNote = "这一项只决定这份计划每天排哪些题。"
+        + "到「今日训练」页点「开始练习」之后，那张窗口上还有一排 Part 按钮，"
+        + "可以临时只练某一个 Part——默认就停在这里选的这一项上，"
+        + "在那儿改不会动这份计划。"
 
     /// 能生成时说清会得到什么；不能生成时把**阻断原因全文**摆出来。
     ///

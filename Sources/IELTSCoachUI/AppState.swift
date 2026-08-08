@@ -269,14 +269,21 @@ public final class AppState {
     /// 下次打开却一道都没有，而中间那次「成功」的提示让他根本不会怀疑导入这一步。
     @discardableResult
     public func applyImport(_ result: ImportResult) throws -> QuestionBankImportOutcome {
-        let outcome = try store.mutate { state -> (total: Int, plan: String?) in
+        let outcome = try store.mutate { state -> (total: Int, plan: String?,
+                                                  absorbed: Int, remapped: Int) in
             // **「导入之前有没有题」必须在这个写事务里取。** `store.mutate` 在锁内重新
             // 从磁盘读一遍，事务外那份内存快照可能已经过期（命令行同期导过一份）。
             let hadQuestionsBefore = !state.questions.isEmpty
             // merge 按 id 去重、同 id 后者覆盖前者。雅思题库每季度换题，
             // 二次导入是常态而非边缘情况——不能变成两道一模一样的题。
-            state.questions = QuestionBankImporter.merge(existing: state.questions,
+            let mergeResult = QuestionBankImporter.merge(existing: state.questions,
                                                          incoming: result.questions)
+            state.questions = mergeResult.questions
+            // **题号搬家必须和合并在同一个写事务里。** 旧题被新的话题题吸收掉的那一刻，
+            // 挂在旧题号上的练习记录、复训链接与学习计划就成了孤儿；分两次写盘的话，
+            // 中间那一瞬崩溃就再也搬不回来了（旧题已经不在库里，对不上号了）。
+            let remapped = QuestionBankMigration.remapQuestionIDs(
+                in: &state, replacements: mergeResult.replacements)
             state.questionSources.append(result.source)
 
             // 第一次把题库导进来时顺手排好第一份计划（复审第 9 条）：
@@ -291,13 +298,16 @@ public final class AppState {
                 PlanRegenerator.apply(bootstrapped, to: &state)
                 planNotice = PlanBootstrap.notice(for: bootstrapped)
             }
-            return (state.questions.count, planNotice)
+            return (state.questions.count, planNotice,
+                    mergeResult.replacements.count, remapped)
         }
         reload()
         return QuestionBankImportOutcome(importedCount: result.questions.count,
                                          totalCount: outcome.total,
                                          warnings: result.warnings,
-                                         planNotice: outcome.plan)
+                                         planNotice: outcome.plan,
+                                         absorbedCount: outcome.absorbed,
+                                         remappedReferenceCount: outcome.remapped)
     }
 
     // Phase 10 Task 16：`setTranscriptEnabled(_:)`、`setWeeklyGoal(_:)` 与 `settingsError`

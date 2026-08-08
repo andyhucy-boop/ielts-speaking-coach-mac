@@ -168,8 +168,8 @@ final class QuestionIDTests: XCTestCase {
         let result = try PDFQuestionExtractor.extract(
             plainText: Self.seasonalPDFText, sourceTitle: "季度题库", sourceUrl: "")
 
-        // 4 道 Part 1 + 2 张 cue card + 4 道 Part 3 追问（其中两道题干相同、分属两张卡）。
-        XCTAssertEqual(result.questions.count, 10, "样本本身变了，下面的断言就失去依据："
+        // 2 个 Part 1 话题 + 2 张 cue card + 2 组 Part 3 追问（一张卡一组）。
+        XCTAssertEqual(result.questions.count, 6, "样本本身变了，下面的断言就失去依据："
                         + "\(result.questions.map(\.prompt))")
         XCTAssertEqual(Set(result.questions.map(\.id)).count, result.questions.count,
                        "抽出 \(result.questions.count) 道题，却只有 "
@@ -177,7 +177,7 @@ final class QuestionIDTests: XCTestCase {
                            + "id 没有跟着内容走，下一步 merge 会把它们去重成几道。")
 
         // 真的走一遍导入时那条路：空题库 + 这一批。id 塌了的话这里当场少题。
-        let merged = QuestionBankImporter.merge(existing: [], incoming: result.questions)
+        let merged = QuestionBankImporter.merge(existing: [], incoming: result.questions).questions
         XCTAssertEqual(merged.count, result.questions.count,
                        "merge 之后题库从 \(result.questions.count) 道塌成了 \(merged.count) 道")
         // 逐条比 id 而不是比 prompt：样本里刻意有两道题干相同的 Part 3 追问，
@@ -186,41 +186,38 @@ final class QuestionIDTests: XCTestCase {
                        "merge 之后有题目被同 id 的另一道覆盖掉了：\(merged.map(\.prompt))")
     }
 
-    /// **同一句 Part 3 追问挂在两张不同 cue card 下，必须是两道题。**
+    /// **同一句 Part 3 追问出现在两张 cue card 底下时，两张卡各自还是一道题，
+    /// 而且那句追问在两边都留着。**
     ///
-    /// 守的是 `PDFQuestionExtractor.flushCue` 里那一行：Part 3 的 id 用的是
-    /// `questionID(part: 3, topic: 所属 cue card 的题干, prompt: 追问)`。
-    /// 复审实测两个突变，在补这一条之前**全量测试一条都不红**：
+    /// 守的是 `TopicQuestions.part3` 那一行：Part 3 的 id 用的是
+    /// `questionID(part: 3, topic: 所属 cue card 的题干, prompt: 同一个题干)`。
+    /// 把它换成「拿 followups 算哈希」或者「丢掉 cue card 只按类别算」，
+    /// 两张卡就会撞同一个 id，`merge` 当场吃掉一道——用户会发现少了一整张卡的 Part 3。
     ///
-    /// 1. 换成 `"p3-" + stableHash(prompt)`（自己另写一套 id，绕开共用实现）；
-    /// 2. 换成 `questionID(part: 3, topic: "", prompt: prompt)`（丢掉 topic）。
-    ///
-    /// 两个突变都会让共用同一句追问的两道题撞同一个 id，`merge` 当场吃掉一道。
-    /// 之所以以前看不出来，是因为样本里三道 Part 3 题干互不相同——
-    /// 而真实题库里不同 cue card 共用同一句通用追问是常态。
-    func testTheSamePart3FollowupUnderTwoCueCardsStaysTwoQuestions() throws {
+    /// 真实题库里不同 cue card 共用同一句通用追问是常态（「年轻人和老年人的看法有区别吗」
+    /// 这类），所以样本里刻意让两张卡共用一句。
+    func testTwoCueCardsSharingAFollowupStayTwoSeparatePart3Questions() throws {
         let result = try PDFQuestionExtractor.extract(
             plainText: Self.seasonalPDFText, sourceTitle: "季度题库", sourceUrl: "")
 
-        let shared = result.questions.filter { $0.prompt == Self.sharedPart3Followup }
-        XCTAssertEqual(shared.count, 2,
-                       "样本里这句追问本该挂在两张 cue card 下各一次，实际 \(shared.count) 次。"
-                           + "样本变了，这条测试就失去依据。")
-        XCTAssertEqual(shared.map(\.part), [3, 3])
-        XCTAssertEqual(shared.map(\.topic), [
+        let part3 = result.questions.filter { $0.part == 3 }
+        XCTAssertEqual(part3.map(\.topic), [
             "Describe a person who solved a problem in a smart way",
             "Describe a film you watched that disappointed you"
-        ], "Part 3 追问的 topic 必须是它所属 cue card 的题干：追问单独拿出来练时，"
-            + "没有这个上下文就没法答，而且它正是把两道同题干追问区分开的那一维。")
-        XCTAssertNotEqual(shared[0].id, shared[1].id,
-                          "两张不同 cue card 下的同一句追问拿到了同一个 id（\(shared[0].id)）。"
-                              + "merge 按 id 去重，其中一道会被当场吃掉——"
-                              + "用户练到那张卡时会发现少了一道追问，而导入时一句警告都没有。")
+        ], "Part 3 必须挂在它所属 cue card 的题干上：那既是练习时的上下文，"
+            + "也是把两张卡区分开的那一维。")
+        guard part3.count == 2 else { return }   // 上一条已经红了，别再下标越界崩掉整个进程
+        XCTAssertNotEqual(part3[0].id, part3[1].id,
+                          "两张不同 cue card 的 Part 3 拿到了同一个 id（\(part3[0].id)）。"
+                              + "merge 按 id 去重，其中一张的追问会被当场吃掉——"
+                              + "用户练到那张卡时会发现 Part 3 整个不见了，而导入时一句警告都没有。")
+        XCTAssertTrue(part3.allSatisfy { $0.followups.contains(Self.sharedPart3Followup) },
+                      "两张卡共用的那句追问应当在两边都留着，实际："
+                          + "\(part3.map(\.followups))")
 
-        let merged = QuestionBankImporter.merge(existing: [], incoming: result.questions)
-        XCTAssertEqual(merged.filter { $0.prompt == Self.sharedPart3Followup }.count, 2,
-                       "merge 之后共用的那句追问只剩 "
-                           + "\(merged.filter { $0.prompt == Self.sharedPart3Followup }.count) 道")
+        let merged = QuestionBankImporter.merge(existing: [], incoming: result.questions).questions
+        XCTAssertEqual(merged.filter { $0.part == 3 }.count, 2,
+                       "merge 之后 Part 3 只剩 \(merged.filter { $0.part == 3 }.count) 道")
     }
 
     /// 换季重新导入：上一季与这一季共有的那道题必须认成同一道（id 不变、不重复出现），
@@ -253,16 +250,16 @@ final class QuestionIDTests: XCTestCase {
         XCTAssertEqual(old.questions.count, 2)
         XCTAssertEqual(new.questions.count, 2)
 
-        let merged = QuestionBankImporter.merge(existing: old.questions, incoming: new.questions)
+        let merged = QuestionBankImporter.merge(existing: old.questions, incoming: new.questions).questions
 
         XCTAssertEqual(merged.map(\.prompt), [
-            "Do you work or are you a student?",     // 两季都有：认成同一道，留在原位
-            "Do you live in a house or a flat?",     // 只有上一季有：保留（练过的记录还挂在它上面）
-            "What is the weather like in your hometown?"  // 只有这一季有：追加在后面
+            "Study and work",     // 两季都有：认成同一道，留在原位
+            "Accommodation",      // 只有上一季有：保留（练过的记录还挂在它上面）
+            "Weather"             // 只有这一季有：追加在后面
         ], "换季重新导入之后题库对不上了")
 
         let unchanged = try XCTUnwrap(
-            merged.first { $0.prompt == "Do you work or are you a student?" })
+            merged.first { $0.topic == "Study and work" })
         XCTAssertEqual(unchanged.id,
                        try XCTUnwrap(old.questions.first)?.id,
                        "没改过的那道题换了 id，挂在旧 id 上的练习记录与训练计划全部指错题")
@@ -280,11 +277,13 @@ final class QuestionIDTests: XCTestCase {
                       {"raw":"Hometown","questions":["Do you live in a house or a flat?"]}]}
             """
         let result = try QuestionBankImporter.importJSON(json, sourceTitle: "t")
-        XCTAssertEqual(result.questions.count, 3)
-        XCTAssertEqual(Set(result.questions.map(\.id)).count, 3,
-                       "三道题只有 \(Set(result.questions.map(\.id)).count) 个 id。"
+        // 一个话题一道题：Home（两句问句）与 Hometown（一句）各一道。
+        XCTAssertEqual(result.questions.map(\.topic), ["Home", "Hometown"])
+        XCTAssertEqual(Set(result.questions.map(\.id)).count, 2,
+                       "两个话题只有 \(Set(result.questions.map(\.id)).count) 个 id。"
                            + "同一句题干挂在两个话题下是真实题库里的常态"
-                           + "（第三道与第一道题干相同、话题不同），它们必须是两道题。")
+                           + "（Hometown 那句与 Home 的第一句一模一样），"
+                           + "它们必须是两道题。")
     }
 
     /// part 那一维走完整条路的那一半：同一话题、同一句话，一条作为 cue card、

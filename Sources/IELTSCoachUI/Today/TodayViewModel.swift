@@ -21,11 +21,17 @@ public enum PracticeRoute: String, CaseIterable, Identifiable, Sendable {
     public var subtitle: String {
         switch self {
         case .planToday: return "按学习计划安排的今日题目"
-        // ⚠️ 这里从前写的是「先选 Part，再挑具体题目」，描述的是一个**不存在的两步选择**：
-        // 弹层里只有一张按 Part 排好序的平铺列表，没有 Part 筛选器，也没有搜索框
-        //（`PracticeSheet.questionRow`，2026-08-08 复审第 9 条）。
-        // 说成两步的话，用户会先去找那个筛选器。
-        case .freePick: return "从整份题库里挑一道题，列表按 Part 排好序"
+        // ⚠️ 这句话与弹层里真有的东西是**绑在一起**的，改一边就要改另一边。
+        //
+        // 2026-08-08 复审第 9 条：它一度写着「先选 Part，再挑具体题目」，而那时弹层里
+        // 只有一张平铺列表，没有 Part 筛选器——用户会先去找一个不存在的控件。
+        // 那次的修法是把话改成一步。**现在那个筛选器真的做出来了**
+        //（`PracticeSheet.partSection`，用户原话：「首先应该可以选择是训练 part one
+        // part two 还是 part three」），所以这句话跟着改回两步。
+        //
+        // 两个方向都由 `TodayViewModelTests.testTheFreePickSubtitleMatchesWhatTheSheetActuallyHas`
+        // 钉着：说了两步却没有筛选器会红，做了筛选器却不说也会红。
+        case .freePick: return "先选 Part 1 / 2 / 3，再从那个 Part 里挑一道题"
         case .continueLast: return "接着上次那道题再练"
         case .retrain: return "带上一次复盘给出的目标"
         }

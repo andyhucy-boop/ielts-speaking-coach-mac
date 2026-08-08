@@ -121,32 +121,45 @@ public enum QuestionBankImporter {
         var questions: [Question] = []
         var warnings: [String] = []
 
+        // **这份 JSON 的形状本来就是「一个话题一组问句」**（`part1: [{raw, questions}]`），
+        // 与新模型一一对应：`raw` 是话题，`questions` 是这个话题下的参考问句。
+        // 从前把它拆成一问一题，是把上游已经分好的组又打散了一遍。
         for entry in (root["part1"]?.arrayValue ?? []) {
             let topic = entry["raw"]?.stringValue ?? ""
-            for question in (entry["questions"]?.arrayValue ?? []) {
-                guard let prompt = question.stringValue, !prompt.isEmpty else { continue }
-                questions.append(Question(
-                    id: questionID(part: 1, topic: topic, prompt: prompt), part: 1, topic: topic, prompt: prompt,
-                    source: title, sourceUrl: sourceUrl, importLevel: importLevel))
-            }
+            let prompts = (entry["questions"]?.arrayValue ?? [])
+                .compactMap(\.stringValue).filter { !$0.isEmpty }
+            guard !topic.isEmpty || !prompts.isEmpty else { continue }
+            var question = TopicQuestions.part1(topic: topic, prompts: prompts,
+                                                source: title, sourceUrl: sourceUrl)
+            question.importLevel = importLevel
+            questions.append(question)
         }
 
         for entry in (root["part23"]?.arrayValue ?? []) {
             let topic = entry["raw"]?.stringValue ?? ""
             let part3Prompts = (entry["part3Questions"]?.arrayValue ?? [])
                 .compactMap(\.stringValue).filter { !$0.isEmpty }
+            let cueCards = (entry["part2Questions"]?.arrayValue ?? [])
+                .compactMap(\.stringValue).filter { !$0.isEmpty }
 
-            for question in (entry["part2Questions"]?.arrayValue ?? []) {
-                guard let prompt = question.stringValue, !prompt.isEmpty else { continue }
+            for prompt in cueCards {
+                // **Part 2 的 `followups` 不再塞 Part 3 的问句。** 那一栏在提示词里
+                // 是「cue card 上要覆盖的提示点」，把 Part 3 的抽象问题放进去，
+                // 考官会在两分钟独白里追着问社会议题——那是 Part 3 的事。
+                // 这份 JSON 不携带 cue card 的提示点，所以就是空的。
                 questions.append(Question(
-                    id: questionID(part: 2, topic: topic, prompt: prompt), part: 2, topic: topic, prompt: prompt,
-                    followups: part3Prompts, source: title, sourceUrl: sourceUrl,
-                    importLevel: importLevel))
-            }
-            for prompt in part3Prompts {
-                questions.append(Question(
-                    id: questionID(part: 3, topic: topic, prompt: prompt), part: 3, topic: topic, prompt: prompt,
+                    id: questionID(part: 2, topic: topic, prompt: prompt), part: 2,
+                    topic: topic, prompt: prompt,
                     source: title, sourceUrl: sourceUrl, importLevel: importLevel))
+            }
+            guard !part3Prompts.isEmpty else { continue }
+            // 一张 cue card 一道 Part 3。条目里一张 cue card 都没有时（上游确实有这种
+            // 只列讨论题的条目），退回用条目自己的 `raw` 当归属，不丢内容。
+            for cueCard in (cueCards.isEmpty ? [topic] : cueCards) {
+                var question = TopicQuestions.part3(cueCard: cueCard, prompts: part3Prompts,
+                                                    source: title, sourceUrl: sourceUrl)
+                question.importLevel = importLevel
+                questions.append(question)
             }
         }
 
@@ -191,17 +204,67 @@ public enum QuestionBankImporter {
 
     // MARK: - 合并
 
+    /// 一次合并的结果。**不是只有题目**：题库重建模那一刻，
+    /// 有些旧题会被新的话题题吸收掉，挂在它们身上的练习记录必须跟着搬家。
+    public struct MergeResult: Equatable, Sendable {
+        /// 合并之后的题库。
+        public let questions: [Question]
+        /// 旧 id → 新 id。被话题题吸收掉的那些旧题。
+        ///
+        /// **调用方必须拿它去调 `QuestionBankMigration.remapQuestionIDs`。**
+        /// 不搬的话，用户那场练习会在训练记录页显示「这道题已经不在题库里了」——
+        /// 数据都在，只是再也对不上号（这正是把返回值从 `[Question]` 换成一个
+        /// 结构体的理由：忘了处理时编译器会说话，而不是等用户发现历史成了孤儿）。
+        public let replacements: [String: String]
+
+        public init(questions: [Question], replacements: [String: String]) {
+            self.questions = questions
+            self.replacements = replacements
+        }
+    }
+
     /// 按 id 去重，同 id 时新导入的**内容**覆盖旧的（但「已练」标记留着）；
     /// 保持「已有在前、新增在后」的稳定顺序。
-    public static func merge(existing: [Question], incoming: [Question]) -> [Question] {
+    ///
+    /// ## 除了按 id 去重，还要认「碎片」
+    ///
+    /// 题库从「一问一题」改成「一话题一题」之后，用户库里那 281 道 Part 1「题」
+    /// 与 885 道 Part 3「题」全都是新模型下某一道话题题的**参考问句**。
+    /// 只按 id 合并的话，它们一道不少地留在库里，新的 59+99 道话题题追加在后面，
+    /// 题库从 1265 道涨到 1422 道——用户会以为导入把题库搞坏了。
+    ///
+    /// 所以这里多认一条：新导入的话题题会吸收题库里**同 part、同话题、且题干正好是
+    /// 它某一条参考问句**的旧题（判据见 `TopicQuestions.supersedes`，刻意选窄，
+    /// 不按来源猜，免得吃掉用户自己用 CSV 加的题）。被吸收的旧题从题库里去掉，
+    /// 它的「已练」标记升到吸收它的那道话题题上，它的 id 进 `replacements`。
+    public static func merge(existing: [Question], incoming: [Question]) -> MergeResult {
         // ⚠️ 不能用 Dictionary(uniqueKeysWithValues:) —— 用户手工拼题库时同一批内
         // 出现重复 id 极常见（复制粘贴忘改编号），那个构造器遇到重复 key 会直接
         // fatalError 闪退整个 App，而不是报错。逐个赋值，同 id 后者覆盖前者。
         var byID: [String: Question] = [:]
         for question in incoming { byID[question.id] = question }
+
+        // 这一批里的话题题，按 (part, 话题) 索引，用来认旧题库里的碎片。
+        // 用字典而不是每次线性扫 incoming：真实题库两边都是上千条，
+        // 平方级的比对会让一次导入卡住好几秒，而那期间界面没有任何反馈。
+        var topicQuestions: [String: Question] = [:]
+        for question in incoming where TopicQuestions.isTopicQuestion(question) {
+            topicQuestions["\(question.part)|\(question.topic)"] = question
+        }
+        var replacements: [String: String] = [:]
+        // 被吸收的碎片里练过的那些，它们的「已练」要升到吸收它们的话题题上。
+        var practicedByAbsorption: Set<String> = []
+
         var merged: [Question] = []
         for question in existing {
             guard var updated = byID.removeValue(forKey: question.id) else {
+                // 不是同一道题，再问一句：它是不是这一批里某道话题题的一条参考问句。
+                if let owner = topicQuestions["\(question.part)|\(question.topic)"],
+                   TopicQuestions.supersedes(owner, question) {
+                    replacements[question.id] = owner.id
+                    if question.status == "practiced" { practicedByAbsorption.insert(owner.id) }
+                    continue        // 碎片本身不再留在题库里
+                }
                 merged.append(question)
                 continue
             }
@@ -231,6 +294,19 @@ public enum QuestionBankImporter {
             guard let deduplicated = byID.removeValue(forKey: question.id) else { continue }
             merged.append(deduplicated)
         }
-        return merged
+
+        // 「已练」升级放在最后统一做：吸收它的那道话题题既可能是这次新追加的，
+        // 也可能早就在题库里（第二次导入同一份 PDF）。分散在上面两个循环里写，
+        // 必然漏掉其中一种。
+        if !practicedByAbsorption.isEmpty {
+            merged = merged.map { question in
+                guard practicedByAbsorption.contains(question.id), question.status != "practiced"
+                else { return question }
+                var upgraded = question
+                upgraded.status = "practiced"
+                return upgraded
+            }
+        }
+        return MergeResult(questions: merged, replacements: replacements)
     }
 }

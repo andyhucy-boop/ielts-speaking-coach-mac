@@ -407,6 +407,54 @@ final class AppStateTests: XCTestCase {
                        "内存里对了，磁盘上还是抹掉的——重开一次 App 又没了")
     }
 
+    // MARK: - 题库重建模：走「导入题库」按钮那条唯一的生产路径
+
+    /// **导入把旧题合并掉的同一次写盘里，历史记录必须跟着搬到新题号上。**
+    ///
+    /// `QuestionBankRemodelTests` 测的是 `merge` 与 `remapQuestionIDs` 两个纯函数，
+    /// 跨不过这一层：把 `applyImport` 里那句 `remapQuestionIDs` 删掉，那边照样全绿，
+    /// 而用户点完「导入题库…」之后，训练记录页会显示
+    /// 「这一场练的题目已经不在题库里了（id：…）」——他那场练习看着就像没了。
+    ///
+    /// 断言直接从磁盘再读一遍：只改内存的话重开一次 App 就散架了。
+    func testImportingTheRemodelledBankMovesThePracticeHistoryOntoTheNewQuestion() throws {
+        let app = AppState(directory: directory, preflight: { .init(ok: true, messages: []) })
+        let topic = "Borrowing/lending"
+        let prompts = ["Do you like to lend things to others?",
+                       "Have you ever borrowed money from others?"]
+        // 旧结构：一个话题拆成两道「题」，用户在第一道上练过一场。
+        // id 随便给：吸收的判据是「同 part、同话题、且题干正好是话题题的一条参考问句」，
+        // 与旧 id 长什么样无关（`TopicQuestions.supersedes`）。
+        let legacy = prompts.enumerated().map { index, prompt in
+            Question(id: "legacy-\(index)", part: 1, topic: topic, prompt: prompt)
+        }
+        _ = try app.applyImport(importResult(legacy, title: "旧结构题库"))
+        try StateStore(directory: directory).mutate { state in
+            state.sessions = [PracticeSession(
+                id: "2026-08-08-001", questionId: legacy[0].id, focusPart: .part1,
+                startedAt: "2026-08-08T08:00:00Z", endedAt: "2026-08-08T08:20:00Z",
+                goal: "", transcript: [], reportPath: "", recordingPath: "")]
+            state.questions[0].status = "practiced"
+        }
+        app.reload()
+
+        let remodelled = TopicQuestions.part1(topic: topic, prompts: prompts, source: "新结构题库")
+        let outcome = try app.applyImport(importResult([remodelled], title: "新结构题库"))
+
+        XCTAssertEqual(app.state.questions.map(\.id), [remodelled.id],
+                       "旧结构那两道题没有被合并掉，题库反而更乱了："
+                           + "\(app.state.questions.map(\.prompt))")
+        let onDisk = try StateStore(directory: directory).load()
+        XCTAssertEqual(onDisk.sessions.map(\.questionId), [remodelled.id],
+                       "那场练习还指着已经不存在的题号，训练记录页会说「题目已经不在题库里了」")
+        XCTAssertEqual(onDisk.questions.first?.status, "practiced",
+                       "练过的记号在合并时丢了，题库页「已经练过」的数字会掉下去")
+        XCTAssertEqual(outcome.absorbedCount, 2)
+        XCTAssertEqual(outcome.remappedReferenceCount, 1)
+        XCTAssertTrue(outcome.summary.contains("2 道"),
+                      "题库一次少掉两道，交代里却没提：\(outcome.summary)")
+    }
+
     // MARK: - 第一次导入题库要顺手排好计划（复审第 9 条）
 
     /// 引导的最后一步写着「首页已经给你排好今天练什么了」。在这之前那是假话：

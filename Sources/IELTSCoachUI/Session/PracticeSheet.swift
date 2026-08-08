@@ -22,6 +22,11 @@ struct PracticeSheet: View {
     let preselected: SessionSetup?
     /// 挑题用的候选。
     let candidates: [Question]
+    /// 打开时 Part 筛选默认停在哪一档（0 = 全部）。由调用方按学习计划的「重点 Part」算出来，
+    /// 规则在 `PracticePicker.defaultPart(forPlanFocus:)`，那边有测试守着。
+    let defaultPart: Int
+    /// 学习计划的「重点 Part」，只用来解释上面那个默认值是从哪儿来的（可以是 nil）。
+    let planFocusPart: FocusPart?
     /// 把选中的题变成一场练习的设置。逻辑在 `TodayViewModel` 里，那边有测试守着。
     let makeSetup: (Question) -> SessionSetup
     let onClose: () -> Void
@@ -29,6 +34,36 @@ struct PracticeSheet: View {
     /// 这一场最终定下来的设置。nil 时显示挑题列表。
     @State private var running: SessionSetup?
     @State private var picked: String?
+    /// 当前的 Part 筛选。**0 表示「全部」，不用 `Int?`**——理由见
+    /// `PracticePicker.allParts` 的说明（Optional tag 对不上时控件看着能点、列表纹丝不动）。
+    ///
+    /// 初值来自 `defaultPart`，所以它跟着学习计划的重点 Part 走；
+    /// 用户在这里切档**不会**回写学习计划。
+    @State private var partSelection: Int
+
+    init(runner: PracticeRunner, route: PracticeRoute, preselected: SessionSetup?,
+         candidates: [Question], defaultPart: Int = PracticePicker.allParts,
+         planFocusPart: FocusPart? = nil,
+         makeSetup: @escaping (Question) -> SessionSetup, onClose: @escaping () -> Void) {
+        self.runner = runner
+        self.route = route
+        self.preselected = preselected
+        self.candidates = candidates
+        self.defaultPart = defaultPart
+        self.planFocusPart = planFocusPart
+        self.makeSetup = makeSetup
+        self.onClose = onClose
+        _partSelection = State(initialValue: defaultPart)
+    }
+
+    private var partPicker: PracticePicker { PracticePicker(questions: candidates) }
+
+    /// 当前这一档筛出来的题。**挑好的那道不在这一档里时要把选择清掉**——
+    /// 否则用户选了 Part 1 的一道题、切到 Part 2、再点「开始练习」，
+    /// 练的是屏幕上一道也看不见的题。
+    private var visibleCandidates: [Question] {
+        partPicker.questions(inPart: partSelection)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.lg) {
@@ -83,19 +118,84 @@ struct PracticeSheet: View {
                     .foregroundStyle(Palette.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                Text("挑一道题开始。挑好之后本工具会自动打开 ChatGPT、进语音、"
+                Text("先选这一场练哪个 Part，再挑一道题。挑好之后本工具会自动打开 ChatGPT、进语音、"
                      + "并把这道题的考官提示词发过去——你什么都不用输。")
                     .font(Typography.body)
                     .foregroundStyle(Palette.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
-                ScrollView {
-                    VStack(alignment: .leading, spacing: Spacing.sm) {
-                        ForEach(candidates) { question in
-                            questionRow(question)
+                partSection
+                if let notice = partPicker.emptyNotice(forPart: partSelection) {
+                    emptyPartNotice(notice)
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: Spacing.sm) {
+                            ForEach(visibleCandidates) { question in
+                                questionRow(question)
+                            }
                         }
                     }
+                    .frame(maxHeight: 280)
                 }
-                .frame(maxHeight: 280)
+            }
+        }
+    }
+
+    /// **这一段就是用户要的那个「先选 Part」。**
+    ///
+    /// 三个 Part 是三种完全不同的题型，一次练习只可能是其中一种；从前这里是一张
+    /// 258 道题（重建模之前 1265 道）的平铺列表，想练 Part 2 得滚过 60 个 Part 1 话题。
+    ///
+    /// 每一格的题数摆在下面那一行（`countsLine`）而不是格子里：四格挤在一行里，
+    /// 写成「Part 1（60）」会被截断，而截断之后用户既看不清 Part 也看不清数。
+    private var partSection: some View {
+        VStack(alignment: .leading, spacing: Spacing.xs) {
+            Picker("这一场练哪个 Part", selection: $partSelection) {
+                ForEach(PracticePicker.partOptions, id: \.self) { part in
+                    Text(PracticePicker.segmentTitle(forPart: part)).tag(part)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .accessibilityLabel("这一场练哪个 Part")
+            // 切档之后，上一档里挑好的那道题必须失效：不清掉的话，用户选了 Part 1 的一道、
+            // 切到 Part 2、再点「开始练习」，练的是屏幕上一道也看不见的题。
+            .onChange(of: partSelection) { _, _ in
+                if let picked, !visibleCandidates.contains(where: { $0.id == picked }) {
+                    self.picked = nil
+                }
+            }
+
+            Text(partPicker.countsLine)
+                .font(Typography.label)
+                .monospacedDigit()
+                .foregroundStyle(Palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(partPicker.selectionSummary(forPart: partSelection))
+                .font(Typography.label)
+                .monospacedDigit()
+                .foregroundStyle(Palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let notice = PracticePicker.planFocusNotice(for: planFocusPart) {
+                Text(notice)
+                    .font(Typography.label)
+                    .foregroundStyle(Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// 这一档一道题都没有。**不给白板**：说清现状、说清下一步，
+    /// 而下一步指的那排分段按钮就在这句话上面，真实存在。
+    private func emptyPartNotice(_ notice: String) -> some View {
+        CoachCard {
+            HStack(alignment: .top, spacing: Spacing.sm) {
+                Image(systemName: "tray")
+                    .foregroundStyle(Palette.textSecondary)
+                Text(notice)
+                    .font(Typography.body)
+                    .foregroundStyle(Palette.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
             }
         }
     }
@@ -411,8 +511,11 @@ struct PracticeSheet: View {
         }
     }
 
+    /// 只认**当前这一档里看得见**的那道题。用 `candidates` 全库去找的话，
+    /// 切档之后残留的那个 id 仍然找得到题——用户会练到一道屏幕上一道也看不见的题。
     private func startPicked() {
-        guard let picked, let question = candidates.first(where: { $0.id == picked }) else { return }
+        guard let picked,
+              let question = visibleCandidates.first(where: { $0.id == picked }) else { return }
         Task { await begin(makeSetup(question)) }
     }
 
@@ -474,6 +577,8 @@ private struct InertPasteboard: PasteboardAccess {
             Question(id: "p2-skill-001", part: 2, topic: "Skills",
                      prompt: "Describe a skill you learned recently.")
         ],
+        defaultPart: PracticePicker.allParts,
+        planFocusPart: nil,
         makeSetup: { question in
             SessionSetup(question: question, focusPart: .part1, durationMinutes: 6, goal: "")
         },

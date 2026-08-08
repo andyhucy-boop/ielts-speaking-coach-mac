@@ -113,6 +113,13 @@ struct TodayView: View {
                           route: launch.route,
                           preselected: launch.preselected,
                           candidates: model.pickableQuestions,
+                          // 弹层里的 Part 筛选默认停在学习计划的「重点 Part」上，
+                          // 两处 Part 选择因此看起来是一件事的两个层次，而不是两套设置。
+                          // 规则在 `PracticePicker.defaultPart(forPlanFocus:)`（那边有测试）；
+                          // 在这儿另写一遍 switch 的话，两处迟早给出不同的默认值。
+                          defaultPart: PracticePicker.defaultPart(
+                              forPlanFocus: app.state.plan?.focusPart),
+                          planFocusPart: app.state.plan?.focusPart,
                           // 在弹层里当场挑的那道题同样走解析器的取值，不在这里另拼一份：
                           // 另拼的那份一定会漏掉 feedbackTiming / part2PrepMode，
                           // 于是「自由选题」这条路线成了唯一不听用户练习偏好的一条。

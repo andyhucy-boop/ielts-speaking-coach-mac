@@ -96,10 +96,15 @@ final class PDFQuestionExtractorTests: XCTestCase {
         """
         let result = try PDFQuestionExtractor.extract(
             plainText: text, sourceTitle: "t", sourceUrl: "")
-        let part3 = result.questions.filter { $0.part == 3 }
-        XCTAssertEqual(part3.count, 2, "折行的追问应合成一条，不是两条")
-        XCTAssertTrue(part3[0].prompt.contains("formal teacher and learning from someone"),
-                      "折行处没有合并：\(part3[0].prompt)")
+        // 一张 cue card 一道 Part 3 题，那一组追问进 followups（见 `TopicQuestions`）。
+        // 折行合并要守的是**追问的条数**：粘错了会变成 1 条或 3 条。
+        let part3 = try XCTUnwrap(result.questions.first { $0.part == 3 })
+        XCTAssertEqual(part3.followups.count, 2, "折行的追问应合成一条，不是两条")
+        // 用 first 而不是下标：条数已经错的时候，下标越界会让整个测试进程崩掉，
+        // 把同一次运行里其余的失败全部盖住（突变验证时实测过）。
+        XCTAssertTrue(part3.followups.first?.contains(
+            "formal teacher and learning from someone") ?? false,
+                      "折行处没有合并：\(part3.followups)")
     }
 
     // MARK: - 折行合并：两处「续行以大写字母开头」
@@ -128,10 +133,10 @@ final class PDFQuestionExtractorTests: XCTestCase {
         """
         let result = try PDFQuestionExtractor.extract(
             plainText: text, sourceTitle: "t", sourceUrl: "")
-        let part3 = result.questions.filter { $0.part == 3 }
-        XCTAssertEqual(part3.count, 2, "「Olympics?」是上一行的后半截，不是第三道题")
-        XCTAssertTrue(part3[1].prompt.hasSuffix("like the Olympics?"),
-                      "题干断在冠词上了：\(part3[1].prompt)")
+        let part3 = try XCTUnwrap(result.questions.first { $0.part == 3 })
+        XCTAssertEqual(part3.followups.count, 2, "「Olympics?」是上一行的后半截，不是第三条追问")
+        XCTAssertTrue(part3.followups.last?.hasSuffix("like the Olympics?") ?? false,
+                      "题干断在冠词上了：\(part3.followups)")
     }
 
     /// 光秃秃的「Why?」不可能是一道独立的题——它没有任何上下文，练的时候没法答。
@@ -150,10 +155,10 @@ final class PDFQuestionExtractorTests: XCTestCase {
         """
         let result = try PDFQuestionExtractor.extract(
             plainText: text, sourceTitle: "t", sourceUrl: "")
-        let part3 = result.questions.filter { $0.part == 3 }
-        XCTAssertEqual(part3.count, 2, "「Why?」不是一道题，是上一问的尾巴")
-        XCTAssertTrue(part3[0].prompt.hasSuffix("family business? Why?"),
-                      "尾巴没接回去：\(part3[0].prompt)")
+        let part3 = try XCTUnwrap(result.questions.first { $0.part == 3 })
+        XCTAssertEqual(part3.followups.count, 2, "「Why?」不是一条独立的追问，是上一问的尾巴")
+        XCTAssertTrue(part3.followups.first?.hasSuffix("family business? Why?") ?? false,
+                      "尾巴没接回去：\(part3.followups)")
     }
 
     /// 上面两条的反面：cue card 的提示点大量以介词收尾（真实文件里满是
@@ -184,7 +189,12 @@ final class PDFQuestionExtractorTests: XCTestCase {
 
     // MARK: - Part 2 的提示点与 Part 3 的归属
 
-    func testCueCardBulletsGoToFollowupsAndPart3BecomesOwnQuestions() throws {
+    /// **一张 cue card 落成一道 Part 2 加一道 Part 3**，不是一道 Part 2 加九道 Part 3。
+    ///
+    /// 真实考法：Part 3 的 4–8 问由 Part 2 的话题延伸，其中一部分是考官根据考生
+    /// 上一个回答临场编的（见 `TopicQuestions`）。所以题库里那一组追问是参考问句，
+    /// 不是九道各自独立、可以分九天练的题。
+    func testOneCueCardBecomesOnePart2AndOnePart3() throws {
         let text = """
         Part2 & 3 保 留 题
         人物
@@ -196,6 +206,8 @@ final class PDFQuestionExtractorTests: XCTestCase {
         And explain why you think he/she did it in a smart way
         Part3
         What are the qualities of a person who can solve problems in smart ways?
+        Do young people and old people solve problems differently?
+        Is creativity something that can be taught?
         """
         let result = try PDFQuestionExtractor.extract(
             plainText: text, sourceTitle: "t", sourceUrl: "")
@@ -204,9 +216,74 @@ final class PDFQuestionExtractorTests: XCTestCase {
         XCTAssertEqual(cue.topic, "人物", "中文类别标签就是 Part 2 的话题")
 
         let part3 = result.questions.filter { $0.part == 3 }
-        XCTAssertEqual(part3.count, 1)
-        XCTAssertTrue(part3[0].topic.contains("solved a problem"),
-                      "Part 3 追问要能看出它跟着哪张 cue card，否则练的时候不知道上下文")
+        XCTAssertEqual(part3.count, 1,
+                       "三条追问被拆成了 \(part3.count) 道题。一张卡的追问是一组参考问句，"
+                           + "拆开之后每一条都失去它所属的 cue card，练的时候没有上下文，"
+                           + "学习计划还会把同一张卡排成三天。")
+        guard let onlyPart3 = part3.first else { return }   // 条数已经错了，别再下标越界崩掉整个进程
+        XCTAssertEqual(onlyPart3.topic, "Describe a person who solved a problem in a smart way",
+                       "Part 3 要挂在它所属的 cue card 上，否则练的时候不知道上下文")
+        XCTAssertEqual(onlyPart3.followups, [
+            "What are the qualities of a person who can solve problems in smart ways?",
+            "Do young people and old people solve problems differently?",
+            "Is creativity something that can be taught?"
+        ], "那一组追问必须原样进 followups，一条都不许丢")
+    }
+
+    /// 一张卡底下一条追问都没有时，**不造**那道空的 Part 3。
+    ///
+    /// 造出来的话，题库里会多一道既没题干、又没参考问句的题；用户点进去练，
+    /// 考官除了那张 cue card 的题目之外什么都拿不到，跟直接练 Part 2 没有区别。
+    func testACueCardWithNoPart3QuestionsDoesNotProduceAnEmptyPart3() throws {
+        let text = """
+        Part2 & 3 保 留 题
+        人物
+        1-Describe a person who solved a problem in a smart way
+        You should say
+        Who this person is
+        """
+        let result = try PDFQuestionExtractor.extract(
+            plainText: text, sourceTitle: "t", sourceUrl: "")
+        XCTAssertEqual(result.questions.map(\.part), [2],
+                       "凭空多出一道空的 Part 3：\(result.questions.map { "p\($0.part)/\($0.prompt)" })")
+    }
+
+    // MARK: - Part 1：一个话题一道题（本次建模改动的核心）
+
+    /// **一个话题下的六个问句是一道题，不是六道。**
+    ///
+    /// 真实考法：Part 1 共 4–5 分钟，考官挑 2–3 个话题，每个话题问 3–4 个。
+    /// 用户（考生本人）的原话：「他问『do you like to lend things to others?』，
+    /// 我刚好聊到了我喜不喜欢钱，那考官就不用问第二个问题了。」
+    /// 拆成六道题的话，题库里 Part 1 有 281「道题」，学习计划会把同一个话题排成六天。
+    func testOnePart1TopicBecomesOneQuestionWithItsQuestionsAsFollowups() throws {
+        let text = """
+        Part 1 T opics
+        Part1 必 考 题
+        8-Borrowing/lending
+        Do you like to lend things to others?
+        Have you ever borrowed money from others?
+        Do you prefer to borrow things or buy them yourself?
+        9-Advertisement
+        Do you like watching advertisements?
+        """
+        let result = try PDFQuestionExtractor.extract(
+            plainText: text, sourceTitle: "t", sourceUrl: "")
+        let part1 = result.questions.filter { $0.part == 1 }
+        XCTAssertEqual(part1.map(\.topic), ["Borrowing/lending", "Advertisement"],
+                       "两个话题应当是两道题，实际："
+                           + "\(part1.map { "\($0.topic)/\($0.prompt)" })")
+        guard part1.count == 2 else { return }   // 上一条已经红了，别再下标越界崩掉整个进程
+        XCTAssertEqual(part1[0].prompt, "Borrowing/lending",
+                       "话题题的题干就是话题本身——`TopicQuestions.isTopicQuestion` 与"
+                           + "合并时认碎片全靠这一条")
+        XCTAssertEqual(part1[0].followups, [
+            "Do you like to lend things to others?",
+            "Have you ever borrowed money from others?",
+            "Do you prefer to borrow things or buy them yourself?"
+        ], "话题下的问句必须原样进 followups，一句都不许丢")
+        XCTAssertEqual(part1[1].followups, ["Do you like watching advertisements?"],
+                       "上一个话题的问句串到下一个话题去了")
     }
 
     // MARK: - 噪声
@@ -231,11 +308,12 @@ final class PDFQuestionExtractorTests: XCTestCase {
         """
         let result = try PDFQuestionExtractor.extract(
             plainText: text, sourceTitle: "t", sourceUrl: "")
-        XCTAssertEqual(result.questions.map(\.prompt), [
+        XCTAssertEqual(result.questions.count, 1, "一个话题一道题")
+        XCTAssertEqual(result.questions[0].followups, [
             "Do you work or are you a student?",
             "What work do you do?",
             "Do you like your job?"
-        ], "页码与分支分隔符 / 都不是题目，也不许被当成续行粘到上一道题的尾巴上")
+        ], "页码与分支分隔符 / 都不是问句，也不许被当成续行粘到上一句的尾巴上")
     }
 
     // MARK: - 一道题都没提出来必须报警

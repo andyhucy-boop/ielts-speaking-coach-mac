@@ -68,14 +68,19 @@ final class QuestionBankPDFImportTests: XCTestCase {
         let result = try QuestionBankImport.importFile(at: url,
                                                       pdfText: { _ in Self.pdfPlainText })
 
-        // 逐条比 prompt，不只比条数：CSV 导入器不可能产出「(not a teacher)」这种
+        // 逐条比内容，不只比条数：CSV 导入器不可能产出「(not a teacher)」这种
         // 折行合并后的题干，所以这份列表本身就证明走的是 PDFQuestionExtractor。
-        XCTAssertEqual(result.questions.map(\.prompt), [
-            "Do you work or are you a student?",
-            "Describe one of your friends who learned a skill from someone (not a teacher)",
-            "Is it necessary to continue learning after finishing formal education?"
-        ], "PDF 那条路没有走通，或者中途换了导入器")
-        XCTAssertEqual(result.questions.map(\.part), [1, 2, 3])
+        // **比的是话题题的形状**（一个话题一道题，问句在 followups 里）——
+        // 只比 prompt 的话，第 3 道 Part 3 的 prompt 与第 2 道 cue card 一模一样，
+        // 那条「第二页的内容进来了没有」的断言就空转了。
+        XCTAssertEqual(result.questions.map(\.part), [1, 2, 3],
+                       "PDF 那条路没有走通，或者中途换了导入器")
+        guard result.questions.count == 3 else { return }   // 别下标越界崩掉整个进程
+        XCTAssertEqual(result.questions[0].followups, ["Do you work or are you a student?"])
+        XCTAssertEqual(result.questions[1].prompt,
+                       "Describe one of your friends who learned a skill from someone (not a teacher)")
+        XCTAssertEqual(result.questions[2].followups,
+                       ["Is it necessary to continue learning after finishing formal education?"])
         XCTAssertEqual(result.source.title, "季度题库",
                        "来源标题要从文件名（去掉扩展名）来，否则看不出题是从哪份文件来的")
     }
@@ -259,14 +264,19 @@ final class QuestionBankPDFImportTests: XCTestCase {
 
         let result = try QuestionBankImport.importFile(at: url)
 
-        XCTAssertEqual(result.questions.map(\.prompt), [
-            "Do you work or are you a student?",
-            "Describe one of your friends who learned a skill from someone (not a teacher)",
-            // ↓ 这一条只画在第二页上：少了它就说明取文字那一步只读了第一页。
-            "Is it necessary to continue learning after finishing formal education?"
-        ], "选中一份真 PDF 之后没有导出全部题目。取文字那一步没走 PDFKit、只读了第一页，"
-            + "或者三步没有串起来——用户会看到「这多半是扫描件」，或者一份静默少了题的题库。")
-        XCTAssertEqual(result.questions.map(\.part), [1, 2, 3])
+        XCTAssertEqual(result.questions.map(\.part), [1, 2, 3],
+                       "选中一份真 PDF 之后没有导出全部题目。取文字那一步没走 PDFKit、只读了第一页，"
+                           + "或者三步没有串起来——用户会看到「这多半是扫描件」，"
+                           + "或者一份静默少了题的题库。")
+        guard result.questions.count == 3 else { return }   // 别下标越界崩掉整个进程
+        XCTAssertEqual(result.questions[0].followups, ["Do you work or are you a student?"])
+        XCTAssertEqual(result.questions[1].prompt,
+                       "Describe one of your friends who learned a skill from someone (not a teacher)")
+        // ↓ 这一条只画在第二页上：少了它就说明取文字那一步只读了第一页
+        //   （那时整道 Part 3 都不会存在，上面比 part 的那条会先红）。
+        XCTAssertEqual(result.questions[2].followups,
+                       ["Is it necessary to continue learning after finishing formal education?"],
+                       "第二页的内容没有进来")
         XCTAssertEqual(result.source.title, "季度题库")
     }
 

@@ -54,9 +54,15 @@ final class QuestionBankImporterTests: XCTestCase {
         """
         let result = try QuestionBankImporter.importJSON(json, sourceTitle: "忽略，用文件里的 title")
         XCTAssertEqual(result.source.title, "Open sample")
-        XCTAssertEqual(result.questions.filter { $0.part == 1 }.count, 2)
+        // 一个话题一道题：`part1` 那个条目的 `raw` 是话题，`questions` 是它的参考问句。
+        XCTAssertEqual(result.questions.filter { $0.part == 1 }.count, 1)
+        XCTAssertEqual(result.questions.first { $0.part == 1 }?.followups,
+                       ["What part do you enjoy most?", "Has it changed?"])
         XCTAssertEqual(result.questions.filter { $0.part == 2 }.count, 1)
         XCTAssertEqual(result.questions.filter { $0.part == 3 }.count, 1)
+        XCTAssertEqual(result.questions.first { $0.part == 3 }?.topic,
+                       "Describe a useful skill you learned.",
+                       "Part 3 要挂在它所属的 cue card 上")
         XCTAssertEqual(result.questions.first { $0.part == 1 }?.topic, "Daily routines")
     }
 
@@ -64,7 +70,7 @@ final class QuestionBankImporterTests: XCTestCase {
         let existing = [Question(id: "q1", part: 1, topic: "Old", prompt: "old")]
         let incoming = [Question(id: "q1", part: 1, topic: "New", prompt: "new"),
                         Question(id: "q2", part: 2, topic: "X", prompt: "x")]
-        let merged = QuestionBankImporter.merge(existing: existing, incoming: incoming)
+        let merged = QuestionBankImporter.merge(existing: existing, incoming: incoming).questions
         XCTAssertEqual(merged.count, 2)
         XCTAssertEqual(merged.first { $0.id == "q1" }?.topic, "New")
     }
@@ -76,7 +82,7 @@ final class QuestionBankImporterTests: XCTestCase {
             Question(id: "dup", part: 1, topic: "第二次", prompt: "b"),   // 同一批内重复
             Question(id: "q2", part: 2, topic: "X", prompt: "x")
         ]
-        let merged = QuestionBankImporter.merge(existing: existing, incoming: incoming)
+        let merged = QuestionBankImporter.merge(existing: existing, incoming: incoming).questions
         XCTAssertEqual(merged.count, 3, "重复 id 应被去重，不应崩溃")
         XCTAssertEqual(Set(merged.map(\.id)), ["q1", "dup", "q2"])
         XCTAssertEqual(merged.first { $0.id == "dup" }?.topic, "第二次", "同 id 应后者覆盖前者")
