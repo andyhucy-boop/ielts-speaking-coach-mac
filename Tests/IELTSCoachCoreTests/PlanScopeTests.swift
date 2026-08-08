@@ -125,4 +125,47 @@ final class PlanScopeTests: XCTestCase {
                     Question(id: "c1", part: 3, topic: "Describe a law", prompt: "Describe a law")]
         XCTAssertEqual(PlanScope.select(from: bank, focusPart: .part2And3).map(\.id), ["b1"])
     }
+
+    // MARK: - 多选 Part 之后新增的那两档
+
+    /// **组合档一律只排开场那一段的题**（全真模考除外，它是交错排全部）。
+    ///
+    /// 这一条必须和 `FocusPart.forSession` 对得上：那边只在「题目正是这一档的第一段」
+    /// 时才让组合档生效。这里要是排了别的 Part 的题，那些天会被**静默降级成单 Part**——
+    /// 计划页写着「连着练」，而每天实际只考一段。
+    func testEveryCombinedFocusSchedulesOnlyItsOpeningPart() {
+        let bank = [Question(id: "a1", part: 1, topic: "T", prompt: "p1"),
+                    Question(id: "b1", part: 2, topic: "事件", prompt: "Describe a law"),
+                    Question(id: "c1", part: 3, topic: "Describe a law", prompt: "Describe a law")]
+        let cases: [(FocusPart, [String])] = [
+            (.part1And2, ["a1"]), (.part1And3, ["a1"]), (.part2And3, ["b1"])
+        ]
+        for (focus, expected) in cases {
+            let selected = PlanScope.select(from: bank, focusPart: focus)
+            XCTAssertEqual(selected.map(\.id), expected,
+                           "\(focus.rawValue) 排的不是开场那一段的题")
+            for question in selected {
+                XCTAssertEqual(question.part, focus.openingPart.rawValue)
+                // 排出来的每一道题都必须真的能开出这一档考法，否则计划里那一天
+                // 会被 `FocusPart.forSession` 降级，而计划页上写的还是「连着练」。
+                XCTAssertEqual(FocusPart.forSession(mode: focus, questionPart: question.part),
+                               focus,
+                               "\(focus.rawValue) 排进来的 \(question.id) 开不出这一档考法")
+            }
+        }
+    }
+
+    /// 新增两档的名字同样要一眼看懂会发生什么，而且不能和别的档撞名。
+    func testTheNewCombinedLabelsSayWhatHappensAndDoNotCollide() {
+        for focus in [FocusPart.part1And2, .part1And3] {
+            let label = PlanScope.label(for: focus)
+            XCTAssertTrue(label.contains("连着练"), "没说清是「连着」练的：" + label)
+            XCTAssertFalse(label.contains("模考"),
+                           "别让人以为这是三个 Part 的全真模考：" + label)
+            for part in focus.parts {
+                XCTAssertTrue(label.contains(part.englishName),
+                              "\(label) 里没提到 \(part.englishName)")
+            }
+        }
+    }
 }

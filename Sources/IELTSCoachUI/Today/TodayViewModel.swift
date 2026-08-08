@@ -25,13 +25,14 @@ public enum PracticeRoute: String, CaseIterable, Identifiable, Sendable {
         //
         // 2026-08-08 复审第 9 条：它一度写着「先选 Part，再挑具体题目」，而那时弹层里
         // 只有一张平铺列表，没有 Part 筛选器——用户会先去找一个不存在的控件。
-        // 那次的修法是把话改成一步。**现在那个筛选器真的做出来了**
-        //（`PracticeSheet.partSection`，用户原话：「首先应该可以选择是训练 part one
-        // part two 还是 part three」），所以这句话跟着改回两步。
+        // 那次的修法是把话改成一步。**现在那几个勾选框真的做出来了**
+        //（`PracticeSheet.partSection`），所以这句话跟着改回两步；
+        // 而且它们现在是**可以多勾**的（用户原话：「我要多选 Part one 和 Part two，
+        // 练完这个练那个」），这句话必须把「可多选」说出来，否则用户不会去勾第二个。
         //
         // 两个方向都由 `TodayViewModelTests.testTheFreePickSubtitleMatchesWhatTheSheetActuallyHas`
-        // 钉着：说了两步却没有筛选器会红，做了筛选器却不说也会红。
-        case .freePick: return "先选 Part 1 / 2 / 3，再从那个 Part 里挑一道题"
+        // 钉着：说了两步却没有勾选框会红，做了勾选框却不说也会红。
+        case .freePick: return "先勾这一场练哪几个 Part（可多选），再挑一道题"
         case .continueLast: return "接着上次那道题再练"
         case .retrain: return "带上一次复盘给出的目标"
         }

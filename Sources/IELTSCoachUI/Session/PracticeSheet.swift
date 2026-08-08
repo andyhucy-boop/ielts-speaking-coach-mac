@@ -22,32 +22,29 @@ struct PracticeSheet: View {
     let preselected: SessionSetup?
     /// 挑题用的候选。
     let candidates: [Question]
-    /// 打开时 Part 筛选默认停在哪一档（0 = 全部）。由调用方按学习计划的「重点 Part」算出来，
-    /// 规则在 `PracticePicker.defaultPart(forPlanFocus:)`，那边有测试守着。
-    let defaultPart: Int
+    /// 打开时默认勾上哪几个 Part（空集合 = 一个都不勾 = 不指定）。由调用方按学习计划的
+    /// 「重点 Part」算出来，规则在 `PracticePicker.defaultParts(forPlanFocus:)`，那边有测试守着。
+    let defaultParts: Set<Int>
     /// 学习计划的「重点 Part」，只用来解释上面那个默认值是从哪儿来的（可以是 nil）。
     let planFocusPart: FocusPart?
-    /// 把选中的题 + 用户当场选的考法，变成一场练习的设置。
-    /// 逻辑在 `PracticeRouteResolver.setup` 里，那边有测试守着。
+    /// 把选中的题 + 用户当场勾的那几个 Part，变成一场练习的设置。
+    /// 逻辑在 `PracticeRouteResolver.setup(for:goal:defaults:chosen:bank:)` 里，那边有测试守着。
     ///
-    /// **第二个参数不能省。** 省掉的话，用户在这张弹层上打开的
-    /// 「练完 Part 2 接着练 Part 3」不会有任何去处：开关拨得动、`SessionSetup` 照样是
-    /// 普通 Part 2，而屏幕上一个字都不会提——本项目最忌讳的那种失败。
+    /// **第二个参数不能省。** 省掉的话，用户在这张弹层上勾的 Part 不会有任何去处：
+    /// 勾选框点得动、`SessionSetup` 照样是那道题自己的 Part，
+    /// 而屏幕上一个字都不会提——本项目最忌讳的那种失败。
     let makeSetup: (Question, FocusPart?) -> SessionSetup
     let onClose: () -> Void
 
     /// 这一场最终定下来的设置。nil 时显示挑题列表。
     @State private var running: SessionSetup?
     @State private var picked: String?
-    /// 当前的 Part 筛选。**0 表示「全部」，不用 `Int?`**——理由见
-    /// `PracticePicker.allParts` 的说明（Optional tag 对不上时控件看着能点、列表纹丝不动）。
+    /// 这一场勾了哪几个 Part。**空集合表示「一个都没勾」**，也就是「不指定」：
+    /// 列出全部题目，练哪个 Part 由挑中的那道题自己决定（见 `PracticePicker`）。
     ///
-    /// 初值来自 `defaultPart`，所以它跟着学习计划的重点 Part 走；
-    /// 用户在这里切档**不会**回写学习计划。
-    @State private var partSelection: Int
-    /// 「练完 Part 2 接着练 Part 3」。**只在 Part 2 那一档露面、也只在那一档生效**
-    /// （`PracticePicker.showsLinkPart3` / `mode(forPart:linksPart3:)`）。
-    @State private var linkPart3: Bool
+    /// 初值来自 `defaultParts`，所以它跟着学习计划的重点 Part 走；
+    /// 用户在这里改勾选**不会**回写学习计划。
+    @State private var partSelection: Set<Int>
     /// 哪几栏是展开的。**`nil` 表示「用户还没动过折叠」，那时按默认来**
     /// （`QuestionPartSections.defaultExpandedParts`）。
     ///
@@ -57,7 +54,7 @@ struct PracticeSheet: View {
     @State private var expandedParts: Set<Int>?
 
     init(runner: PracticeRunner, route: PracticeRoute, preselected: SessionSetup?,
-         candidates: [Question], defaultPart: Int = PracticePicker.allParts,
+         candidates: [Question], defaultParts: Set<Int> = PracticePicker.unspecified,
          planFocusPart: FocusPart? = nil,
          makeSetup: @escaping (Question, FocusPart?) -> SessionSetup,
          onClose: @escaping () -> Void) {
@@ -65,12 +62,11 @@ struct PracticeSheet: View {
         self.route = route
         self.preselected = preselected
         self.candidates = candidates
-        self.defaultPart = defaultPart
+        self.defaultParts = defaultParts
         self.planFocusPart = planFocusPart
         self.makeSetup = makeSetup
         self.onClose = onClose
-        _partSelection = State(initialValue: defaultPart)
-        _linkPart3 = State(initialValue: PracticePicker.defaultLinksPart3(forPlanFocus: planFocusPart))
+        _partSelection = State(initialValue: defaultParts)
     }
 
     private var partPicker: PracticePicker { PracticePicker(questions: candidates) }
@@ -79,7 +75,7 @@ struct PracticeSheet: View {
     /// 否则用户选了 Part 1 的一道题、切到 Part 2、再点「开始练习」，
     /// 练的是屏幕上一道也看不见的题。
     private var visibleCandidates: [Question] {
-        partPicker.questions(inPart: partSelection)
+        partPicker.questions(inParts: partSelection)
     }
 
     /// 当前这一档筛出来的题，再**按 Part 分成几栏**。用户原话：
@@ -95,13 +91,17 @@ struct PracticeSheet: View {
 
     /// 此刻哪几栏是展开的。用户还没动过折叠时按默认来。
     ///
-    /// 「用户的偏好」就是那排分段控件停在哪一档——它本身的初值又来自学习计划的重点 Part
-    /// （`PracticePicker.defaultPart(forPlanFocus:)`）。停在「全部」时没有偏好可言，
+    /// 「用户的偏好」就是他勾了哪几个 Part——初值又来自学习计划的重点 Part
+    /// （`PracticePicker.defaultParts(forPlanFocus:)`）。一个都没勾时没有偏好可言，
     /// 传 nil，于是三栏都折着，屏幕上是三行带条数的栏标题。
+    ///
+    /// 勾了两个以上时列表只有开场那一段的题（`PracticePicker.questions(inParts:)`），
+    /// 所以这里传的是**开场那个 Part**，不是勾了的全部——传全部的话，
+    /// 那几栏里只有一栏真的存在，另外几个下标什么也匹配不上。
     private var expandedPartsNow: Set<Int> {
         expandedParts ?? QuestionPartSections.defaultExpandedParts(
             inSections: sectionsByPart.map(\.part),
-            preferredPart: partSelection == PracticePicker.allParts ? nil : partSelection)
+            preferredPart: partSelection.min())
     }
 
     /// 此刻屏幕上真的看得见的那些题：展开的那几栏里的。**挑题只认这一份。**
@@ -191,13 +191,14 @@ struct PracticeSheet: View {
                     .foregroundStyle(Palette.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                Text("先选这一场练哪个 Part，再挑一道题。挑好之后本工具会自动打开 ChatGPT、进语音、"
+                Text("先勾这一场练哪几个 Part（可以多勾，勾了就按 Part 1 → 2 → 3 的顺序连着练），"
+                     + "再挑一道题。挑好之后本工具会自动打开 ChatGPT、进语音、"
                      + "并把这道题的考官提示词发过去——你什么都不用输。")
                     .font(Typography.body)
                     .foregroundStyle(Palette.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
                 partSection
-                if let notice = partPicker.emptyNotice(forPart: partSelection) {
+                if let notice = partPicker.emptyNotice(forParts: partSelection) {
                     emptyPartNotice(notice)
                 } else {
                     sectionsNotice
@@ -240,40 +241,35 @@ struct PracticeSheet: View {
         .frame(maxHeight: 280)
     }
 
-    /// **这一段就是用户要的那个「先选 Part」。**
+    /// **这一段就是用户要的「多选 Part」。**
     ///
-    /// 三个 Part 是三种完全不同的题型，一次练习只可能是其中一种；从前这里是一张
-    /// 258 道题（重建模之前 1265 道）的平铺列表，想练 Part 2 得滚过 60 个 Part 1 话题。
+    /// 三个勾选框，勾几个就按 Part 1 → 2 → 3 的顺序连着练几段。从前这里是一排四格
+    /// 分段控件（全部 / Part 1 / Part 2 / Part 3）加一颗「练完 Part 2 接着练 Part 3」开关，
+    /// 只能四选一；用户实测后要求「多选 Part one 和 Part two，练完这个练那个」。
     ///
-    /// 每一格的题数摆在下面那一行（`countsLine`）而不是格子里：四格挤在一行里，
+    /// 那颗开关一起删了：勾上 Part 2 和 Part 3 就是它。两个控件表达同一件事的话，
+    /// 迟早会出现「开关开着、Part 3 却没勾」这种屏幕上自相矛盾的状态。
+    ///
+    /// 每一格的题数摆在下面那一行（`countsLine`）而不是格子里：三格挤在一行里，
     /// 写成「Part 1（60）」会被截断，而截断之后用户既看不清 Part 也看不清数。
     private var partSection: some View {
         VStack(alignment: .leading, spacing: Spacing.xs) {
-            Picker("这一场练哪个 Part", selection: $partSelection) {
-                ForEach(PracticePicker.partOptions, id: \.self) { part in
-                    Text(PracticePicker.segmentTitle(forPart: part)).tag(part)
+            HStack(spacing: Spacing.md) {
+                ForEach(PracticePicker.selectableParts, id: \.self) { part in
+                    Toggle(PracticePicker.partTitle(forPart: part), isOn: partBinding(for: part))
+                        .font(Typography.body)
+                        .foregroundStyle(Palette.textPrimary)
                 }
+                Spacer(minLength: 0)
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .accessibilityLabel("这一场练哪个 Part")
-            // 切档之后，上一档里挑好的那道题必须失效：不清掉的话，用户选了 Part 1 的一道、
-            // 切到 Part 2、再点「开始练习」，练的是屏幕上一道也看不见的题。
-            .onChange(of: partSelection) { _, _ in
-                if let picked, !visibleCandidates.contains(where: { $0.id == picked }) {
-                    self.picked = nil
-                }
-                // 换了一档就是换了一组栏，展开状态得跟着重算：切到 Part 3 之后，
-                // Part 3 那一栏是他刚选的，不该还折着（`expandedPartsNow` 会按新档位重算）。
-                expandedParts = nil
-            }
+            .accessibilityLabel("这一场练哪几个 Part")
 
             Text(partPicker.countsLine)
                 .font(Typography.label)
                 .monospacedDigit()
                 .foregroundStyle(Palette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Text(partPicker.selectionSummary(forPart: partSelection))
+            Text(partPicker.selectionSummary(forParts: partSelection))
                 .font(Typography.label)
                 .monospacedDigit()
                 .foregroundStyle(Palette.textSecondary)
@@ -284,39 +280,32 @@ struct PracticeSheet: View {
                     .foregroundStyle(Palette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            linkPart3Section
         }
     }
 
-    /// **这一段就是用户要的第二个功能。** 用户原话：
-    /// 「你可以加一个功能，是否同时练习 part2 和 part3。」
+    /// 一个 Part 的勾选框。`Toggle` 要的是 `Binding<Bool>`，这里从那个集合转一道。
     ///
-    /// 做成一颗开关而不是分段控件上的第五格，有三个理由：
+    /// **改完勾选要做两件收尾**，一件都不能少：
     ///
-    /// 1. 用户要的本来就是一个「是 / 否」；
-    /// 2. 那排分段控件已经有四格，第五格挤进去必然被截断，而截断之后
-    ///    「Part 2+3 连着练」会变成看不懂的几个字（`segmentTitle` 的注释里有这一条）；
-    /// 3. 它只对 Part 2 的题成立，摆在 Part 2 那一档底下，作用范围一眼可见。
-    ///
-    /// **标题写成字面量而不是 `PracticePicker.linkPart3Title`**：`SourceGuard` 那条
-    /// 「文案里让人点的控件必须真的存在」是靠扫 `Toggle("…")` 的字面量建清单的，
-    /// 写成常量引用会让这颗开关从清单里消失，于是别处那句
-    /// 「下面那个「练完 Part 2 接着练 Part 3」也已经替你打开」会被报成指向幽灵控件。
-    /// 两者不许各写各的，`PracticePickerTests` 钉着它们逐字相同。
-    @ViewBuilder
-    private var linkPart3Section: some View {
-        if PracticePicker.showsLinkPart3(forPart: partSelection) {
-            VStack(alignment: .leading, spacing: Spacing.xs) {
-                Toggle("练完 Part 2 接着练 Part 3", isOn: $linkPart3)
-                    .font(Typography.body)
-                    .foregroundStyle(Palette.textPrimary)
-                Text(PracticePicker.linkPart3Hint)
-                    .font(Typography.label)
-                    .foregroundStyle(Palette.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(.top, Spacing.xs)
-        }
+    /// 1. 上一次勾选下挑好的那道题若已经不在列表里，必须清掉。不清的话，
+    ///    用户选了 Part 1 的一道题、改勾成 Part 2、再点「开始练习」，
+    ///    练的是屏幕上一道也看不见的题——一次静默做错事。
+    /// 2. 展开状态重算：换了一组勾就是换了一组栏，刚勾上的那一栏不该还折着。
+    private func partBinding(for part: Int) -> Binding<Bool> {
+        Binding(get: { partSelection.contains(part) },
+                set: { isOn in
+                    var next = partSelection
+                    if isOn { next.insert(part) } else { next.remove(part) }
+                    partSelection = next
+                    // 拿 `next` 去算还看得见哪些题，**不回头读 `partSelection`**：
+                    // `@State` 的读写在同一次事件里不保证读到刚写进去的值，
+                    // 读到旧值的话这道清理会漏掉，而漏掉的表现正是「练到一道看不见的题」。
+                    let stillVisible = partPicker.questions(inParts: next)
+                    if let picked, !stillVisible.contains(where: { $0.id == picked }) {
+                        self.picked = nil
+                    }
+                    expandedParts = nil
+                })
     }
 
     /// 这一档一道题都没有。**不给白板**：说清现状、说清下一步，
@@ -654,10 +643,9 @@ struct PracticeSheet: View {
     /// 用户会练到一道屏幕上一道也看不见的题。
     private func startPicked() {
         guard let question = pickedQuestion else { return }
-        // 考法跟着屏幕上那两个控件走：当前档位 + 那颗开关。翻译规则在
-        // `PracticePicker.mode(forPart:linksPart3:)`，这里不另判一次——
-        // 另判一份的话，开关显示的条件和它生效的条件迟早会分家。
-        let mode = PracticePicker.mode(forPart: partSelection, linksPart3: linkPart3)
+        // 考法跟着屏幕上那三个勾选框走。翻译规则在 `PracticePicker.mode(forParts:)`，
+        // 这里不另判一次——另判一份的话，勾选框显示的条件和它生效的条件迟早会分家。
+        let mode = PracticePicker.mode(forParts: partSelection)
         Task { await begin(makeSetup(question, mode)) }
     }
 
@@ -719,10 +707,11 @@ private struct InertPasteboard: PasteboardAccess {
             Question(id: "p2-skill-001", part: 2, topic: "Skills",
                      prompt: "Describe a skill you learned recently.")
         ],
-        defaultPart: PracticePicker.allParts,
+        defaultParts: PracticePicker.unspecified,
         planFocusPart: nil,
         makeSetup: { question, mode in
-            let focusPart = FocusPart.forSession(mode: mode, questionPart: question.part)
+            let focusPart = mode.map { FocusPart.forExplicitSelection($0, questionPart: question.part) }
+                ?? FocusPart.inferred(fromQuestionPart: question.part)
             return SessionSetup(question: question, focusPart: focusPart,
                                 durationMinutes: focusPart.defaultDurationMinutes, goal: "")
         },

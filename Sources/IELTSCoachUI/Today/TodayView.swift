@@ -113,23 +113,35 @@ struct TodayView: View {
                           route: launch.route,
                           preselected: launch.preselected,
                           candidates: model.pickableQuestions,
-                          // 弹层里的 Part 筛选默认停在学习计划的「重点 Part」上，
+                          // 弹层里默认勾上的那几个 Part 跟着学习计划的「重点 Part」走，
                           // 两处 Part 选择因此看起来是一件事的两个层次，而不是两套设置。
-                          // 规则在 `PracticePicker.defaultPart(forPlanFocus:)`（那边有测试）；
-                          // 在这儿另写一遍 switch 的话，两处迟早给出不同的默认值。
-                          defaultPart: PracticePicker.defaultPart(
+                          // 规则在 `PracticePicker.defaultParts(forPlanFocus:)`（那边有测试）；
+                          // 在这儿另写一遍的话，两处迟早给出不同的默认值。
+                          defaultParts: PracticePicker.defaultParts(
                               forPlanFocus: app.state.plan?.focusPart),
                           planFocusPart: app.state.plan?.focusPart,
                           // 在弹层里当场挑的那道题同样走解析器的取值，不在这里另拼一份：
                           // 另拼的那份一定会漏掉 feedbackTiming / part2PrepMode，
                           // 于是「自由选题」这条路线成了唯一不听用户练习偏好的一条。
                           //
-                          // 第二个参数是用户在弹层上当场选的考法（那颗「练完 Part 2
-                          // 接着练 Part 3」开关）。丢掉它，开关就成了一颗拨得动、
-                          // 却什么都不改的装饰品。
+                          // 第二个参数是用户在弹层上当场勾出来的那几个 Part。
+                          // 丢掉它，那三个勾选框就成了点得动、却什么都不改的装饰品。
+                          //
+                          // **走 `chosen:` 而不是 `mode:`**：`mode:` 是给学习计划的
+                          // 重点 Part 用的，会被过滤，三个全勾会被静默降级成单 Part。
+                          // 一个都没勾（mode 为 nil）时才回到「按题目自己的 Part 考」。
+                          //
+                          // `bank:` 是给「这张 cue card 自己那组 Part 3 追问」配对用的
+                          //（`LinkedPart3`）；不传的话连着练那一场会白白扔掉题库里的真题。
                           makeSetup: { question, mode in
-                              PracticeRouteResolver.setup(for: question, goal: "",
-                                                          defaults: defaults, mode: mode)
+                              guard let mode else {
+                                  return PracticeRouteResolver.setup(
+                                      for: question, goal: "", defaults: defaults,
+                                      bank: app.state.questions)
+                              }
+                              return PracticeRouteResolver.setup(
+                                  for: question, goal: "", defaults: defaults,
+                                  chosen: mode, bank: app.state.questions)
                           },
                           onClose: { self.launch = nil })
         }

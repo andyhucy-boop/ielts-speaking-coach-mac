@@ -85,8 +85,13 @@ enum GetTrainingContextTool {
             // 会写进提示词的「Target session length」，考官为了对上时间会把 Part 3 砍掉。
             let duration = try arguments.optionalInt("durationMinutes", in: 1...60,
                 default: session.focusPart.defaultDurationMinutes,
-                hint: "durationMinutes 传 1–60 之间的整数分钟；省略则按这一场的 focusPart 取默认值"
-                    + "（Part 2 用 4 分钟、Part 2 + Part 3 用 9 分钟、其余 6 分钟）。")
+                // 各档的默认时长逐个念出来，不写死一句会过时的概括：
+                // 多选 Part 之后有七档，只提其中两档的话，另外几档的数字就是错的。
+                hint: "durationMinutes 传 1–60 之间的整数分钟；省略则按这一场的 focusPart 取默认值（"
+                    + FocusPart.allCases
+                        .map { "\($0.rawValue) 用 \($0.defaultDurationMinutes) 分钟" }
+                        .joined(separator: "、")
+                    + "）。")
             let timingRaw = try arguments.optionalChoice("feedbackTiming", allowed: timings,
                 default: FeedbackTiming.deferred.rawValue,
                 hint: "feedbackTiming 只能是 deferred 或 immediate。")
@@ -100,7 +105,11 @@ enum GetTrainingContextTool {
                 question: question, focusPart: session.focusPart, durationMinutes: duration,
                 goal: session.goal,
                 feedbackTiming: FeedbackTiming(rawValue: timingRaw) ?? .deferred,
-                part2PrepMode: Part2PrepMode(rawValue: prepRaw) ?? .countdown)
+                part2PrepMode: Part2PrepMode(rawValue: prepRaw) ?? .countdown,
+                // 这一场同时有 Part 2 和 Part 3 时，把那张 cue card 自己那组 Part 3 追问
+                // 一起发下去（`LinkedPart3`）。不传的话，从 MCP 这条路开的连练场次
+                // 会拿不到题库里现成的真题，而 App 那条路拿得到——同一件事两种结果。
+                part3Reference: LinkedPart3.reference(for: question, in: state.questions))
 
             // 标记由 sessionId 派生，所以同一场练习问几次上下文都是同一个值——
             // 换一个就意味着复盘里的标记和这边对不上号。

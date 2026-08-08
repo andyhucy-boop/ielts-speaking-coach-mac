@@ -20,10 +20,17 @@ enum PromptCommand {
         let goal = valueFor("--goal", in: args) ?? ""
 
         var question: Question?
+        // 题库整份带着走，不只带那一道题：同时含 Part 2 与 Part 3 的那几档要靠它
+        // 配出「这张 cue card 自己那组 Part 3 追问」（`LinkedPart3`）。
+        // 只取一道题的话，`coach prompt` 打出来的永远是「配不上」那句兜底，
+        // 而真练时是配得上的——这个命令存在的意义（看到的就是发出去的）当场作废。
+        var bank: [Question] = []
         if let questionID = valueFor("--question", in: args) {
             let store = StateStore(directory: DataDirectory.resolve())
             do {
-                guard let found = try store.load().questions.first(where: { $0.id == questionID })
+                let loaded = try store.load().questions
+                bank = loaded
+                guard let found = loaded.first(where: { $0.id == questionID })
                 else {
                     print("❌ 题库里没有 id 为「\(questionID)」的题目，没有打印任何提示词。")
                     print("   下一步：coach questions list 查看可用题目；"
@@ -39,7 +46,8 @@ enum PromptCommand {
             }
         }
 
-        let setup = PromptPreview.setup(focusPart: focusPart, question: question, goal: goal,
+        let setup = PromptPreview.setup(focusPart: focusPart, question: question, bank: bank,
+                                        goal: goal,
                                         feedbackTiming: feedbackTiming, part2PrepMode: prepMode)
         // 题目来源要写清楚：拿示例题打印出来的提示词，和用户自己那道题的提示词并不完全一样
         // （题干、参考问句都不同）。不说明的话，他会以为自己在看真练时的那一份。

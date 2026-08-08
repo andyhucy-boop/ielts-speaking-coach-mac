@@ -317,14 +317,15 @@ final class QuestionPartSectionsTests: XCTestCase {
     func testTheSectionThatOpensByDefaultFollowsWhatTheUserAlreadyChose() throws {
         let sheet = try SourceGuard.memberBody(
             of: "private var expandedPartsNow", in: try SourceGuard.code(Self.sheet))
-        XCTAssertTrue(sheet.contains("preferredPart: partSelection"),
-                      "挑题弹层没有把用户选的那一档当成「默认展开哪一栏」的依据。"
-                          + "他选了 Part 3，列表却还是全折着的。"
-                          + "下一步：`preferredPart:` 传 `partSelection`"
-                          + "（停在「全部」时传 nil，那时确实没有偏好）。实际取到的是：\n\(sheet)")
-        XCTAssertTrue(sheet.contains("PracticePicker.allParts"),
-                      "「全部」那一档也被当成了一种偏好，那会去展开一个并不存在的 Part 0 栏。"
-                          + "实际取到的是：\n\(sheet)")
+        XCTAssertTrue(sheet.contains("preferredPart: partSelection.min()"),
+                      "挑题弹层没有把用户勾的那几个 Part 当成「默认展开哪一栏」的依据。"
+                          + "他勾了 Part 3，列表却还是全折着的。"
+                          + "下一步：`preferredPart: partSelection.min()`——"
+                          + "勾了两个以上时列表只有开场那一段，所以取最小的那个；"
+                          + "一个都没勾时 `min()` 是 nil，那时确实没有偏好。实际取到的是：\n\(sheet)")
+        XCTAssertFalse(sheet.contains("preferredPart: partSelection.first"),
+                       "`Set` 的 `first` 顺序不定，默认展开哪一栏会随运行而变。"
+                           + "下一步：用 `min()`。实际取到的是：\n\(sheet)")
 
         let flowCode = try SourceGuard.code(Self.flow)
         let flow = try SourceGuard.memberBody(of: "private var expandedPartsNow", in: flowCode)

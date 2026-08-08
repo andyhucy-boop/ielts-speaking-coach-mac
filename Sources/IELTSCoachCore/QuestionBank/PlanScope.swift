@@ -5,19 +5,21 @@ public enum PlanScope {
 
     // MARK: - 选题
 
+    /// - 全真模考（三个 Part 全选）：把三个 Part 的题**交错**排开，每一天仍然练那道题
+    ///   自己的 Part（`FocusPart.forSession` 那一侧保证）。
+    /// - 其余组合档（1+2、1+3、2+3）：只排**开场那个 Part** 的题。
+    ///
+    ///   这一条原先是 `part2And3` 的专属规则，理由是题库里 Part 3 的题干就是它所属
+    ///   cue card 的原文（`TopicQuestions.part3`），两批一起排会让同一张卡在计划里占掉两天。
+    ///   推广到全部组合档之后规则更整齐，也和 `FocusPart.forSession` 对得上：
+    ///   那边只在「题目正是这一档的第一段」时才让组合档生效，
+    ///   这里要是排了别的 Part 的题，那些天会被静默降级成单 Part——
+    ///   计划页写着「连着练」，实际每天只考一段。
+    /// - 单 Part：就是那个 Part 的题。
     public static func select(from questions: [Question], focusPart: FocusPart) -> [Question] {
-        switch focusPart {
-        case .part1: return questions.filter { $0.part == 1 }
-        case .part2: return questions.filter { $0.part == 2 }
-        case .part3: return questions.filter { $0.part == 3 }
-        // 「Part 2 + Part 3 连着练」排的就是 Part 2 的那些 cue card，和 `.part2` 挑的是同一批题。
-        // **两档的区别不在挑哪些题，而在怎么练那一道题**：这一档每天那道 cue card 做完两分钟
-        // 陈述之后，会接着做一段 Part 3 讨论（`ExaminerPrompt` 的 `.part2And3` 规则）。
-        // Part 3 那批题在这里刻意不排：它们的题干本来就是 Part 2 cue card 的原文，
-        // 排进来会让同一张卡在计划里出现两天。
-        case .part2And3: return questions.filter { $0.part == 2 }
-        case .fullMock: return interleaveByPart(questions)
-        }
+        if focusPart == .fullMock { return interleaveByPart(questions) }
+        let opening = focusPart.openingPart.rawValue
+        return questions.filter { $0.part == opening }
     }
 
     /// 全真模考：按 Part 1 → Part 2 → Part 3 轮转交错，各 Part 内部保持题库原有顺序。
@@ -92,16 +94,34 @@ public enum PlanScope {
             + "下一步：把周期改成 \(supported) 天中的一档。"
     }
 
-    /// 重点 Part 的中文说明。界面与 Core 的错误信息共用这一份，避免两处文案漂移。
-    public static func label(for focusPart: FocusPart) -> String {
-        switch focusPart {
-        case .part1: return "Part 1（日常话题问答）"
-        case .part2: return "Part 2（个人陈述）"
-        case .part3: return "Part 3（深入讨论）"
-        // 名字得让人一眼看懂这一档到底会发生什么：先做哪一段、再做哪一段。
-        // 只写「Part 2 + Part 3」的话，用户分不清它和「全真模考」差在哪儿。
-        case .part2And3: return "Part 2 + Part 3 连着练（先两分钟陈述，再接着讨论）"
-        case .fullMock: return "全真模考（Part 1 + 2 + 3）"
+    /// 一个 Part 自己那句话。组合档的名字由它们拼出来，**不另写一份**：
+    /// 两处各写各的话，「Part 2（个人陈述）」和「Part 2 + Part 3 连着练（先两分钟陈述…）」
+    /// 迟早会用两种说法称呼同一段考试。
+    private static func phrase(for part: ExamPart) -> String {
+        switch part {
+        case .one: return "日常话题问答"
+        case .two: return "两分钟陈述"
+        case .three: return "深入讨论"
         }
+    }
+
+    /// 重点 Part 的中文说明。界面与 Core 的错误信息共用这一份，避免两处文案漂移。
+    ///
+    /// 名字得让人一眼看懂这一档到底会发生什么：先做哪一段、再做哪一段。
+    /// 只写「Part 2 + Part 3」的话，用户分不清它和「全真模考」差在哪儿。
+    public static func label(for focusPart: FocusPart) -> String {
+        if focusPart == .fullMock { return "全真模考（Part 1 + 2 + 3）" }
+        let names = focusPart.parts.map(\.englishName).joined(separator: " + ")
+        guard focusPart.isCombined else {
+            // 单 Part 沿用原来那三句，一个字都没动——它们出现在学习计划页、
+            // 生成失败的报错、以及开练弹层那句默认档位说明里。
+            switch focusPart.openingPart {
+            case .one: return "Part 1（日常话题问答）"
+            case .two: return "Part 2（个人陈述）"
+            case .three: return "Part 3（深入讨论）"
+            }
+        }
+        let steps = focusPart.parts.map(phrase(for:)).joined(separator: "，再接着")
+        return "\(names) 连着练（先\(steps)）"
     }
 }

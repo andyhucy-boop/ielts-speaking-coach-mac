@@ -310,19 +310,20 @@ final class QuestionBankViewTests: XCTestCase {
                 + "而这里一共就四个选项，分段控件一眼就能看全、一下就能切。"
                 + "下一步：把 `.pickerStyle(.segmented)` 放回去。实际取到的是：\n\(bank)")
 
-        // 四个档位（0 是「全部」，1/2/3 是三个 Part）与开练弹层那排按钮**同一个出处**：
-        // `PracticePicker.partOptions` / `segmentTitle`。App 里现在有两处「按 Part 筛」，
-        // 各写各的话，一处叫「全部」另一处叫「不限」、或者一处四档另一处三档，
-        // 而这不会有任何编译错误。档位本身少一个由
-        // `PracticePickerTests.testTheFourSegmentsAreAllPlusThreeParts` 钉着。
+        // 四个档位（0 是「全部」，1/2/3 是三个 Part）走 `QuestionPartFilter` 那一份，
+        // **不许在这一页里另写一遍**：写死的话，改了档位这一页不跟。
+        //
+        // 它从前借的是开练弹层那份常量。多选 Part 之后那边已经不是单选分段控件了
+        //（三个可以多勾的勾选框），两者管的是两件不同的事，所以各自一份出处，
+        // 但每一份都只有一个出处。
         XCTAssertTrue(
-            bank.contains("PracticePicker.partOptions")
-                && bank.contains("PracticePicker.segmentTitle(forPart:"),
-            "这一页的 Part 档位不是从 `PracticePicker` 来的，而是自己又写了一份。"
-                + "两处「按 Part 筛」迟早会长成两个样子（措辞不同、档数不同），"
+            bank.contains("QuestionPartFilter.partOptions")
+                && bank.contains("QuestionPartFilter.segmentTitle(forPart:"),
+            "这一页的 Part 档位不是从 `QuestionPartFilter` 来的，而是自己又写了一份。"
+                + "档位一旦散在两处，迟早会长成两个样子（措辞不同、档数不同），"
                 + "而这不会有任何编译错误。下一步："
-                + "`ForEach(PracticePicker.partOptions, id: \\.self) { part in "
-                + "Text(PracticePicker.segmentTitle(forPart: part)).tag(part) }`。"
+                + "`ForEach(QuestionPartFilter.partOptions, id: \\.self) { part in "
+                + "Text(QuestionPartFilter.segmentTitle(forPart: part)).tag(part) }`。"
                 + "实际取到的是：\n\(bank)")
         XCTAssertTrue(bank.contains(".tag(part)"),
                       "档位没有绑 tag，分段控件会看着能点、列表纹丝不动"
@@ -332,8 +333,8 @@ final class QuestionBankViewTests: XCTestCase {
         // 「全部」这一档也不许在这一页里另写一个 0：写死的话，`allParts` 改了这里不跟。
         let view = try Self.viewCode()
         XCTAssertFalse(view.contains("partSelection = 0") || view.contains("partSelection == 0"),
-                       "这一页把「全部」写成了字面的 0。下一步：用 `PracticePicker.allParts`——"
-                           + "两处 Part 筛选的「全部」得是同一个值。")
+                       "这一页把「全部」写成了字面的 0。下一步：用 `QuestionPartFilter.allParts`——"
+                           + "「全部」这一档只能有一个出处。")
     }
 
     /// 话题卡片那一列——这一页的正文，用户来这儿就是为了看它。

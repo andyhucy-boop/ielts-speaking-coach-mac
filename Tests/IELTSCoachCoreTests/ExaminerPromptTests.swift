@@ -512,6 +512,38 @@ final class ExaminerPromptTests: XCTestCase {
                            + "一句 Describe 摆在「今天的题目」底下，本身就在诱导它当成 Part 2 任务：\n\(text)")
     }
 
+    /// **一道 Part 3 的题，无论这一场是哪一档考法，题干都不许原样摆出来。**
+    ///
+    /// 那个 `Describe` 的诱导性跟考法无关，只跟题本身有关：题库里 Part 3 的题干就是
+    /// 它所属 cue card 的原文（`TopicQuestions.part3`）。判据写成「这一场是不是单练
+    /// Part 3」的话，同一道题被排进全真模考、或者从 MCP 那边被指成组合档时，
+    /// `Today's question (Part 3): Describe a law…` 又会回到提示词里——
+    /// 而那正是用户真机上翻车的那一行。
+    func testAPart3QuestionIsNeverPrintedRawNoMatterWhichModeRunsIt() {
+        for focus in [FocusPart.part3, .part1And3, .fullMock] {
+            let text = ExaminerPrompt.build(setup: SessionSetup(
+                question: part3AsInTheRealBank, focusPart: focus, durationMinutes: 6, goal: ""))
+            XCTAssertTrue(text.contains("Part 3 theme: a law on environmental protection"),
+                          "\(focus.rawValue) 里那道 Part 3 题没有被改写成话题短语：\n\(text)")
+            XCTAssertFalse(text.contains("Today's question (Part 3"),
+                           "\(focus.rawValue) 把 Part 3 的题干原样摆成了「今天的题目」——"
+                               + "一句 Describe 摆在那儿本身就在诱导考官出 cue card：\n\(text)")
+            XCTAssertFalse(text.contains("\nDescribe a law on environmental protection"),
+                           "\(focus.rawValue) 的提示词里还留着那张卡的原句：\n\(text)")
+        }
+    }
+
+    /// 组合档里那道 Part 3 的题只够一段用，别的几段必须交代清楚由考官自选。
+    /// 不说的话，考官要么在 Part 1 里把这个抽象话题问一遍，要么整场只做 Part 3。
+    func testACombinedSessionAnchoredOnAPart3QuestionSaysWhoSuppliesTheOtherParts() {
+        let text = ExaminerPrompt.build(setup: SessionSetup(
+            question: part3AsInTheRealBank, focusPart: .part1And3, durationMinutes: 10, goal: ""))
+        XCTAssertTrue(text.contains("This session also runs Part 1"),
+                      "没交代这一场还有 Part 1：\n\(text)")
+        XCTAssertTrue(text.contains("choose your own"),
+                      "没说清 Part 1 的材料由谁出：\n\(text)")
+    }
+
     /// 两种反馈时机下都得成立——`.immediate` 那一支的开场白不一样，
     /// 别让「只在默认设置下才不出 cue card」溜过去。
     func testPart3AloneHoldsUnderEveryFeedbackTiming() {
@@ -560,13 +592,80 @@ final class ExaminerPromptTests: XCTestCase {
                       "这一档里 Part 3 确实接在 Part 2 之后，起手规则就该这么写：\n\(text)")
     }
 
-    /// 题库里一张 cue card 底下挂的是 `You should say` 的提示点，**没有** Part 3 的参考问句
-    /// （那是另一道题）。所以这一档必须明说 Part 3 那一半要全部临场编，
-    /// 否则考官会去找一份根本不存在的清单，或者干脆把 cue card 的提示点当成讨论题问一遍。
-    func testPart2And3SaysThePart3HalfHasNoReferenceQuestions() {
-        let text = part2And3Text()
-        XCTAssertTrue(text.contains("You are given no reference questions for the Part 3 half"),
-                      "没交代 Part 3 那一半没有参考问句：\n\(text)")
+    // MARK: - 连着练时，那张卡自己那一组 Part 3 追问
+    //
+    // 用户原话：「我练 Part two 的时候，顺带也把对应的 Part three 问题一起给练了。」
+    // 注意「对应的」三个字：真实考试里 Part 3 就是紧接着**这张卡**问下来的。
+    //
+    // 上一轮这里判断错了：给这一档写死了一句「Part 3 那一半没有参考问句，全部临场编」，
+    // 前提是「题库里一张 cue card 底下只有 You should say 提示点」。
+    // 题库重建模之后这个前提已经不成立——每张卡都有一条对应的 Part 3 题（`LinkedPart3`）。
+
+    /// 那张卡自己的 Part 3 追问必须**原样进提示词**。
+    ///
+    /// 把 `part3ReferenceBlock` 里那几行 followups 去掉、或者把 `part3Reference`
+    /// 在 `build` 里忽略掉，这条就红。
+    func testPart2And3CarriesTheCueCardsOwnPart3QuestionsIntoThePrompt() {
+        let text = ExaminerPrompt.build(setup: SessionSetup(
+            question: question, focusPart: .part2And3, durationMinutes: 9, goal: "",
+            part3Reference: pairedPart3))
+
+        for reference in pairedPart3.followups {
+            XCTAssertTrue(text.contains("- \(reference)"),
+                          "题库里这张卡自己的 Part 3 追问「\(reference)」没进提示词——"
+                              + "考官只能凭空编，而题库里现成的真题被扔掉了：\n\(text)")
+        }
+        XCTAssertTrue(text.contains("the question bank attaches to THIS cue card"),
+                      "没说清这几问是**这张卡**的，考官会以为它们是随便一组讨论题：\n\(text)")
+        XCTAssertFalse(text.contains("You are given no reference questions for the Part 3 half"),
+                       "那句「Part 3 那一半没有参考问句」还在，和刚发下去的那一组直接打架：\n\(text)")
+    }
+
+    /// **配不上时不许沉默**（铁律：禁止静默失败）。
+    ///
+    /// 题库里没有这张卡对应的 Part 3 题（用户自己用 CSV 加的卡、或者导入残缺）时，
+    /// 提示词里既没有问句、也没有「你得自己编」这句话的话，考官最顺手的做法是
+    /// 把 cue card 的四条提示点当成讨论题再问一遍——那还是 Part 2。
+    func testPart2And3SaysSoOutLoudWhenNoPairedPart3QuestionsExist() {
+        let text = part2And3Text()      // part3Reference 是 nil
+        XCTAssertTrue(text.contains("No Part 3 reference questions were found for this cue card"),
+                      "配不上却一个字都不说：\n\(text)")
+        XCTAssertTrue(text.contains("Improvise every Part 3 question yourself"),
+                      "只说了「没有」，没说「那你该怎么办」：\n\(text)")
+    }
+
+    /// 全真模考里同样要带上——那一场里 Part 2 和 Part 3 都在。
+    func testAFullMockAnchoredOnACueCardAlsoGetsThatCardsPart3Questions() {
+        let text = ExaminerPrompt.build(setup: SessionSetup(
+            question: question, focusPart: .fullMock, durationMinutes: 6, goal: "",
+            part3Reference: pairedPart3))
+        XCTAssertTrue(text.contains("- \(pairedPart3.followups[0])"),
+                      "全真模考没把这张卡自己的 Part 3 追问带上：\n\(text)")
+    }
+
+    /// **这一场没有 Part 3 时，一个讨论题都不许发下去。**
+    ///
+    /// 发了的话，单练 Part 2 的考官手里会多出一组抽象讨论题——
+    /// 它最可能拿来当那句「收尾一问」，于是两分钟独白后面接上一道 Part 3 的题。
+    func testASessionWithoutPart3NeverGetsThoseQuestions() {
+        for focus in [FocusPart.part1, .part2, .part1And2] {
+            let text = ExaminerPrompt.build(setup: SessionSetup(
+                question: question, focusPart: focus, durationMinutes: 4, goal: "",
+                part3Reference: pairedPart3))
+            XCTAssertFalse(text.contains(pairedPart3.followups[0]),
+                           "\(focus.rawValue) 这一场没有 Part 3，却发了 Part 3 的讨论题：\n\(text)")
+            XCTAssertFalse(text.contains("No Part 3 reference questions were found"),
+                           "\(focus.rawValue) 这一场没有 Part 3，却在解释「配不上 Part 3 追问」：\n\(text)")
+        }
+    }
+
+    /// 一道**真实形状**的配对 Part 3 题：题干与 topic 都等于那张 cue card 的原文
+    /// （`TopicQuestions.part3`），底下挂着那一组真实追问。
+    private var pairedPart3: Question {
+        TopicQuestions.part3(
+            cueCard: question.prompt,
+            prompts: ["What kinds of skills are people often interested in learning?",
+                      "Is it necessary to continue learning after finishing formal education?"])
     }
 
     /// **这一档不许带上「这一场只有 Part 3」那段话**——它这一场恰恰是有 Part 2 的。

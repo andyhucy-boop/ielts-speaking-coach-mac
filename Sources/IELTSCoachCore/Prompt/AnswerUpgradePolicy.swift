@@ -10,18 +10,14 @@ public enum AnswerUpgradePolicy {
     private static let part3Guidance =
         "Part 3：回答应比Part 1更抽象、更充分。练习目标通常为4至7句、约60至120词；形成观点、原因、解释或例子，并可加入对比、条件或让步。篇幅服从问题复杂度，不机械凑词数。"
 
-    private static let partGuidance: [String: String] = [
-        "Part 1": part1Guidance,
-        "Part 2": part2Guidance,
-        "Part 3": part3Guidance,
-        // 「Part 2 + Part 3 连着练」这一场里两种题型都出现过，复盘要按各自的标准改各自那几题。
-        // **两段原文逐字拼起来，不另写一份**：这三段是从上游 desktop/answer-upgrade-policy.mjs
-        // 移植来的，措辞不许改写；另写一份「综合标准」等于凭空发明第四套长度要求。
-        //
-        // 不走 fallbackRule 是因为那一句只说「先根据问题所属Part选择对应长度」，
-        // 三个 Part 各自的目标句数、词数一个都没给——而这一场恰恰知道自己只会出现哪两种。
-        FocusPart.part2And3.rawValue: "\(part2Guidance)\n\n\(part3Guidance)"
-    ]
+    /// 一个 Part 自己那段长度标准。**逐字移植自上游，不许改写措辞。**
+    private static func guidance(for part: ExamPart) -> String {
+        switch part {
+        case .one: return part1Guidance
+        case .two: return part2Guidance
+        case .three: return part3Guidance
+        }
+    }
 
     private static let fallbackRule =
         "先根据问题所属Part选择对应长度：Part 1简短直接；Part 2形成最多两分钟的长答；Part 3进行较充分的解释与论证。"
@@ -45,13 +41,26 @@ public enum AnswerUpgradePolicy {
     /// 另外这段规则文本逐字移植自上游 desktop/answer-upgrade-policy.mjs，
     /// 换参数类型没有必要牵动那段不能改写措辞的文本。
     ///
-    /// **「Part 2 + Part 3」那一档的键写成 `FocusPart.part2And3.rawValue` 而不是字面量**：
-    /// 参数类型虽然是 String，实际传进来的一直是某个 `FocusPart` 的 raw value
-    /// （`ReviewRequestPrompt.build` 那一行）。键与 raw value 各写一份的话，
-    /// 改了枚举的 raw value 之后这一档会**静默**落回 fallbackRule——
+    /// **组合档把各段原文逐字拼起来，不另写一份**：另写一份「综合标准」等于凭空发明
+    /// 第四套长度要求，而这三段是不许改写措辞的移植文本。
+    ///
+    /// 走的是 `FocusPart(rawValue:)` 而不是一张手写的字典：参数类型虽然是 String，
+    /// 实际传进来的一直是某个 `FocusPart` 的 raw value（`ReviewRequestPrompt.build` 那一行）。
+    /// 手写字典的键与 raw value 各写一份的话，加一档组合就会**静默**落回 fallbackRule——
     /// 复盘照样生成、照样归档，只是那一场的长度标准悄悄换成了通用兜底。
+    ///
+    /// **`"full mock"` 仍然走 fallbackRule。** 上游从来没有为全真模考定过长度标准，
+    /// 而 fallbackRule 那句话本身就把三个 Part 都提到了（只是没给数字）。
+    /// 改它是另一件事：复盘的长度要求会当场变，得单独验一遍。
     public static func guidance(part: String) -> String {
-        let partRule = partGuidance[part] ?? fallbackRule
+        let partRule = rule(forFocusPartRawValue: part)
         return "\(partRule)\n\n\(sharedRules)"
+    }
+
+    private static func rule(forFocusPartRawValue raw: String) -> String {
+        guard let focusPart = FocusPart(rawValue: raw), focusPart != .fullMock else {
+            return fallbackRule
+        }
+        return focusPart.parts.map(guidance(for:)).joined(separator: "\n\n")
     }
 }

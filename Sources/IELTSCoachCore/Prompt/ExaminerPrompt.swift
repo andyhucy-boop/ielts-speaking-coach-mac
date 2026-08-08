@@ -7,16 +7,27 @@ public struct SessionSetup: Equatable, Sendable {
     public let goal: String               // 可为空
     public let feedbackTiming: FeedbackTiming
     public let part2PrepMode: Part2PrepMode
+    /// 这一场同时有 Part 2 和 Part 3、而题目是一张 cue card 时，
+    /// **这张卡自己那一组 Part 3 追问**（`LinkedPart3.reference`）。
+    ///
+    /// 配对靠 `Part 3 题的 topic == cue card 的 prompt`，在用户本机题库上 99/99 全对得上。
+    /// nil 有两种含义，提示词那边分得清、也都会明说（`build`）：题库里配不上，
+    /// 或者这一场根本没有 Part 3。
+    public let part3Reference: Question?
 
+    /// `part3Reference` **带默认值且排在最后**：这是 Phase 追加的字段，
+    /// 前面阶段的调用点（复训、命令行、今日训练页、各处测试）一处都不用改。
     public init(question: Question, focusPart: FocusPart, durationMinutes: Int, goal: String,
                 feedbackTiming: FeedbackTiming = .deferred,
-                part2PrepMode: Part2PrepMode = .countdown) {
+                part2PrepMode: Part2PrepMode = .countdown,
+                part3Reference: Question? = nil) {
         self.question = question
         self.focusPart = focusPart
         self.durationMinutes = durationMinutes
         self.goal = goal
         self.feedbackTiming = feedbackTiming
         self.part2PrepMode = part2PrepMode
+        self.part3Reference = part3Reference
     }
 }
 
@@ -362,39 +373,62 @@ public enum ExaminerPrompt {
         """
     }
 
+    /// 这一场的 Part 3 从哪儿起手。**三种场合的起手句不能共用一句话。**
+    private enum Part3Opening {
+        /// 前面刚做完一段 Part 2（全真模考、以及任何同时含 Part 2 与 Part 3 的组合）。
+        case afterPart2
+        /// 讨论主题已经在题目那一段里给出来了（题目本身就是一道 Part 3 题）。
+        case themeSupplied
+        /// 这一场有 Part 3，但没有任何 Part 3 材料可给（例如只勾了 Part 1 + Part 3）。
+        case noThemeSupplied
+    }
+
     /// Part 3 的规则正文。
     ///
-    /// - Parameter afterPart2: 这一场的 Part 3 前面**真的**刚做完一段 Part 2 吗
-    ///   （全真模考、「Part 2 + Part 3 连着练」是 true；单练 Part 3 是 false）。
+    /// 起手规则按场合分三支，理由是同一句话在别的场合会被读歪：
     ///
-    /// 这个参数存在的唯一理由，就是那句起手规则不能两种场合共用一句话：
-    /// 在有 Part 2 的场合它是「接着刚才那张卡继续」，在单练 Part 3 的场合，
-    /// 同一句话会被读成「那就先把 Part 2 补出来」——实测就是这么翻车的。
-    /// - Note: 起手那一条**两种场合都要求「第一问已经是抽象讨论」**。
-    ///   在这之前，单练那一支写的是 "open with a question about it"——只说了「问它」，
-    ///   没说「问到什么层级」，而模型手里那个「关于购物的问题」最顺手的一句就是
+    /// - `.afterPart2`：「接着刚才那张卡继续」。
+    /// - `.themeSupplied`：主题在下面给了。**这一支的措辞是被实测逼出来的**——
+    ///   原先写的是 "open with a question about it"，只说了「问它」，没说「问到什么层级」，
+    ///   而模型手里那个「关于购物的问题」最顺手的一句就是
     ///   `Can you describe a place you enjoy spending time in?`（用户实测的原句）。
-    ///   接在 Part 2 后面那一支同样要说死：那里的「先从刚才的话题起手」很容易被做成
-    ///   「再追问一遍他刚才讲的那件事」，那还是 Part 2 的尾巴，不是 Part 3 的开头。
-    private static func part3Rules(afterPart2: Bool) -> String {
-        let opening = afterPart2
-            ? "- Start from the Part 2 theme you have just finished, then move the discussion to "
-                + "a more abstract, general level. Your very first Part 3 question must already be "
-                + "above the personal level — ask about people in general, about society, about "
-                + "causes or consequences — not one more question about what the learner personally "
-                + "did or likes."
-            : "- The discussion theme has already been chosen for you and is supplied below. "
-                + "Your very first question must already be an abstract, general, society-level "
-                + "question about that theme — about people in general, groups, trends, causes, "
-                + "consequences, comparisons, advantages and disadvantages. Do NOT warm up with a "
-                + "personal question about the learner's own experience of the theme, and do NOT "
-                + "ask them to describe anything."
+    /// - `.noThemeSupplied`：一个字的材料都没有。**不许沉默**：不写这一支的话，
+    ///   考官读到的是「主题已经给你了，就在下面」，而下面根本没有 Part 3 的主题——
+    ///   它会去找一个不存在的东西，然后自己发明一套开场。
+    ///
+    /// 三支都要求「第一问已经是抽象讨论」：`.afterPart2` 那句「先从刚才的话题起手」
+    /// 很容易被做成「再追问一遍他刚才讲的那件事」，那还是 Part 2 的尾巴。
+    private static func part3Rules(opening: Part3Opening) -> String {
+        let openingRule: String
+        switch opening {
+        case .afterPart2:
+            openingRule = "- Start from the Part 2 theme you have just finished, then move the "
+                + "discussion to a more abstract, general level. Your very first Part 3 question "
+                + "must already be above the personal level — ask about people in general, about "
+                + "society, about causes or consequences — not one more question about what the "
+                + "learner personally did or likes."
+        case .themeSupplied:
+            openingRule = "- The discussion theme has already been chosen for you and is supplied "
+                + "below. Your very first question must already be an abstract, general, "
+                + "society-level question about that theme — about people in general, groups, "
+                + "trends, causes, consequences, comparisons, advantages and disadvantages. "
+                + "Do NOT warm up with a personal question about the learner's own experience of "
+                + "the theme, and do NOT ask them to describe anything."
+        case .noThemeSupplied:
+            openingRule = "- No Part 3 discussion theme was supplied for this session. Choose one "
+                + "yourself out of the everyday topics you have just covered with this learner, "
+                + "and say in one short sentence which topic you are moving on to. Your very first "
+                + "question must already be an abstract, general, society-level question about it "
+                + "— about people in general, groups, trends, causes, consequences, comparisons, "
+                + "advantages and disadvantages. Do NOT warm up with a personal question about the "
+                + "learner's own experience, and do NOT ask them to describe anything."
+        }
         return """
         \(part3Primer)
 
         Section rules (Part 3):
         - Ask 4–8 questions in total.
-        \(opening)
+        \(openingRule)
         \(improvisationRules)
         - Some of your questions must be improvised on the spot from the learner's previous answer, \
         not taken from the reference list at all.
@@ -408,40 +442,46 @@ public enum ExaminerPrompt {
         """
     }
 
-    // 用 switch 而非字典 + 强制解包：FocusPart 加 case 却忘了给规则时，
-    // 编译期就会因为 switch 不再穷尽而报错，而不是等到运行时才 crash。
-    private static func partRules(for focusPart: FocusPart, part2PrepMode: Part2PrepMode) -> String {
-        switch focusPart {
-        case .part1:
+    /// **一个 Part 的规则正文只写一遍。** 用 `switch ExamPart` 而不是字典 + 强制解包：
+    /// 将来给某个 Part 补规则却漏了一个，编译期就会因为 switch 不再穷尽而报错。
+    ///
+    /// 这里 `switch` 的是 `ExamPart`（永远三个取值），不再是「这一场按哪套考法跑」。
+    /// 从前那个 switch 有五个分支，其中三个分支要把别的分支的正文再拼一遍；
+    /// 支持任意组合之后那会变成七个分支——同一段文本抄七遍，改的时候必然漏。
+    private static func sectionRules(for part: ExamPart, setup: SessionSetup) -> String {
+        switch part {
+        case .one:
             return part1Rules
-        case .part2:
-            return part2Rules(part2PrepMode: part2PrepMode)
-        case .part3:
-            return """
-            \(part3OnlyFraming)
+        case .two:
+            return part2Rules(part2PrepMode: setup.part2PrepMode)
+        case .three:
+            return part3Rules(opening: part3Opening(for: setup))
+        }
+    }
 
-            \(part3Rules(afterPart2: false))
-            """
-        case .part2And3:
-            return """
-            Section rules (Part 2 + Part 3, run back to back):
-            - This session is a Part 2 long turn followed immediately by a Part 3 discussion, \
-            exactly as they follow each other in the real exam. There is no Part 1 in it.
-            - Do not deliver a review, summary, or score between the two parts.
-              This does NOT cancel the per-answer correction rule stated above, if one is in effect.
-            - The question supplied below is the Part 2 cue card. The Part 3 discussion that \
-            follows must stay on that same theme.
-            - When the Part 2 rounding-off question is done, mark the change of gear in one short \
-            sentence (for example "Now let's talk more generally about …"), then begin Part 3.
-            - You are given no reference questions for the Part 3 half of this session: improvise \
-            every one of them from the cue card theme and from what the learner said in the long turn.
-            - Each part keeps its own pacing and questioning rules, spelled out here:
+    /// 这一场的 Part 3 该从哪儿起手，由**事实**决定，不由考法的名字决定：
+    /// 前面有没有真的跑过一段 Part 2、题目那一段里到底有没有给出 Part 3 的主题。
+    private static func part3Opening(for setup: SessionSetup) -> Part3Opening {
+        if setup.focusPart.includes(.two) { return .afterPart2 }
+        // 题目本身是一道 Part 3 题时，题目块给的就是讨论主题（`questionBlock`）。
+        return setup.question.part == 3 ? .themeSupplied : .noThemeSupplied
+    }
 
-            \(part2Rules(part2PrepMode: part2PrepMode))
+    /// 一场练习按顺序跑哪几段规则。
+    ///
+    /// 组合档不再各写一份：`focusPart.parts` 是升序的，照着它把各段拼起来就是真实考试的顺序。
+    private static func partRules(for setup: SessionSetup) -> String {
+        var blocks: [String] = []
+        if let framing = sessionFraming(for: setup) { blocks.append(framing) }
+        blocks.append(contentsOf: setup.focusPart.parts.map { sectionRules(for: $0, setup: setup) })
+        return blocks.joined(separator: "\n\n")
+    }
 
-            \(part3Rules(afterPart2: true))
-            """
-        case .fullMock:
+    /// 规则正文**之前**那一段：这一场到底是什么形状。单 Part 1 / 单 Part 2 不需要
+    /// （它们的 section rules 本身已经说清了），其余三种都需要。
+    private static func sessionFraming(for setup: SessionSetup) -> String? {
+        if setup.focusPart == .part3 { return part3OnlyFraming }
+        if setup.focusPart == .fullMock {
             return """
             Section rules (full mock):
             - Run Part 1, Part 2, and Part 3 in order. Do not deliver a review, summary, or score between parts.
@@ -449,14 +489,80 @@ public enum ExaminerPrompt {
             - The question supplied below belongs to one of the three parts. Choose your own material \
             for the other two, staying on a related theme.
             - Each part keeps its own pacing and questioning rules, spelled out here:
-
-            \(part1Rules)
-
-            \(part2Rules(part2PrepMode: part2PrepMode))
-
-            \(part3Rules(afterPart2: true))
             """
         }
+        guard setup.focusPart.isCombined else { return nil }
+        return combinedFraming(for: setup)
+    }
+
+    /// 组合档（1+2、1+3、2+3）那一段开场白。**一份模板，按 `parts` 生成**——
+    /// 三档各写一份的话，改了其中一句，另外两档就成了另一种考法。
+    ///
+    /// 逐字保留了「Part 2 + Part 3」原有的那几句（那是实测调出来的措辞）：
+    /// 标题、"a Part 2 long turn followed immediately by a Part 3 discussion"、
+    /// "There is no Part 1 in it."、以及两段之间那句换挡指令。
+    ///
+    /// **原先那一句「Part 3 那一半没有参考问句，全部临场编」已经删掉**：
+    /// 题库重建模之后，每张 cue card 都有它自己那组 Part 3 追问（`LinkedPart3`），
+    /// 现在会随题目一起发下去。留着那句话等于让考官无视手里已有的真题。
+    private static func combinedFraming(for setup: SessionSetup) -> String {
+        let focusPart = setup.focusPart
+        let heading = focusPart.parts.map(\.englishName).joined(separator: " + ")
+        let shape = "a " + focusPart.parts.map(sectionPhrase(for:))
+            .joined(separator: " followed immediately by a ")
+        let missing = ExamPart.allCases.filter { !focusPart.includes($0) }
+            .map { "There is no \($0.englishName) in it." }
+            .joined(separator: " ")
+        return """
+        Section rules (\(heading), run back to back):
+        - This session is \(shape), exactly as they follow each other in the real exam. \(missing)
+        - Do not deliver a review, summary, or score between the parts.
+          This does NOT cancel the per-answer correction rule stated above, if one is in effect.
+        - \(suppliedMaterialRule(for: setup))
+        - When one part is finished, mark the change of gear in one short sentence \
+        (for example \(gearChangeExample(for: focusPart))), then begin the next part.
+        - Each part keeps its own pacing and questioning rules, spelled out here:
+        """
+    }
+
+    /// 换挡那句话的例句。**不能所有组合共用一句**：
+    /// 「Now let's talk more generally about …」是进 Part 3 的说法，
+    /// 用在 Part 1 → Part 2 的接口上，会把考官引去开一段抽象讨论，而下一段其实是 cue card。
+    private static func gearChangeExample(for focusPart: FocusPart) -> String {
+        focusPart.includes(.three)
+            ? "\"Now let's talk more generally about …\""
+            : "\"Now I'd like you to speak about a topic for one to two minutes.\""
+    }
+
+    /// 一段考试在组合档开场白里怎么称呼。
+    private static func sectionPhrase(for part: ExamPart) -> String {
+        switch part {
+        case .one: return "Part 1 interview"
+        case .two: return "Part 2 long turn"
+        case .three: return "Part 3 discussion"
+        }
+    }
+
+    /// 组合档里，下面给的那道题算哪一段的材料、别的几段怎么办。
+    ///
+    /// **必须说死。** 一场里有两三段，而题目只有一道；不交代清楚的话，考官要么把这道题
+    /// 在每一段里各问一遍，要么干脆整场只考它所属的那一段。
+    private static func suppliedMaterialRule(for setup: SessionSetup) -> String {
+        guard let anchor = ExamPart(questionPart: setup.question.part),
+              setup.focusPart.includes(anchor) else {
+            // 走不到这里（`FocusPart.forExplicitSelection` 已经挡掉了题目不属于任何一段的组合），
+            // 但真走到了也不许沉默：说清没有材料，让考官三段全部自选。
+            return "No question material was supplied for any part of this session: choose your "
+                + "own material for every part, keeping all of them on one related theme."
+        }
+        if anchor == .two && setup.focusPart.includes(.three) {
+            return "The question supplied below is the Part 2 cue card. The Part 3 discussion "
+                + "must stay on that same theme."
+        }
+        let others = setup.focusPart.parts.filter { $0 != anchor }
+            .map(\.englishName).joined(separator: " and ")
+        return "The question supplied below is the material for \(anchor.englishName). "
+            + "Choose your own material for \(others), staying on a related theme."
     }
 
     private static let ending = """
@@ -509,29 +615,71 @@ public enum ExaminerPrompt {
     /// 题库里 Part 3 的题干就等于它所属 cue card 的原文（见 `TopicQuestions.part3`），
     /// 所以这一档必须先把题干改写成话题短语（`DiscussionTheme.phrase`）再往下传——
     /// 让提示词里根本不出现那张卡的原句，而不是出现之后再否定它。
+    /// 判据从「这一场是哪一档考法」改成了「**这道题是哪个 Part 的题**」。
+    ///
+    /// 原先只有单练 Part 3 这一档会把题干改写成话题短语，别的档照原样摆出去。
+    /// 可那个 `Describe` 的诱导性跟考法无关，只跟题本身有关：一道 Part 3 题被排进
+    /// 全真模考、或者从 MCP 那边指定成组合档的题目时，同一句话照样在诱导考官出 cue card。
     private static func questionBlock(for setup: SessionSetup) -> String {
-        switch setup.focusPart {
-        case .part3:
-            return """
-            Part 3 theme: \(part3Theme(for: setup.question))
-
-            That line is the background theme this set of discussion questions belongs to; \
-            it is NOT a task, NOT a cue card, and the learner is NOT being asked to describe it. \
-            Do not read it out as an instruction. Your first question is an abstract Part 3 \
-            discussion question about it.
-            """
-        case .part2And3:
+        if setup.question.part == 3 { return part3ThemeBlock(for: setup) }
+        if setup.question.part == 2 && setup.focusPart.includes(.three) {
             return """
             Today's Part 2 cue card (topic: \(setup.question.topic)). \
             Present this one as the Part 2 task, then keep the Part 3 discussion on the same theme:
             \(setup.question.prompt)
             """
-        case .part1, .part2, .fullMock:
+        }
+        return """
+        Today's question (Part \(setup.question.part), topic: \(setup.question.topic)):
+        \(setup.question.prompt)
+        """
+    }
+
+    private static func part3ThemeBlock(for setup: SessionSetup) -> String {
+        var text = """
+        Part 3 theme: \(part3Theme(for: setup.question))
+
+        That line is the background theme this set of discussion questions belongs to; \
+        it is NOT a task, NOT a cue card, and the learner is NOT being asked to describe it. \
+        Do not read it out as an instruction. Your first question is an abstract Part 3 \
+        discussion question about it.
+        """
+        // 组合档里这道题只够一段用，别的几段的材料得考官自己挑——不说的话，
+        // 它要么在 Part 1 里把这个抽象话题问一遍，要么干脆整场只做 Part 3。
+        let others = setup.focusPart.parts.filter { $0 != .three }
+        if !others.isEmpty {
+            text += "\nThis session also runs \(others.map(\.englishName).joined(separator: " and "))"
+                + ", and no material was supplied for \(others.count == 1 ? "it" : "them"): "
+                + "choose your own, staying on a related theme."
+        }
+        return text
+    }
+
+    /// 这张 cue card 自己那一组 Part 3 追问。**这一场没有 Part 3、或者题目不是一张卡时返回 nil。**
+    ///
+    /// 上一轮这里写死了一句「Part 3 那一半没有参考问句，全部临场编」，前提是
+    /// 「题库里一张 cue card 底下只有 You should say 提示点」。题库重建模之后这个前提没了：
+    /// 每张卡都有一条对应的 Part 3 题（`LinkedPart3`），底下挂着真实追问。
+    ///
+    /// **配不上时必须明说**（铁律 5）。不说的话，考官读到的是一份既没有 Part 3 问句、
+    /// 也没有「你得自己编」这句话的提示词，最顺手的做法是把 cue card 的四条提示点
+    /// 当成讨论题再问一遍——那还是 Part 2。
+    private static func part3ReferenceBlock(for setup: SessionSetup) -> String? {
+        guard setup.focusPart.includes(.three), setup.question.part == 2 else { return nil }
+        guard let reference = setup.part3Reference, !reference.followups.isEmpty else {
             return """
-            Today's question (Part \(setup.question.part), topic: \(setup.question.topic)):
-            \(setup.question.prompt)
+            No Part 3 reference questions were found for this cue card in the question bank. \
+            Improvise every Part 3 question yourself, from the cue card theme and from what the \
+            learner has just said in the long turn.
             """
         }
+        return """
+        Part 3 reference questions — these are the questions the question bank attaches to THIS \
+        cue card, so they are the ones the discussion is really about. Treat them as a pool, not a \
+        script: improvise most follow-ups from what the learner actually claims, and leave the \
+        rest unasked:
+        \(reference.followups.map { "- \($0)" }.joined(separator: "\n"))
+        """
     }
 
     /// 单练 Part 3 时那一行主题短语。
@@ -551,12 +699,15 @@ public enum ExaminerPrompt {
 
     public static func build(setup: SessionSetup) -> String {
         var blocks: [String] = [contract(for: setup.feedbackTiming)]
-        blocks.append(partRules(for: setup.focusPart, part2PrepMode: setup.part2PrepMode))
+        blocks.append(partRules(for: setup))
 
         var block = questionBlock(for: setup)
         if !setup.question.followups.isEmpty {
             block += "\n\n\(followupHeading(forPart: setup.question.part))\n"
                 + setup.question.followups.map { "- \($0)" }.joined(separator: "\n")
+        }
+        if let part3Block = part3ReferenceBlock(for: setup) {
+            block += "\n\n\(part3Block)"
         }
         blocks.append(block)
 

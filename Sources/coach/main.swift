@@ -12,7 +12,7 @@ guard let command = args.first else {
       coach questions remodel       把旧结构题库改成「一个话题一道题」
                                     （默认只预演，加 --apply 才写盘，写盘前自动备份）
       coach practice <题目id>        开始一次练习
-      coach prompt [--part 1|2|3|2+3|mock]
+      coach prompt [--part 1|2|3|1+2|1+3|2+3|mock]
                                     打印发给 ChatGPT 的考官提示词全文（不碰 ChatGPT）
                                     可加 --question <题目id> 用自己的题，
                                     以及 --immediate / --self-paced / --goal <文字>

@@ -130,38 +130,45 @@ final class TodayViewModelTests: XCTestCase {
     /// 一个**不存在的两步选择**，用户会先去找那个筛选器。当时的修法是把话改成一步，
     /// 并留下一条「哪天筛选器真做出来了，这条会红」的单向断言。
     ///
-    /// **那一天到了**（用户原话：「首先应该可以选择是训练 part one part two 还是
-    /// part three」），`PracticeSheet.partSection` 里现在真有一个绑到 `$partSelection`
-    /// 的分段控件。所以这条改成**双向**的：
+    /// **那一天到了**，而且又往前走了一步：`PracticeSheet.partSection` 里现在是三个
+    /// 绑到 `partBinding(for:)` 的勾选框，**可以多勾**（用户原话：「我要多选 Part one
+    /// 和 Part two，练完这个练那个」）。所以这条是**双向**的：
     ///
-    /// - 副标题说了「先选 Part」，弹层里却没有那个控件 → 红（老毛病回来了）；
-    /// - 弹层里有那个控件，副标题却只字不提 → 也红（用户不知道还能筛，仍旧一路滚）。
+    /// - 副标题说了「先勾 Part」，弹层里却没有那几个勾选框 → 红（老毛病回来了）；
+    /// - 弹层里有勾选框，副标题却只字不提 → 也红（用户不知道还能勾，仍旧一路滚）；
+    /// - 勾选框能多勾，副标题却不说「可多选」→ 也红（他不会去勾第二个，
+    ///   而多选正是这一轮加的东西）。
     ///
-    /// 突变证明：把 `partSection` 里那个 `Picker` 换成 `EmptyView()` 这条会红；
+    /// 突变证明：把 `partSection` 里那几颗 Toggle 换成 `EmptyView()` 这条会红；
     /// 只把副标题改回一步的说法，这条也会红。
     func testTheFreePickSubtitleMatchesWhatTheSheetActuallyHas() throws {
         let subtitle = PracticeRoute.freePick.subtitle
         let sheet = try SourceGuard.code("Session/PracticeSheet.swift")
 
-        // 「弹层里真的有一个 Part 筛选器」的判据：一个绑到 `$partSelection` 的 Picker。
-        // 只问 `contains("Picker(")` 不够——那样随便哪个别的 Picker 都能把它凑绿。
-        let hasPartPicker = sheet.contains("Picker(") && sheet.contains("selection: $partSelection")
+        // 「弹层里真的有那几个 Part 勾选框」的判据：Toggle 的标题走 `partTitle(forPart:)`，
+        // 而它绑的是 `partBinding(for:)`。只问 `contains("Toggle(")` 不够——
+        // 那样随便哪个别的开关都能把它凑绿。
+        let hasPartTicks = sheet.contains("PracticePicker.partTitle(forPart: part)")
+            && sheet.contains("isOn: partBinding(for: part)")
         let subtitlePromisesPartStep = subtitle.contains("Part")
 
         XCTAssertTrue(
-            hasPartPicker,
-            "挑题弹层里没有绑到 `$partSelection` 的 Picker 了。用户要的第一件事就是"
-                + "「先选练 Part 1 / 2 / 3」，没有它，258 道题只能一路滚。"
-                + "下一步：把 `PracticeSheet.partSection` 里那个分段控件放回去；"
-                + "真要撤掉这个功能，副标题（`PracticeRoute.freePick.subtitle`）也得一起改回一步的说法。"
-                + "实际扫到的是：\(sheet.contains("Picker(") ? "有 Picker 但没绑 $partSelection" : "一个 Picker 都没有")")
+            hasPartTicks,
+            "挑题弹层里没有那几个绑到 `partBinding(for:)` 的 Part 勾选框了。"
+                + "用户要的第一件事就是「先勾这一场练哪几个 Part」，没有它，258 道题只能一路滚。"
+                + "下一步：把 `PracticeSheet.partSection` 里那三颗 Toggle 放回去；"
+                + "真要撤掉这个功能，副标题（`PracticeRoute.freePick.subtitle`）也得一起改回一步的说法。")
 
         XCTAssertEqual(
-            subtitlePromisesPartStep, hasPartPicker,
+            subtitlePromisesPartStep, hasPartTicks,
             "副标题说的步骤和弹层里真有的东西对不上。副标题：「\(subtitle)」；"
-                + "弹层里\(hasPartPicker ? "有" : "没有") Part 筛选器。"
-                + "下一步：两边改成一致——有筛选器就在副标题里说清「先选 Part 再挑题」，"
+                + "弹层里\(hasPartTicks ? "有" : "没有") Part 勾选框。"
+                + "下一步：两边改成一致——有勾选框就在副标题里说清「先勾 Part 再挑题」，"
                 + "没有就别写，否则用户会去找一个不存在的控件（复审第 9 条就是这么来的）。")
+
+        XCTAssertTrue(subtitle.contains("多选") || subtitle.contains("几个"),
+                      "副标题没提「可以多勾」。这一轮加的正是多选 Part，"
+                          + "不说的话用户勾完一个就去挑题了，功能等于没做。副标题：「\(subtitle)」")
 
         XCTAssertFalse(subtitle.contains("搜索") && !sheet.contains("searchable"),
                        "副标题提到了搜索，弹层里却没有搜索框：\(subtitle)")

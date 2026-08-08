@@ -415,6 +415,111 @@ final class PracticeRouteResolverTests: XCTestCase {
         XCTAssertEqual(setup.durationMinutes, 9)
     }
 
+    // MARK: - 多选 Part：用户当场勾出来的那几个 Part 走的是另一个入口
+
+    /// **勾了什么就考什么，一段都不许被砍掉。**
+    ///
+    /// 把 `chosen:` 那个入口改成走 `mode:`（也就是计划语义），三个全勾会被
+    /// `FocusPart.forSession` 静默降级成单 Part——勾选框点得动、这一场却和它毫无关系。
+    /// 这条覆盖全部七档，少哪一档都会红。
+    func testEveryTickedCombinationSurvivesAllTheWayIntoTheSessionSetup() {
+        let anchors: [FocusPart: Question] = [
+            .part1: q("p1", 1), .part2: q("p2", 2), .part3: q("p3", 3),
+            .part1And2: q("p1", 1), .part1And3: q("p1", 1), .part2And3: q("p2", 2),
+            .fullMock: q("p2", 2)
+        ]
+        for focus in FocusPart.allCases {
+            let setup = PracticeRouteResolver.setup(
+                for: anchors[focus]!, goal: "", defaults: RouteDefaults(), chosen: focus)
+            XCTAssertEqual(setup.focusPart, focus,
+                           "勾了 \(focus.rawValue)，这一场却成了 \(setup.focusPart.rawValue)")
+            XCTAssertEqual(setup.durationMinutes, focus.defaultDurationMinutes,
+                           "\(focus.rawValue) 的时长和这一档对不上")
+
+            // 考法得真的进到考官提示词里：勾了几段，提示词里就得有那几段的规则。
+            let text = ExaminerPrompt.build(setup: setup)
+            for part in focus.parts {
+                XCTAssertTrue(text.contains("Section rules (\(part.englishName))"),
+                              "\(focus.rawValue) 的提示词里缺 \(part.englishName) 的规则正文：\n\(text)")
+            }
+            for absent in ExamPart.allCases where !focus.includes(absent) {
+                XCTAssertFalse(text.contains("Section rules (\(absent.englishName))"),
+                               "\(focus.rawValue) 的提示词里混进了 \(absent.englishName) 的规则——"
+                                   + "这一场不考它：\n\(text)")
+            }
+        }
+    }
+
+    /// **三个全勾必须真的开出一整场模考。**
+    ///
+    /// 这是两个入口不能合并的那个点：同一个 `.fullMock`，从计划那条路进来要被过滤成
+    /// 「练那道题自己的 Part」，从「用户当场勾的」这条路进来必须原样生效。
+    func testTickingAllThreePartsRunsAFullMockRatherThanASinglePart() {
+        let question = q("cue", 2)
+        let chosen = PracticeRouteResolver.setup(for: question, goal: "",
+                                                 defaults: RouteDefaults(), chosen: .fullMock)
+        let fromPlan = PracticeRouteResolver.setup(for: question, goal: "",
+                                                   defaults: RouteDefaults(), mode: .fullMock)
+        XCTAssertEqual(chosen.focusPart, .fullMock)
+        XCTAssertEqual(fromPlan.focusPart, .part2,
+                       "计划语义那条不该把这一天变成一整场模考")
+    }
+
+    /// 勾的那几段里没有这道题所属的 Part 时回落到它自己的 Part：
+    /// 一份提示词里那道题必须落在某一段上，落不上就等于用户挑的题一次都不会被问到。
+    func testATickedSelectionFallsBackWhenTheQuestionBelongsToNoneOfIt() {
+        let setup = PracticeRouteResolver.setup(for: q("p1", 1), goal: "",
+                                                defaults: RouteDefaults(), chosen: .part2And3)
+        XCTAssertEqual(setup.focusPart, .part1)
+    }
+
+    // MARK: - 连着练时，那张卡自己那一组 Part 3 追问
+
+    /// **题库要一路传到提示词那儿。**
+    ///
+    /// 把 `bank:` 忘掉（或者传空数组），连着练那一场会拿不到题库里现成的真题，
+    /// 提示词里只剩那句「没找到，你自己编」——不报错、不崩，只是白白扔掉了对应的追问。
+    func testACombinedSessionPicksUpTheCueCardsOwnPart3QuestionsFromTheBank() {
+        let cueCard = Question(id: "cue", part: 2, topic: "人物",
+                               prompt: "Describe a friend who learned a skill",
+                               followups: ["Who he/she is"])
+        let paired = TopicQuestions.part3(
+            cueCard: cueCard.prompt,
+            prompts: ["What kinds of skills are people often interested in learning?"])
+        var s = state(questions: [cueCard, paired], sessions: [])
+        s.questions = [cueCard, paired]
+
+        guard case .ready(let setup) = PracticeRouteResolver.resolve(
+            route: .freePick, state: s, selectedQuestionID: "cue") else {
+            return XCTFail("应当能开练")
+        }
+        XCTAssertEqual(setup.part3Reference?.id, paired.id,
+                       "没从题库里配到这张卡自己的 Part 3 追问")
+
+        let combined = PracticeRouteResolver.setup(for: cueCard, goal: "",
+                                                   defaults: RouteDefaults(),
+                                                   chosen: .part2And3, bank: s.questions)
+        let text = ExaminerPrompt.build(setup: combined)
+        XCTAssertTrue(
+            text.contains("- What kinds of skills are people often interested in learning?"),
+            "题库里现成的 Part 3 追问没进提示词，考官只能凭空编：\n\(text)")
+        XCTAssertFalse(text.contains("No Part 3 reference questions were found"),
+                       "明明配上了，提示词却说没配上：\n\(text)")
+    }
+
+    /// 题库里没有配对的那道题时**必须明说**（铁律：禁止静默失败）。
+    func testACombinedSessionSaysSoWhenTheBankHasNoPairedPart3() {
+        let cueCard = Question(id: "cue", part: 2, topic: "人物",
+                               prompt: "Describe a friend who learned a skill",
+                               followups: ["Who he/she is"])
+        let setup = PracticeRouteResolver.setup(for: cueCard, goal: "", defaults: RouteDefaults(),
+                                                chosen: .part2And3, bank: [cueCard])
+        XCTAssertNil(setup.part3Reference)
+        XCTAssertTrue(ExaminerPrompt.build(setup: setup)
+            .contains("No Part 3 reference questions were found for this cue card"),
+                      "配不上却一个字都不说")
+    }
+
     func testDefaultsFlowIntoTheSetup() {
         let s = state(questions: [q("a")])
         let defaults = RouteDefaults(feedbackTiming: .immediate, part2PrepMode: .learnerControlled)

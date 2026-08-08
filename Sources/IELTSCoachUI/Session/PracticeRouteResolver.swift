@@ -19,24 +19,55 @@ public enum PracticeRouteResolver {
     /// Part 2 是一张 cue card，4 分钟够；其余 6 分钟；「Part 2 + Part 3 连着练」9 分钟。
     /// 题目的 part 落在 1–3 之外（手改坏的 state.json）时按全真模考处理，不崩。
     ///
-    /// - Parameter mode: 用户**当场明确选的**考法。挑题弹层上那颗
-    ///   「练完 Part 2 接着练 Part 3」开关、学习计划的「重点 Part」、
-    ///   以及「继续上次练习」带过来的上一场取值都从这里进。
-    ///   `nil` = 没有明确选择，按题目自身的 Part 走。
+    /// - Parameter mode: **学习计划的「重点 Part」**。`nil` = 没有计划层面的选择，
+    ///   按题目自身的 Part 走。
     ///
-    ///   **它怎么影响结果全归 `FocusPart.forSession` 管，这里不再判一次**：
-    ///   在这儿另写一遍「是 Part 2 才生效」的判断，就等于这条规则有了两份实现，
-    ///   而四条路线各走各的那一份。
+    ///   它是「排哪些题」的意思，不是「这一场考几段」，所以要被过滤：
+    ///   一份全真模考的计划，每一天仍然练那道题自己的 Part。
+    ///   **过滤规则全归 `FocusPart.forSession` 管，这里不再判一次**：
+    ///   在这儿另写一遍判断，就等于这条规则有了两份实现，而四条路线各走各的那一份。
+    ///
+    ///   用户在弹层上当场勾出来的那几个 Part 走的是下面 `chosen:` 那个入口。
     public static func setup(for question: Question, goal: String,
                              defaults: RouteDefaults,
-                             mode: FocusPart? = nil) -> SessionSetup {
-        let focusPart = FocusPart.forSession(mode: mode, questionPart: question.part)
-        return SessionSetup(question: question,
-                            focusPart: focusPart,
-                            durationMinutes: focusPart.defaultDurationMinutes,
-                            goal: goal,
-                            feedbackTiming: defaults.feedbackTiming,
-                            part2PrepMode: defaults.part2PrepMode)
+                             mode: FocusPart? = nil,
+                             bank: [Question] = []) -> SessionSetup {
+        make(question: question, goal: goal, defaults: defaults, bank: bank,
+             focusPart: FocusPart.forSession(mode: mode, questionPart: question.part))
+    }
+
+    /// **用户当场明确选的考法** → 这一场。与上面那个的区别只有一条，而这一条是
+    /// 多选 Part 这个功能的关键：
+    ///
+    /// - `mode:` 那个入口收的是**学习计划的重点 Part**，它的含义是「排哪些题」，
+    ///   所以要被 `FocusPart.forSession` 过滤（一份全真模考的计划，每天仍然练那道题
+    ///   自己的 Part，不是每天跑一整场模考）；
+    /// - 这个入口收的是**他此刻在弹层上勾出来的那几个 Part**，那就是他对这一场的要求。
+    ///   三个全勾就该考一整场模考。走上面那个入口的话会被降级成单 Part——
+    ///   勾选框点得动、这一场却和它毫无关系，屏幕上一个字都不会提（铁律 5）。
+    ///
+    /// 分成两个方法而不是加一个布尔参数：布尔参数漏传的默认值是「按计划语义」，
+    /// 那正是会静默降级的一支，而漏传不会有任何编译错误。
+    public static func setup(for question: Question, goal: String,
+                             defaults: RouteDefaults,
+                             chosen: FocusPart,
+                             bank: [Question] = []) -> SessionSetup {
+        make(question: question, goal: goal, defaults: defaults, bank: bank,
+             focusPart: FocusPart.forExplicitSelection(chosen, questionPart: question.part))
+    }
+
+    /// - Parameter bank: 配对「这张 cue card 自己那组 Part 3 追问」用的题库
+    ///   （`LinkedPart3`）。传空的话，同时含 Part 2 与 Part 3 的那几场会拿不到追问，
+    ///   提示词里会如实写明「题库里没找到，全部临场编」——不静默，但也就白白扔掉了真题。
+    private static func make(question: Question, goal: String, defaults: RouteDefaults,
+                             bank: [Question], focusPart: FocusPart) -> SessionSetup {
+        SessionSetup(question: question,
+                     focusPart: focusPart,
+                     durationMinutes: focusPart.defaultDurationMinutes,
+                     goal: goal,
+                     feedbackTiming: defaults.feedbackTiming,
+                     part2PrepMode: defaults.part2PrepMode,
+                     part3Reference: LinkedPart3.reference(for: question, in: bank))
     }
 
     // MARK: - 解析
@@ -77,7 +108,8 @@ public enum PracticeRouteResolver {
         // 计划的「重点 Part」就是用户对这份计划里每一天的明确选择，所以它要跟着进这一场。
         // 不传的话，一份「Part 2 + Part 3 连着练」的计划每天开出来的仍然是普通 Part 2——
         // 计划页显示的考法和真实发生的考法对不上，而屏幕上一个字都不会提（铁律 7）。
-        return .ready(setup(for: question, goal: "", defaults: defaults, mode: plan.focusPart))
+        return .ready(setup(for: question, goal: "", defaults: defaults, mode: plan.focusPart,
+                            bank: state.questions))
     }
 
     private static func resolveFreePick(_ state: CoachState, _ selectedQuestionID: String?,
@@ -91,7 +123,7 @@ public enum PracticeRouteResolver {
         guard let question = state.questions.first(where: { $0.id == id }) else {
             return .unavailable("题库里没有 id 为「\(id)」的题目。下一步：回题目列表重新选一道。")
         }
-        return .ready(setup(for: question, goal: "", defaults: defaults))
+        return .ready(setup(for: question, goal: "", defaults: defaults, bank: state.questions))
     }
 
     private static func resolveContinueLast(_ state: CoachState,
@@ -106,10 +138,11 @@ public enum PracticeRouteResolver {
                 + "下一步：改用「从题库自由选题」挑一道新的；那次练习的复盘仍然在「复盘报告」页里。")
         }
         // 上次的单点目标一并带上：「继续上次」的意思就是接着上次那件事再练一遍。
-        // 上次的**考法**同理：上一场是「Part 2 + Part 3 连着练」，这一场也该是——
-        // 否则这条路线会把它悄悄降级成普通 Part 2，而卡片上写的是「接着上次那道题再练」。
+        // 上次的**考法**同理，而且要**原样还原**，所以走 `chosen:` 而不是 `mode:`：
+        // 上一场是「Part 2 + Part 3 连着练」或者用户勾出来的一整场模考时，
+        // `mode:` 那条路会把它降级成单 Part，而卡片上写的是「接着上次那道题再练」。
         return .ready(setup(for: question, goal: last.goal, defaults: defaults,
-                            mode: last.focusPart))
+                            chosen: last.focusPart, bank: state.questions))
     }
 
     private static func resolveRetrain(_ state: CoachState,
@@ -137,7 +170,7 @@ public enum PracticeRouteResolver {
             return .unavailable("这个目标对应的原题已经不在题库里了。"
                 + "下一步：改用「从题库自由选题」挑一道同 Part 的题，把目标手动写进去再练一次。")
         }
-        return .ready(setup(for: question, goal: label, defaults: defaults))
+        return .ready(setup(for: question, goal: label, defaults: defaults, bank: state.questions))
     }
 
     // MARK: - 可用路线
