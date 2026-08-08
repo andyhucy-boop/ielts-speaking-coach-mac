@@ -121,7 +121,11 @@ final class PracticeSheetTests: XCTestCase {
         }
 
         // 按钮按下去之后真的把选中的题变成一场练习。`startPicked` 被掏空成 `{}` 时这条会红。
-        for (needle, what) in [("makeSetup(question)", "把选中的题变成这一场的设置"),
+        //
+        // `makeSetup` 现在收两个参数（题目 + 用户当场选的考法），所以这里钉的是
+        // `makeSetup(question, mode)`——只钉 `makeSetup(question` 的话，把 `mode` 换成
+        // 写死的 `nil` 照样能溜过去，而那正好就是「那颗开关拨了不算数」的形态。
+        for (needle, what) in [("makeSetup(question, mode)", "把选中的题变成这一场的设置"),
                                ("begin(", "开练")] {
             SourceGuard.assertRenders(
                 needle, inBodyOf: "private func startPicked", of: Self.sheet,

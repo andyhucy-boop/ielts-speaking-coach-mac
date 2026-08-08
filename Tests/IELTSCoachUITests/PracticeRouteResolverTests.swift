@@ -25,7 +25,8 @@ final class PracticeRouteResolverTests: XCTestCase {
 
     private func state(questions: [Question] = [], planDays: [PlanDay]? = nil,
                        sessions: [PracticeSession] = [], targets: [RetrainingTarget] = [],
-                       issues: [IssueRecord] = []) -> CoachState {
+                       issues: [IssueRecord] = [],
+                       planFocus: FocusPart = .part1) -> CoachState {
         var s = CoachState.empty()
         s.questions = questions
         s.sessions = sessions
@@ -33,7 +34,7 @@ final class PracticeRouteResolverTests: XCTestCase {
         s.issues = issues
         if let planDays {
             s.plan = TrainingPlan(lengthDays: 7, createdAt: "2026-08-06T00:00:00Z",
-                                  days: planDays, focusPart: .part1)
+                                  days: planDays, focusPart: planFocus)
         }
         return s
     }
@@ -350,6 +351,68 @@ final class PracticeRouteResolverTests: XCTestCase {
         guard case .ready(let setup) = PracticeRouteResolver.resolve(
             route: .freePick, state: s, selectedQuestionID: "x") else { return XCTFail("不该解析失败") }
         XCTAssertEqual(setup.focusPart, .fullMock)
+    }
+
+    // MARK: - 「Part 2 + Part 3 连着练」得一路走到 SessionSetup 上
+
+    /// 挑题弹层上那颗开关传进来的模式必须真的改变这一场的考法与时长。
+    ///
+    /// 把 `setup` 的 `mode:` 参数忽略掉（写死 nil），这条会红。
+    func testAnExplicitCombinedModeChangesBothTheFormatAndTheLength() {
+        let setup = PracticeRouteResolver.setup(for: q("cue", 2), goal: "",
+                                                defaults: RouteDefaults(), mode: .part2And3)
+        XCTAssertEqual(setup.focusPart, .part2And3)
+        XCTAssertEqual(setup.durationMinutes, 9,
+                       "连着练是一段两分钟陈述加一整段讨论，沿用 Part 2 的 4 分钟会让考官"
+                           + "为了对上时间把 Part 3 砍成一两问")
+        XCTAssertTrue(ExaminerPrompt.build(setup: setup)
+            .contains("Section rules (Part 2 + Part 3, run back to back)"),
+                      "考法没有真的进到考官提示词里，这一场和普通 Part 2 一模一样")
+    }
+
+    /// **一份「连着练」的计划，每天开出来的也必须是连着练。**
+    ///
+    /// 不把 `plan.focusPart` 传下去的话，学习计划页写着「Part 2 + Part 3 连着练」，
+    /// 而「按计划练今天」开出来的是普通 Part 2——界面显示的和真实行为对不上，
+    /// 且屏幕上一个字都不会提（铁律 7）。
+    func testAPlanFocusedOnTheCombinedModeStartsCombinedSessions() {
+        let s = state(questions: [q("cue", 2)],
+                      planDays: [PlanDay(id: 1, questionIds: ["cue"], completedQuestionIds: [])],
+                      planFocus: .part2And3)
+        guard case .ready(let setup) = PracticeRouteResolver.resolve(route: .planToday, state: s) else {
+            return XCTFail("应当能开练")
+        }
+        XCTAssertEqual(setup.focusPart, .part2And3)
+        XCTAssertEqual(setup.durationMinutes, 9)
+    }
+
+    /// 反面：普通计划一个字都不许被改动。全真模考的计划把三个 Part 交错排开，
+    /// 每一天仍然练那道题自己的 Part——这里若跟着 plan 走成 `.fullMock`，
+    /// 用户按计划练的每一天都会突然变成一整场三 Part 模考。
+    func testAFullMockPlanStillPracticesEachDaysOwnPart() {
+        let s = state(questions: [q("cue", 2)],
+                      planDays: [PlanDay(id: 1, questionIds: ["cue"], completedQuestionIds: [])],
+                      planFocus: .fullMock)
+        guard case .ready(let setup) = PracticeRouteResolver.resolve(route: .planToday, state: s) else {
+            return XCTFail("应当能开练")
+        }
+        XCTAssertEqual(setup.focusPart, .part2)
+        XCTAssertEqual(setup.durationMinutes, 4)
+    }
+
+    /// 「继续上次练习」要连**考法**一起继续。
+    ///
+    /// 上一场是连着练，这一条路线却把它降级成普通 Part 2 的话，卡片上写着
+    /// 「接着上次那道题再练」，练到的却是另一种考法。
+    func testContinueLastKeepsTheFormatOfTheSessionItContinues() {
+        var last = session("2026-08-08-001", question: "cue", startedAt: "2026-08-08T10:00:00Z")
+        last.focusPart = .part2And3
+        let s = state(questions: [q("cue", 2)], sessions: [last])
+        guard case .ready(let setup) = PracticeRouteResolver.resolve(route: .continueLast, state: s) else {
+            return XCTFail("应当能开练")
+        }
+        XCTAssertEqual(setup.focusPart, .part2And3, "上次是连着练，这次却降级成了普通 Part 2")
+        XCTAssertEqual(setup.durationMinutes, 9)
     }
 
     func testDefaultsFlowIntoTheSetup() {

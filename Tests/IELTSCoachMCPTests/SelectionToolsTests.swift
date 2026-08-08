@@ -143,6 +143,26 @@ final class SelectionToolsTests: XCTestCase {
         XCTAssertEqual(payload["durationMinutes"]?.intValue, 6)
     }
 
+    /// **默认时长跟着这一场的考法走，不是跟着题目的 part 走。**
+    ///
+    /// 一道 Part 2 的题被选成「Part 2 + Part 3 连着练」时，按题目算出来的 4 分钟会写进
+    /// 提示词的「Target session length」，而这一场要考两段——考官为了对上时间会把
+    /// Part 3 砍成一两问，而负载里的 focusPart 字段看起来完全正常。
+    func testDefaultDurationFollowsTheChosenFormatNotTheQuestionsPart() throws {
+        _ = try harness.callToolJSON("set_training_selection", [
+            "questionId": .string("p2-skill"),
+            "focusPart": .string(FocusPart.part2And3.rawValue)
+        ])
+        let payload = try harness.callToolJSON("get_training_context")
+        XCTAssertEqual(payload["focusPart"]?.stringValue, "Part 2 + Part 3")
+        XCTAssertEqual(payload["durationMinutes"]?.intValue, 9,
+                       "这一场要先做两分钟陈述再做一整段讨论，不能沿用单练 Part 2 的 4 分钟")
+        let prompt = try XCTUnwrap(payload["examinerPrompt"]?.stringValue)
+        XCTAssertTrue(prompt.contains("Section rules (Part 2 + Part 3, run back to back)"),
+                      "考法没有真的进到考官提示词里：\(prompt)")
+        XCTAssertTrue(prompt.contains("about 9 minutes"), "时长没进提示词：\(prompt)")
+    }
+
     func testImmediateFeedbackChangesTheContract() throws {
         _ = try harness.callToolJSON("set_training_selection", ["questionId": .string("p1-home")])
         let payload = try harness.callToolJSON("get_training_context",

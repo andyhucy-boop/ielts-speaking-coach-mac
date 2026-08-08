@@ -3,10 +3,24 @@ import Foundation
 /// 回答升级规则。正文逐字移植自上游 desktop/answer-upgrade-policy.mjs。
 /// 这段文本直接决定 ChatGPT 的输出行为，除非同步修改上游，否则不得改写措辞。
 public enum AnswerUpgradePolicy {
+    private static let part1Guidance =
+        "Part 1：回答应简短、直接、自然。练习目标通常为2至4句、约20至40词；先回答，再给一个简短原因或具体说明。不要把日常短问答扩写成演讲。"
+    private static let part2Guidance =
+        "Part 2：官方流程是一分钟准备、最多两分钟陈述。高分建议答案应形成连贯长答；在原回答证据允许时，以约90至120秒、约170至240词为练习目标，覆盖提示点并有清晰时间线或主题线。若真实个人信息不足，宁可略短并指出待补信息，也不能虚构经历。"
+    private static let part3Guidance =
+        "Part 3：回答应比Part 1更抽象、更充分。练习目标通常为4至7句、约60至120词；形成观点、原因、解释或例子，并可加入对比、条件或让步。篇幅服从问题复杂度，不机械凑词数。"
+
     private static let partGuidance: [String: String] = [
-        "Part 1": "Part 1：回答应简短、直接、自然。练习目标通常为2至4句、约20至40词；先回答，再给一个简短原因或具体说明。不要把日常短问答扩写成演讲。",
-        "Part 2": "Part 2：官方流程是一分钟准备、最多两分钟陈述。高分建议答案应形成连贯长答；在原回答证据允许时，以约90至120秒、约170至240词为练习目标，覆盖提示点并有清晰时间线或主题线。若真实个人信息不足，宁可略短并指出待补信息，也不能虚构经历。",
-        "Part 3": "Part 3：回答应比Part 1更抽象、更充分。练习目标通常为4至7句、约60至120词；形成观点、原因、解释或例子，并可加入对比、条件或让步。篇幅服从问题复杂度，不机械凑词数。"
+        "Part 1": part1Guidance,
+        "Part 2": part2Guidance,
+        "Part 3": part3Guidance,
+        // 「Part 2 + Part 3 连着练」这一场里两种题型都出现过，复盘要按各自的标准改各自那几题。
+        // **两段原文逐字拼起来，不另写一份**：这三段是从上游 desktop/answer-upgrade-policy.mjs
+        // 移植来的，措辞不许改写；另写一份「综合标准」等于凭空发明第四套长度要求。
+        //
+        // 不走 fallbackRule 是因为那一句只说「先根据问题所属Part选择对应长度」，
+        // 三个 Part 各自的目标句数、词数一个都没给——而这一场恰恰知道自己只会出现哪两种。
+        FocusPart.part2And3.rawValue: "\(part2Guidance)\n\n\(part3Guidance)"
     ]
 
     private static let fallbackRule =
@@ -30,6 +44,12 @@ public enum AnswerUpgradePolicy {
     /// 换成 FocusPart 会让这条「预期的兜底」看起来像遗漏了一个 case。
     /// 另外这段规则文本逐字移植自上游 desktop/answer-upgrade-policy.mjs，
     /// 换参数类型没有必要牵动那段不能改写措辞的文本。
+    ///
+    /// **「Part 2 + Part 3」那一档的键写成 `FocusPart.part2And3.rawValue` 而不是字面量**：
+    /// 参数类型虽然是 String，实际传进来的一直是某个 `FocusPart` 的 raw value
+    /// （`ReviewRequestPrompt.build` 那一行）。键与 raw value 各写一份的话，
+    /// 改了枚举的 raw value 之后这一档会**静默**落回 fallbackRule——
+    /// 复盘照样生成、照样归档，只是那一场的长度标准悄悄换成了通用兜底。
     public static func guidance(part: String) -> String {
         let partRule = partGuidance[part] ?? fallbackRule
         return "\(partRule)\n\n\(sharedRules)"

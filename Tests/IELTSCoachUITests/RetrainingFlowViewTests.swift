@@ -271,8 +271,18 @@ final class RetrainingFlowViewTests: XCTestCase {
                       "一道题都挑不出来时没有空状态，用户看到的是一块无法解释的空白。")
         XCTAssertTrue(picker.contains("onGo(.questionBank)"),
                       "空状态那颗按钮点下去哪儿也不去，用户读完还得自己回侧边栏翻。")
-        XCTAssertTrue(picker.contains("ForEach(pickable)"),
-                      "候选题没有遍历 `pickable`，一条都列不出来。实际取到的是：\n\(picker)")
+        // 候选题现在按 Part 折叠分栏（`QuestionPartSections`，与自由选题弹层共用）。
+        // 平常只有一栏（换题验证不跨 Part），会分成几栏的是「原题查不到、退回整个题库」
+        // 那一路——那一路此前是一张 258 条的平铺列表。
+        XCTAssertTrue(picker.contains("ForEach(candidateSections)"),
+                      "候选题没有遍历分好的那几栏，一条都列不出来。实际取到的是：\n\(picker)")
+        XCTAssertTrue(picker.contains("ForEach(section.items)"),
+                      "栏里没有遍历那一栏的题：栏标题画得出来，底下一道题都没有。"
+                          + "实际取到的是：\n\(picker)")
+        let sections = try SourceGuard.memberBody(of: "private var candidateSections", in: code)
+        XCTAssertTrue(sections.contains("QuestionPartSections.split(pickable)"),
+                      "分栏不是从 `pickable` 分出来的，`TransferQuestionPolicy` 筛的那份没人用。"
+                          + "实际取到的是：\n\(sections)")
     }
 
     /// 同话题的候选**必须标出来**：同话题太接近原题，验证力度打折。

@@ -10,6 +10,12 @@ public enum PlanScope {
         case .part1: return questions.filter { $0.part == 1 }
         case .part2: return questions.filter { $0.part == 2 }
         case .part3: return questions.filter { $0.part == 3 }
+        // 「Part 2 + Part 3 连着练」排的就是 Part 2 的那些 cue card，和 `.part2` 挑的是同一批题。
+        // **两档的区别不在挑哪些题，而在怎么练那一道题**：这一档每天那道 cue card 做完两分钟
+        // 陈述之后，会接着做一段 Part 3 讨论（`ExaminerPrompt` 的 `.part2And3` 规则）。
+        // Part 3 那批题在这里刻意不排：它们的题干本来就是 Part 2 cue card 的原文，
+        // 排进来会让同一张卡在计划里出现两天。
+        case .part2And3: return questions.filter { $0.part == 2 }
         case .fullMock: return interleaveByPart(questions)
         }
     }
@@ -92,6 +98,9 @@ public enum PlanScope {
         case .part1: return "Part 1（日常话题问答）"
         case .part2: return "Part 2（个人陈述）"
         case .part3: return "Part 3（深入讨论）"
+        // 名字得让人一眼看懂这一档到底会发生什么：先做哪一段、再做哪一段。
+        // 只写「Part 2 + Part 3」的话，用户分不清它和「全真模考」差在哪儿。
+        case .part2And3: return "Part 2 + Part 3 连着练（先两分钟陈述，再接着讨论）"
         case .fullMock: return "全真模考（Part 1 + 2 + 3）"
         }
     }

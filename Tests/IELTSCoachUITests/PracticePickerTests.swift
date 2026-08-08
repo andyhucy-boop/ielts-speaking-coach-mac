@@ -136,6 +136,62 @@ final class PracticePickerTests: XCTestCase {
         XCTAssertNil(PracticePicker.planFocusNotice(for: nil))
     }
 
+    // MARK: - 「练完 Part 2 接着练 Part 3」
+    //
+    // 用户原话：「你可以加一个功能，是否同时练习 part2 和 part3。」
+    // 他要的是一个是 / 否，所以界面上是一颗开关，而不是分段控件上的第五格。
+
+    /// 开关只在 Part 2 那一档出现，**也只在那一档生效**。
+    ///
+    /// 两者必须同进同退：显示条件比生效条件宽的话，会出现「开关亮着、这一场却不是连着练」；
+    /// 反过来则是「开关看不见、这一场却被改成了连着练」。两种都是屏幕与行为对不上。
+    func testTheLinkToggleOnlyShowsAndOnlyTakesEffectOnThePart2Segment() {
+        for part in [PracticePicker.allParts, 1, 3] {
+            XCTAssertFalse(PracticePicker.showsLinkPart3(forPart: part),
+                           "Part \(part) 这一档不该出现「连着练」开关")
+            XCTAssertNil(PracticePicker.mode(forPart: part, linksPart3: true),
+                         "Part \(part) 这一档开关开着也不该改变考法——"
+                             + "那一档里挑到的题根本不是一张 cue card")
+        }
+        XCTAssertTrue(PracticePicker.showsLinkPart3(forPart: 2))
+        XCTAssertEqual(PracticePicker.mode(forPart: 2, linksPart3: true), .part2And3)
+        XCTAssertNil(PracticePicker.mode(forPart: 2, linksPart3: false),
+                     "开关关着时就是一场普通 Part 2，不能带任何模式出去")
+    }
+
+    /// 开关的默认状态跟着学习计划的「重点 Part」走，与档位默认值同一个道理。
+    func testTheToggleDefaultsOnOnlyWhenThePlanAsksForTheCombinedMode() {
+        XCTAssertTrue(PracticePicker.defaultLinksPart3(forPlanFocus: .part2And3))
+        for other: FocusPart? in [.part1, .part2, .part3, .fullMock, nil] {
+            XCTAssertFalse(PracticePicker.defaultLinksPart3(forPlanFocus: other),
+                           "\(String(describing: other)) 不该把开关默认打开")
+        }
+        XCTAssertEqual(PracticePicker.defaultPart(forPlanFocus: .part2And3), 2,
+                       "「连着练」排的就是 Part 2 那批 cue card，档位该停在 Part 2")
+    }
+
+    /// 计划选了「连着练」时，那句说明必须把**开关也被打开了**这件事说出来。
+    ///
+    /// 不说的话，用户看到档位停在「Part 2」，会以为计划里那个选择根本没生效。
+    func testThePlanNoticeMentionsTheToggleWhenThePlanAsksForTheCombinedMode() throws {
+        let notice = try XCTUnwrap(PracticePicker.planFocusNotice(for: .part2And3))
+        XCTAssertTrue(notice.contains(PracticePicker.linkPart3Title),
+                      "没说清下面那颗开关已经替他打开了：" + notice)
+        XCTAssertTrue(notice.contains("下一步"), notice)
+
+        XCTAssertFalse(try XCTUnwrap(PracticePicker.planFocusNotice(for: .part2))
+            .contains(PracticePicker.linkPart3Title),
+                       "普通 Part 2 的说明里不该提那颗开关——它默认是关着的，提了就是骗人")
+    }
+
+    /// 开关旁边那句解释要说清「打开会怎样、关着会怎样」。
+    /// 只写一个开关标题的话，用户不知道打开之后这一场会长多少、会不会变成模考。
+    func testTheToggleExplainsWhatHappensBothWays() {
+        let hint = PracticePicker.linkPart3Hint
+        XCTAssertTrue(hint.contains("Part 3 讨论"), hint)
+        XCTAssertTrue(hint.contains("只做 Part 2"), "没说清关着的时候是什么样：" + hint)
+    }
+
     // MARK: - 这些真的被画到弹层上了吗
 
     /// **写好了和摆上屏幕了是两件事**，本项目已经在四个地方分别栽过这同一跤。
@@ -170,14 +226,27 @@ final class PracticePickerTests: XCTestCase {
     /// 这是这个功能唯一可能「装出来」的失效形态：控件在、文案在、`visibleCandidates`
     /// 也算得好好的，而列表那一行还是 `ForEach(candidates)`——分段控件点起来毫无反应，
     /// 而上面每一条断言都是绿的。
+    ///
+    /// 列表现在是按 Part 折叠分栏的（`QuestionPartSections`），所以这一条查的是那条链
+    /// 的两头：分栏是从 `visibleCandidates` 分出来的，列表画的是分出来的那几栏。
+    /// 中间任何一环换回全库，这里都会红。
     func testTheListRendersTheFilteredQuestionsNotTheWholeBank() throws {
-        let picker = try SourceGuard.memberBody(of: "private var picker",
-                                                in: SourceGuard.code(Self.sheet))
-        XCTAssertTrue(picker.contains("ForEach(visibleCandidates)"),
-                      "挑题列表画的不是筛过的结果。分段控件会变成一个点了没反应的装饰品。"
-                          + "下一步：`ForEach(visibleCandidates)`。实际取到的是：\n\(picker)")
-        XCTAssertFalse(picker.contains("ForEach(candidates)"),
-                       "挑题列表还在画全库。下一步：改成 `ForEach(visibleCandidates)`。")
+        let code = try SourceGuard.code(Self.sheet)
+
+        let sections = try SourceGuard.memberBody(of: "private var sectionsByPart", in: code)
+        XCTAssertTrue(sections.contains("QuestionPartSections.split(visibleCandidates)"),
+                      "分栏不是从筛过的结果分出来的。分段控件会变成一个点了没反应的装饰品。"
+                          + "下一步：`QuestionPartSections.split(visibleCandidates) { $0.part }`。"
+                          + "实际取到的是：\n\(sections)")
+        XCTAssertFalse(sections.contains("split(candidates)"),
+                       "分栏还是从全库分的：\n\(sections)")
+
+        let list = try SourceGuard.memberBody(of: "private var questionSections", in: code)
+        XCTAssertTrue(list.contains("ForEach(sectionsByPart)"),
+                      "挑题列表没有遍历分好的那几栏。下一步：`ForEach(sectionsByPart)`。"
+                          + "实际取到的是：\n\(list)")
+        XCTAssertFalse(list.contains("ForEach(candidates)"),
+                       "挑题列表还在画全库。下一步：改成 `ForEach(sectionsByPart)`。")
     }
 
     /// 切档之后，上一档里挑好的那道题必须失效。
@@ -194,12 +263,63 @@ final class PracticePickerTests: XCTestCase {
                           + "把不在当前档里的选择清掉。")
 
         let start = try SourceGuard.functionBody(named: "startPicked", in: code)
-        XCTAssertTrue(start.contains("visibleCandidates"),
+        XCTAssertTrue(start.contains("pickedQuestion"),
                       "「开始练习」是从全库里找那道题的——切档之后残留的 id 照样找得到，"
                           + "于是练的是屏幕上看不见的那道题。"
-                          + "下一步：只在 `visibleCandidates` 里找。实际取到的是：\n\(start)")
+                          + "下一步：只认 `pickedQuestion`。实际取到的是：\n\(start)")
         XCTAssertFalse(start.contains("candidates.first"),
                        "`startPicked` 还在全库里找题：\n\(start)")
+
+        // 而 `pickedQuestion` 只认**展开的那几栏里**的题：那条链断在这一环的话，
+        // 上面那句 `pickedQuestion` 照样绿，而折起来的栏里那道题仍然练得起来。
+        let resolved = try SourceGuard.memberBody(of: "private var pickedQuestion", in: code)
+        XCTAssertTrue(resolved.contains("visibleInExpandedSections"),
+                      "`pickedQuestion` 不是从展开的那几栏里找的。切档或者折起一栏之后，"
+                          + "残留的那个 id 照样找得到题，练的是屏幕上一道也看不见的题。"
+                          + "下一步：只在 `visibleInExpandedSections` 里找。实际取到的是：\n\(resolved)")
+    }
+
+    /// **那颗开关真的在弹层上，而且真的连到这一场的考法上。**
+    ///
+    /// 这是这个功能唯一可能「装出来」的失效形态：`PracticePicker` 那几条逻辑测试全绿，
+    /// 而弹层上要么根本没有开关（用户选不到这个模式），要么开关拨得动、
+    /// `startPicked()` 却拿写死的 `nil` 去开练（拨了不算数，屏幕上毫无异样）。
+    func testTheLinkToggleIsOnTheSheetAndItsValueReachesTheSession() throws {
+        let code = try SourceGuard.code(Self.sheet)
+
+        // 开关标题在视图里写成字面量，而不是引用常量：`SourceGuard` 那条
+        // 「文案里让人点的控件必须真的存在」靠扫 `Toggle("…")` 的字面量建清单。
+        XCTAssertTrue(code.contains("Toggle(\"\(PracticePicker.linkPart3Title)\", isOn: $linkPart3)"),
+                      "挑题弹层上没有那颗绑到 `$linkPart3` 的开关，或者标题和 "
+                          + "`PracticePicker.linkPart3Title`（「\(PracticePicker.linkPart3Title)」）"
+                          + "对不上。用户原话要的就是「是否同时练习 part2 和 part3」这个选择。"
+                          + "下一步：把 `linkPart3Section` 里那颗 Toggle 放回去，标题逐字一致。")
+
+        SourceGuard.assertRenders(
+            "linkPart3Section", inBodyOf: "private var partSection", of: Self.sheet,
+            because: "`linkPart3Section` 只是声明着，没有摆在那排 Part 按钮下面——"
+                + "一个像素都不上屏，用户永远选不到「连着练」。"
+                + "下一步：把它放回 `partSection`。")
+
+        SourceGuard.assertRenders(
+            "showsLinkPart3", inBodyOf: "private var linkPart3Section", of: Self.sheet,
+            because: "那颗开关没有按档位收起来。「全部」那一档里挑到一道 Part 1 的题时，"
+                + "开关会亮着而这一场跟它毫无关系——屏幕和行为对不上。"
+                + "下一步：`if PracticePicker.showsLinkPart3(forPart: partSelection)`。")
+
+        let start = try SourceGuard.functionBody(named: "startPicked", in: code)
+        XCTAssertTrue(start.contains("PracticePicker.mode(forPart: partSelection, linksPart3: linkPart3)"),
+                      "「开始练习」没有把那颗开关的状态带进这一场。开关拨得动、"
+                          + "练的却仍是普通 Part 2，而界面上看不出任何异样。"
+                          + "下一步：`makeSetup(question, PracticePicker.mode(...))`。"
+                          + "实际取到的是：\n\(start)")
+
+        // 今日训练页得把这个参数继续往解析器传，否则它到 `makeSetup` 就断了。
+        let today = try SourceGuard.code("Today/TodayView.swift")
+        XCTAssertTrue(today.contains("makeSetup: { question, mode in") && today.contains("mode: mode"),
+                      "今日训练页的 `makeSetup` 把用户选的考法丢了。"
+                          + "下一步：`PracticeRouteResolver.setup(for: question, goal: \"\", "
+                          + "defaults: defaults, mode: mode)`。")
     }
 
     /// 弹层的默认档位必须真的是调用方按学习计划算出来的那一个。
@@ -228,6 +348,10 @@ final class PracticePickerTests: XCTestCase {
                       "没指出那排 Part 按钮从哪儿去：" + note)
         XCTAssertTrue(note.contains("不会动这份计划"),
                       "没说清在弹层里切档会不会改掉计划：" + note)
+        // 「连着练」在弹层上不是第五格按钮而是一颗开关，这一点必须在这儿说清；
+        // 否则用户在计划里选了它，到弹层看到档位停在「Part 2」，会以为选择没生效。
+        XCTAssertTrue(note.contains(PracticePicker.linkPart3Title),
+                      "没说清「Part 2 + Part 3 连着练」在开练弹层上长什么样：" + note)
 
         SourceGuard.assertRenders(
             "focusScopeNote", inBodyOf: "private var focusPicker", of: "Plan/PlanView.swift",

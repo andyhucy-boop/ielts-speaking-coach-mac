@@ -53,7 +53,7 @@ enum SetTrainingSelectionTool {
                         + "下一步：调用 get_dashboard_data 看看现在有哪些题，"
                         + "或先在 App 的「训练题库」页导入题库。")
                 }
-                let inferred = FocusPart(rawValue: "Part \(question.part)") ?? .fullMock
+                let inferred = FocusPart.inferred(fromQuestionPart: question.part)
                 let focusRaw = try arguments.optionalChoice("focusPart", allowed: parts,
                     default: inferred.rawValue,
                     hint: "focusPart 只能是 \(parts.joined(separator: "、"))。")

@@ -177,6 +177,6 @@ enum SaveSessionReviewTool {
     /// 新建记录时用得上：题目还在题库里就按它的 part，找不到就按全真模考处理。
     private static func focusPart(forQuestion questionID: String, in state: CoachState) -> FocusPart {
         guard let question = state.questions.first(where: { $0.id == questionID }) else { return .fullMock }
-        return FocusPart(rawValue: "Part \(question.part)") ?? .fullMock
+        return FocusPart.inferred(fromQuestionPart: question.part)
     }
 }

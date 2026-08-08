@@ -15,17 +15,28 @@ public enum PracticeRouteResolver {
 
     // MARK: - 一场练习的取值
 
-    /// 取值与命令行保持一致（见 `Sources/coach/PracticeCommand.swift` 第 61–64 行）：
-    /// Part 2 是一张 cue card，4 分钟够；其余 6 分钟。
+    /// 取值与命令行保持一致（见 `Sources/coach/PracticeCommand.swift`）：
+    /// Part 2 是一张 cue card，4 分钟够；其余 6 分钟；「Part 2 + Part 3 连着练」9 分钟。
     /// 题目的 part 落在 1–3 之外（手改坏的 state.json）时按全真模考处理，不崩。
+    ///
+    /// - Parameter mode: 用户**当场明确选的**考法。挑题弹层上那颗
+    ///   「练完 Part 2 接着练 Part 3」开关、学习计划的「重点 Part」、
+    ///   以及「继续上次练习」带过来的上一场取值都从这里进。
+    ///   `nil` = 没有明确选择，按题目自身的 Part 走。
+    ///
+    ///   **它怎么影响结果全归 `FocusPart.forSession` 管，这里不再判一次**：
+    ///   在这儿另写一遍「是 Part 2 才生效」的判断，就等于这条规则有了两份实现，
+    ///   而四条路线各走各的那一份。
     public static func setup(for question: Question, goal: String,
-                             defaults: RouteDefaults) -> SessionSetup {
-        SessionSetup(question: question,
-                     focusPart: FocusPart(rawValue: "Part \(question.part)") ?? .fullMock,
-                     durationMinutes: question.part == 2 ? 4 : 6,
-                     goal: goal,
-                     feedbackTiming: defaults.feedbackTiming,
-                     part2PrepMode: defaults.part2PrepMode)
+                             defaults: RouteDefaults,
+                             mode: FocusPart? = nil) -> SessionSetup {
+        let focusPart = FocusPart.forSession(mode: mode, questionPart: question.part)
+        return SessionSetup(question: question,
+                            focusPart: focusPart,
+                            durationMinutes: focusPart.defaultDurationMinutes,
+                            goal: goal,
+                            feedbackTiming: defaults.feedbackTiming,
+                            part2PrepMode: defaults.part2PrepMode)
     }
 
     // MARK: - 解析
@@ -63,7 +74,10 @@ public enum PracticeRouteResolver {
             return .unavailable("今天安排的题目在题库里找不到了（换季重新导入时可能被删掉）。"
                 + "下一步：到「学习计划」页重新生成计划，已经练过的进度不会丢。")
         }
-        return .ready(setup(for: question, goal: "", defaults: defaults))
+        // 计划的「重点 Part」就是用户对这份计划里每一天的明确选择，所以它要跟着进这一场。
+        // 不传的话，一份「Part 2 + Part 3 连着练」的计划每天开出来的仍然是普通 Part 2——
+        // 计划页显示的考法和真实发生的考法对不上，而屏幕上一个字都不会提（铁律 7）。
+        return .ready(setup(for: question, goal: "", defaults: defaults, mode: plan.focusPart))
     }
 
     private static func resolveFreePick(_ state: CoachState, _ selectedQuestionID: String?,
@@ -92,7 +106,10 @@ public enum PracticeRouteResolver {
                 + "下一步：改用「从题库自由选题」挑一道新的；那次练习的复盘仍然在「复盘报告」页里。")
         }
         // 上次的单点目标一并带上：「继续上次」的意思就是接着上次那件事再练一遍。
-        return .ready(setup(for: question, goal: last.goal, defaults: defaults))
+        // 上次的**考法**同理：上一场是「Part 2 + Part 3 连着练」，这一场也该是——
+        // 否则这条路线会把它悄悄降级成普通 Part 2，而卡片上写的是「接着上次那道题再练」。
+        return .ready(setup(for: question, goal: last.goal, defaults: defaults,
+                            mode: last.focusPart))
     }
 
     private static func resolveRetrain(_ state: CoachState,

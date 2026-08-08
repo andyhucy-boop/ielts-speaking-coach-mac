@@ -430,6 +430,264 @@ final class ExaminerPromptTests: XCTestCase {
         }
     }
 
+    // MARK: - 单练 Part 3 就只考 Part 3（2026-08-08 用户真机实测的那一次翻车）
+    //
+    // 他选了 Part 3，ChatGPT 的第一句回复是：
+    //     "Alright. Let's begin. Describe a book you recently read. You should say what the book
+    //      was, what it was about, why you chose it, and explain how you felt about it."
+    // ——一张 Part 2 cue card。当时 `part3Rules` 的第一句是
+    // "Start from the Part 2 theme when possible."，被读成了「先把 Part 2 做出来」。
+
+    /// 一道真实形状的 Part 3 题：题干**就等于**它所属 cue card 的原文
+    /// （题库的建模规则，见 `TopicQuestions.part3`），所以它天生长得像一个 Part 2 任务。
+    private let part3AsInTheRealBank = Question(
+        id: "p3-law", part: 3, topic: "Describe a law on environmental protection",
+        prompt: "Describe a law on environmental protection",
+        followups: ["Should governments do more to protect the environment?"])
+
+    private func part3OnlyText(feedbackTiming: FeedbackTiming = .deferred) -> String {
+        ExaminerPrompt.build(setup: SessionSetup(
+            question: part3AsInTheRealBank, focusPart: .part3, durationMinutes: 6, goal: "",
+            feedbackTiming: feedbackTiming))
+    }
+
+    /// **这一场只有 Part 3，规则里必须把这句话说死。**
+    ///
+    /// 把 `part3OnlyFraming` 从提示词里删掉，这条就红。
+    func testPart3AloneDeclaresThatThereIsNoPart2InThisSession() {
+        let text = part3OnlyText()
+        XCTAssertTrue(text.contains("This session contains ONLY Part 3."),
+                      "没有明说这一场只有 Part 3。ChatGPT 知道「Part 3 接在 Part 2 后面」，"
+                          + "不明说不许补的话，它会顺手先出一张 cue card：\n\(text)")
+        XCTAssertFalse(text.contains("Start from the Part 2 theme"),
+                       "单练 Part 3 的提示词里还留着「从 Part 2 的话题起手」——"
+                           + "这正是实测中被读成「先做一张 cue card」的那一句：\n\(text)")
+    }
+
+    /// **那张卡的题目是话题背景，不是要考生做的任务。**
+    func testPart3AloneCallsTheCueCardTextABackgroundThemeNotATask() {
+        let text = part3OnlyText()
+        XCTAssertTrue(text.contains("not a task for the learner"),
+                      "没说清题干只是话题背景。题库里 Part 3 的题干就是 cue card 原文，"
+                          + "不点破的话它看起来就是一道「Describe a…」的任务：\n\(text)")
+        XCTAssertTrue(text.contains("Do not present it as a cue card"),
+                      "没有明说不许把它当成 cue card 出出去：\n\(text)")
+    }
+
+    /// **第一句就得是一个 Part 3 层面的讨论问题**，不是准备时间、不是长独白。
+    func testPart3AloneOpensWithADiscussionQuestionAndGivesNoPreparationTime() {
+        let text = part3OnlyText()
+        XCTAssertTrue(text.contains("your very first utterance is a Part 3 discussion question"),
+                      "没说清第一句该是什么。只说「不许做 X」而不说「那该做什么」，"
+                          + "模型仍然可能停在原地或者自己发明一套开场：\n\(text)")
+        XCTAssertFalse(text.contains("one minute of preparation"),
+                       "单练 Part 3 不该出现准备时间——那是 Part 2 的流程：\n\(text)")
+        XCTAssertFalse(text.contains("Present one cue card."),
+                       "单练 Part 3 的提示词里混进了 Part 2 的「出一张 cue card」：\n\(text)")
+    }
+
+    /// **题目那一段的措辞也要跟着改。**
+    ///
+    /// 规则段说「不许出 cue card」，题目段却写着「Today's question (Part 3): Describe a law…」，
+    /// 那是一份自相矛盾的提示词——模型照哪一半做都不奇怪。
+    func testPart3QuestionBlockIsLabelledAsADiscussionThemeInsteadOfTodaysQuestion() {
+        let text = part3OnlyText()
+        XCTAssertTrue(text.contains("Discussion theme for this Part 3 session"),
+                      "题目那一段还在用通用抬头。下一步：Part 3 的题目块要写明这是讨论话题：\n\(text)")
+        XCTAssertTrue(text.contains("it is NOT a task, NOT a cue card"),
+                      "题目块没有当场否掉「这是一道任务」这个读法：\n\(text)")
+        XCTAssertFalse(text.contains("Today's question (Part 3"),
+                       "题目块还是「今天的题目（Part 3）：Describe a law…」，"
+                           + "一句 Describe 摆在「今天的题目」底下，本身就在诱导它当成 Part 2 任务：\n\(text)")
+        // 题干本身当然还要给出去，否则考官不知道讨论什么。
+        XCTAssertTrue(text.contains("Describe a law on environmental protection"))
+    }
+
+    /// 两种反馈时机下都得成立——`.immediate` 那一支的开场白不一样，
+    /// 别让「只在默认设置下才不出 cue card」溜过去。
+    func testPart3AloneHoldsUnderEveryFeedbackTiming() {
+        for timing in FeedbackTiming.allCases {
+            let text = part3OnlyText(feedbackTiming: timing)
+            XCTAssertTrue(text.contains("This session contains ONLY Part 3."), "\(timing)")
+            XCTAssertFalse(text.contains("Present one cue card."), "\(timing)")
+        }
+    }
+
+    // MARK: - 「Part 2 + Part 3 连着练」
+
+    private func part2And3Text(part2PrepMode: Part2PrepMode = .countdown) -> String {
+        ExaminerPrompt.build(setup: SessionSetup(
+            question: question, focusPart: .part2And3, durationMinutes: 9, goal: "",
+            part2PrepMode: part2PrepMode))
+    }
+
+    /// **先 Part 2，再 Part 3，中间不停。** 真实考试就是这个顺序，这一档保留它。
+    func testPart2And3RunsTheLongTurnFirstAndThenTheDiscussion() {
+        let text = part2And3Text()
+        XCTAssertTrue(text.contains("Section rules (Part 2 + Part 3, run back to back)"),
+                      "这一档没有自己的 section rules：\n\(text)")
+        XCTAssertTrue(
+            text.contains("a Part 2 long turn followed immediately by a Part 3 discussion"),
+            "没说清先做哪一段、再做哪一段：\n\(text)")
+        XCTAssertTrue(text.contains("There is no Part 1 in it."),
+                      "没排除 Part 1——这一档不是全真模考：\n\(text)")
+        XCTAssertTrue(text.contains("mark the change of gear in one short sentence"),
+                      "两段之间没有过渡指令，考官会把 Part 3 的第一问接得像还在追问 cue card：\n\(text)")
+        XCTAssertTrue(text.contains("does NOT cancel"),
+                      "「两段之间不做总结」必须写明它不等于「整场不给反馈」，"
+                          + "否则会静默覆盖用户选的当场点评：\n\(text)")
+    }
+
+    /// 两段的规则正文都要原样装进去——只写一句「各按各的规则来」等于什么都没给
+    /// （全真模考当年就栽在这上面）。
+    func testPart2And3CarriesBothSectionsRulesVerbatim() {
+        let text = part2And3Text()
+        XCTAssertTrue(text.contains("Section rules (Part 2)"), "缺 Part 2 的规则正文：\n\(text)")
+        XCTAssertTrue(text.contains("Present one cue card."), "缺「出一张 cue card」：\n\(text)")
+        XCTAssertTrue(text.contains("up to two minutes"), "缺两分钟长独白：\n\(text)")
+        XCTAssertTrue(text.contains("Section rules (Part 3)"), "缺 Part 3 的规则正文：\n\(text)")
+        XCTAssertTrue(text.contains("Ask 4–8 questions in total."), "缺 Part 3 的题量：\n\(text)")
+        XCTAssertTrue(text.contains("Start from the Part 2 theme you have just finished"),
+                      "这一档里 Part 3 确实接在 Part 2 之后，起手规则就该这么写：\n\(text)")
+    }
+
+    /// 题库里一张 cue card 底下挂的是 `You should say` 的提示点，**没有** Part 3 的参考问句
+    /// （那是另一道题）。所以这一档必须明说 Part 3 那一半要全部临场编，
+    /// 否则考官会去找一份根本不存在的清单，或者干脆把 cue card 的提示点当成讨论题问一遍。
+    func testPart2And3SaysThePart3HalfHasNoReferenceQuestions() {
+        let text = part2And3Text()
+        XCTAssertTrue(text.contains("You are given no reference questions for the Part 3 half"),
+                      "没交代 Part 3 那一半没有参考问句：\n\(text)")
+    }
+
+    /// **这一档不许带上「这一场只有 Part 3」那段话**——它这一场恰恰是有 Part 2 的。
+    /// 两段规则同时出现的话，提示词自相矛盾。
+    func testPart2And3DoesNotInheritThePart3OnlyFraming() {
+        for (name, text) in [("Part 2 + Part 3", part2And3Text()),
+                             ("全真模考", ExaminerPrompt.build(setup: setup(focusPart: .fullMock)))] {
+            XCTAssertFalse(text.contains("This session contains ONLY Part 3."),
+                           "\(name) 里混进了「这一场只有 Part 3」，"
+                               + "而它明明要出 cue card——提示词自相矛盾：\n\(text)")
+        }
+    }
+
+    /// 题目块把那道题说成 cue card，并且交代 Part 3 要留在同一个话题上。
+    func testPart2And3QuestionBlockPresentsTheCueCardAndPinsThePart3Theme() {
+        let text = part2And3Text()
+        XCTAssertTrue(text.contains("Today's Part 2 cue card"),
+                      "题目块没说这是一张 cue card：\n\(text)")
+        XCTAssertTrue(text.contains("keep the Part 3 discussion on the same theme"),
+                      "没要求 Part 3 留在同一个话题上，这一档就退化成「两道无关的题」：\n\(text)")
+        XCTAssertTrue(text.contains("Follow-up points to cover"),
+                      "cue card 的提示点被改写了。Part 2 的提示点是考生该逐条覆盖的，"
+                          + "不是「挑几条说说」的参考问句：\n\(text)")
+    }
+
+    /// 用户在设置里选的「Part 2 的一分钟怎么处理」要穿到这一档里——
+    /// 这一档里真的有一段 Part 2，漏穿的话那项偏好在这条路线上静默失效。
+    func testPart2And3ThreadsPart2PrepMode() {
+        XCTAssertTrue(part2And3Text(part2PrepMode: .countdown)
+            .contains("Announce one minute of preparation"))
+        let learnerLed = part2And3Text(part2PrepMode: .learnerControlled)
+        XCTAssertTrue(learnerLed.contains("say \"I'm ready\""))
+        XCTAssertFalse(learnerLed.contains("Announce one minute of preparation"),
+                       "用户选了自己决定，不该再出现倒计时指令")
+    }
+
+    /// 复盘那一侧也要认得这一档：一场里出现了两种题型，两套长度标准都得给。
+    /// 落回通用兜底的话，那句话里三个 Part 的目标句数、词数一个都没有。
+    func testReviewRequestForPart2And3CarriesBothLengthStandards() {
+        let text = ReviewRequestPrompt.build(requestID: "sync-1", focusPart: .part2And3)
+        XCTAssertTrue(text.contains("最多两分钟陈述"), "缺 Part 2 的长度标准：\n\(text)")
+        XCTAssertTrue(text.contains("比Part 1更抽象"), "缺 Part 3 的长度标准：\n\(text)")
+        XCTAssertFalse(text.contains("先根据问题所属Part选择对应长度"),
+                       "落回了通用兜底——这一场明明知道自己只会出现哪两种题型：\n\(text)")
+    }
+
+    // MARK: - 三个 Part 各自「不做什么」
+    //
+    // 原先三段规则只写了「做什么」。Part 3 这次就是栽在这上面：规则把该做的写得很细，
+    // 而模型顺手把它以为缺的那一半（Part 2）补上了。
+
+    /// 每个 Part 都得有一段自己的禁令。**逐 Part 分开写**：
+    /// 「不许出 cue card」对 Part 1 / Part 3 是铁律，对 Part 2 恰恰相反。
+    func testEveryPartSpellsOutWhatItMustNotDo() {
+        let cases: [(String, String, String)] = [
+            ("Part 1", part1Text(), "Never do these in Part 1:"),
+            ("Part 2", ExaminerPrompt.build(setup: setup(focusPart: .part2)),
+             "Never do these in Part 2:"),
+            ("Part 3", part3OnlyText(), "Never do these in the Part 3 discussion:")
+        ]
+        for (name, text, heading) in cases {
+            XCTAssertTrue(text.contains(heading),
+                          "\(name) 只写了「做什么」，没写「不做什么」。"
+                              + "本项目已经因为这一点翻过一次车（Part 3 被补出了一张 cue card）：\n\(text)")
+        }
+    }
+
+    /// **Part 1 不做什么**：不出 cue card、不给准备时间、不要长独白、不谈抽象议题。
+    func testPart1IsForbiddenFromCueCardsPreparationAndAbstractDiscussion() {
+        let text = part1Text()
+        for line in ["- Never present a cue card, and never set a \"Describe …\" task.",
+                     "- Never give preparation time.",
+                     "- Never ask for a long turn, a one-to-two-minute answer, or a speech.",
+                     "- Never open an abstract, general or society-level discussion — "
+                        + "that is Part 3, not Part 1."] {
+            XCTAssertTrue(text.contains(line), "Part 1 少了这条禁令「\(line)」：\n\(text)")
+        }
+    }
+
+    /// **Part 2 不做什么**：不许省掉 cue card、不许在两分钟里插嘴、不许把独白聊成对话、
+    /// 不许当场展开 Part 3 的抽象讨论。
+    func testPart2IsForbiddenFromInterruptingOrTurningIntoADiscussion() {
+        let text = ExaminerPrompt.build(setup: setup(focusPart: .part2))
+        for line in ["- Never skip the cue card: the learner must be given the task and its bullet points.",
+                     "- Never interrupt the long turn to correct, teach, praise, or ask another question.",
+                     "- Never turn the long turn into a back-and-forth conversation.",
+                     "- Never start the abstract Part 3 discussion while the long turn is still running."] {
+            XCTAssertTrue(text.contains(line), "Part 2 少了这条禁令「\(line)」：\n\(text)")
+        }
+    }
+
+    /// **Part 3 不做什么**：不出 cue card、不给准备时间、不要长独白、不许停在 Part 1 的层面。
+    ///
+    /// 这一段在**三种**带 Part 3 的考法里都得在：单练、连着练、全真模考。
+    /// 少了其中任何一处，那条路线上的 Part 3 就又可能被做成一张卡。
+    func testPart3IsForbiddenFromCueCardsAndLongTurnsInEveryModeThatContainsIt() {
+        let modes: [(String, FocusPart)] = [("单练 Part 3", .part3),
+                                            ("Part 2 + Part 3", .part2And3),
+                                            ("全真模考", .fullMock)]
+        for (name, focus) in modes {
+            let text = ExaminerPrompt.build(setup: setup(focusPart: focus))
+            for line in ["- Never present a cue card, and never turn the discussion theme "
+                            + "into a \"Describe …\" task.",
+                         "- Never ask for a one-to-two-minute long turn.",
+                         "- Never stay at Part 1 level — personal habits and simple preferences "
+                            + "alone are not Part 3."] {
+                XCTAssertTrue(text.contains(line),
+                              "\(name) 的 Part 3 少了这条禁令「\(line)」：\n\(text)")
+            }
+        }
+    }
+
+    /// **禁令必须挂在各自的 Part 名下。**
+    ///
+    /// 三段禁令会同时出现在全真模考的提示词里（「不许出 cue card」与「必须出 cue card」
+    /// 就在同一份文本里）。它们不打架的唯一依据，是每段开头那句「在 Part N 里不要…」。
+    /// 把限定语去掉之后这条会红。
+    func testTheNeverListsAreScopedToTheirOwnPartSoTheyCanCoexist() {
+        let text = ExaminerPrompt.build(setup: setup(focusPart: .fullMock))
+        for heading in ["Never do these in Part 1:", "Never do these in Part 2:",
+                        "Never do these in the Part 3 discussion:"] {
+            XCTAssertTrue(text.contains(heading),
+                          "全真模考里缺了「\(heading)」这段限定过的禁令。"
+                              + "没有 Part 名限定的话，「不许出 cue card」会和 Part 2 的"
+                              + "「必须出 cue card」在同一份提示词里直接冲突：\n\(text)")
+        }
+        XCTAssertTrue(text.contains("Present one cue card."),
+                      "全真模考里 Part 2 该出的那张 cue card 被禁令误伤了：\n\(text)")
+    }
+
     /// **红线三：本次的复训目标不许提前告诉考生。**
     ///
     /// 说破了就不是考试了——学员会照着目标演，复盘拿到的不是他平时的样子。

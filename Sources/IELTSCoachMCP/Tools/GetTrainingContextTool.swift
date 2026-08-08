@@ -79,9 +79,14 @@ enum GetTrainingContextTool {
                     + "下一步：调用 set_training_selection 重新选一道题。")
             }
 
+            // 默认时长跟着**这一场的考法**走，不是跟着题目的 part 走。
+            // 两者在大多数情况下一样，但 `set_training_selection` 允许显式指定 focusPart：
+            // 一道 Part 2 的题被选成「Part 2 + Part 3 连着练」时，按题目算出来的 4 分钟
+            // 会写进提示词的「Target session length」，考官为了对上时间会把 Part 3 砍掉。
             let duration = try arguments.optionalInt("durationMinutes", in: 1...60,
-                default: question.part == 2 ? 4 : 6,
-                hint: "durationMinutes 传 1–60 之间的整数分钟；省略则 Part 2 用 4 分钟、其余用 6 分钟。")
+                default: session.focusPart.defaultDurationMinutes,
+                hint: "durationMinutes 传 1–60 之间的整数分钟；省略则按这一场的 focusPart 取默认值"
+                    + "（Part 2 用 4 分钟、Part 2 + Part 3 用 9 分钟、其余 6 分钟）。")
             let timingRaw = try arguments.optionalChoice("feedbackTiming", allowed: timings,
                 default: FeedbackTiming.deferred.rawValue,
                 hint: "feedbackTiming 只能是 deferred 或 immediate。")

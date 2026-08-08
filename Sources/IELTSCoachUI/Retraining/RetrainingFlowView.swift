@@ -63,6 +63,9 @@ struct RetrainingFlowView: View {
     @State private var outcome: RetrainingOutcome?
     /// 上一次操作的中文说明（失败时必须显示，不许静默）。
     @State private var notice: String?
+    /// 候选题按 Part 分栏之后，哪几栏是展开的。**`nil` = 用户还没动过折叠，按默认来**
+    /// （`QuestionPartSections.defaultExpandedParts`）。理由与 `PracticeSheet` 那一处相同。
+    @State private var expandedParts: Set<Int>?
 
     init(app: AppState, item: RetrainingItem, run: RetrainingRun, question: Question?,
          originalQuestionID: String,
@@ -299,10 +302,31 @@ struct RetrainingFlowView: View {
                 Text("挑一道题带着这个目标练")
                     .font(Typography.cardTitle)
                     .foregroundStyle(Palette.textPrimary)
-                ForEach(pickable) { candidate in
-                    candidateRow(candidate)
+                // 平常这里只有一栏（换题验证不跨 Part，`TransferQuestionPolicy` 就是这么筛的），
+                // 那时 `notice` 是 nil、那一栏默认展开，看起来和从前一模一样。
+                // 会分成几栏的是「原题查不到、退回整个题库」那一路——那一路此前是
+                // 一张 258 条的平铺列表，Part 1 全排在最前面。
+                sectionsNotice
+                ForEach(candidateSections) { section in
+                    QuestionPartSectionView(title: section.title,
+                                            isExpanded: expansion(of: section.part)) {
+                        ForEach(section.items) { candidate in
+                            candidateRow(candidate)
+                        }
+                    }
                 }
             }
+        }
+    }
+
+    /// 分栏这件事本身的那一句交代。只有一栏时什么都不画。
+    @ViewBuilder private var sectionsNotice: some View {
+        if let line = QuestionPartSections.notice(for: candidateSections) {
+            Text(line)
+                .font(Typography.label)
+                .monospacedDigit()
+                .foregroundStyle(Palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -581,7 +605,9 @@ struct RetrainingFlowView: View {
                 Button("开始练习") { startPractice() }
                     .buttonStyle(.borderedProminent)
                     .tint(Palette.accent)
-                    .disabled(question == nil && picked == nil)
+                    // 灰着的条件用 `pickedQuestion` 而不是 `picked`：把挑好那道题所在的栏
+                    // 折起来之后它就不在屏幕上了，按钮还亮着的话，按下去什么都不会发生。
+                    .disabled(question == nil && pickedQuestion == nil)
                     .keyboardShortcut(.defaultAction)
             }
         }
@@ -665,7 +691,7 @@ struct RetrainingFlowView: View {
 
     /// 开练。**每趟造一台新的驱动器与编排器**，理由见 `runner` 的说明。
     private func startPractice() {
-        let chosen = question ?? pickable.first { $0.question.id == picked }?.question
+        let chosen = question ?? pickedQuestion
         guard let chosen else { return }
         question = chosen
         notice = nil
@@ -787,6 +813,55 @@ struct RetrainingFlowView: View {
         return app.state.questions.map {
             TransferCandidate(question: $0, sameTopicAsOriginal: false)
         }
+    }
+
+    /// 候选题按 Part 分栏。分栏规则与自由选题弹层共用 `QuestionPartSections`，
+    /// 那边有测试守着；两处各写一份的话，同一件事会长成两个样子。
+    private var candidateSections: [QuestionPartSection<TransferCandidate>] {
+        QuestionPartSections.split(pickable) { $0.question.part }
+    }
+
+    /// 默认展开哪一栏时的「用户偏好」。换题验证的偏好就是**原题那个 Part**——
+    /// 这一趟本来就只该在同一个 Part 里换（`TransferQuestionPolicy`）。
+    /// 原题和这一趟的题都查不到时（`pickable` 那条退回整个题库的路）没有偏好，传 nil。
+    private var referencePart: Int? { (item.originalQuestion ?? question)?.part }
+
+    private var expandedPartsNow: Set<Int> {
+        expandedParts ?? QuestionPartSections.defaultExpandedParts(
+            inSections: candidateSections.map(\.part), preferredPart: referencePart)
+    }
+
+    /// 此刻屏幕上真的看得见的那些候选：展开的那几栏里的。**开练只认这一份。**
+    private var visibleCandidates: [TransferCandidate] {
+        QuestionPartSections.visibleItems(in: candidateSections, expandedParts: expandedPartsNow)
+    }
+
+    /// 用户挑中的那道题。**折起来的栏里那道不算数**——
+    /// 选中一道、把那一栏折起来、再点「开始练习」的话，
+    /// 练的会是屏幕上一道也看不见的题。
+    private var pickedQuestion: Question? {
+        guard let picked else { return nil }
+        return visibleCandidates.first { $0.question.id == picked }?.question
+    }
+
+    /// 某一栏展开与否。收起一栏的同时把那一栏里挑好的题清掉，
+    /// 否则屏幕上看不见的一道题仍然是「已选中」，而「开始练习」照样亮着。
+    private func expansion(of part: Int) -> Binding<Bool> {
+        Binding(get: { expandedPartsNow.contains(part) },
+                set: { isExpanded in
+                    var next = expandedPartsNow
+                    if isExpanded {
+                        next.insert(part)
+                    } else {
+                        next.remove(part)
+                        if let picked, pickable.contains(where: {
+                            $0.question.id == picked && $0.question.part == part
+                        }) {
+                            self.picked = nil
+                        }
+                    }
+                    expandedParts = next
+                })
     }
 
     private var emptyCandidatesMessage: String {

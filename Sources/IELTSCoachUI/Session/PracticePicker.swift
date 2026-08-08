@@ -74,11 +74,51 @@ public struct PracticePicker: Sendable {
     }
 
     /// 当前这一档筛出来多少道。列表上方那一句。
+    ///
+    /// 「全部」这一档说的是**分栏**而不是「排好序」：列表已经按 Part 折成几栏了
+    /// （`QuestionPartSections`），还写「按 Part 1 → 2 → 3 排好序」的话，
+    /// 用户会以为下面是一张一路滑到底的长列表，而屏幕上其实是三行栏标题。
     public func selectionSummary(forPart part: Int) -> String {
         guard part != Self.allParts else {
-            return "现在列出的是全部 \(questions.count) 道题，按 Part 1 → 2 → 3 排好序。"
+            return "现在列出的是全部 \(questions.count) 道题，按 Part 分栏。"
         }
         return "现在只列 Part \(part) 的 \(count(inPart: part)) 道题。"
+    }
+
+    // MARK: - 「练完 Part 2 接着练 Part 3」
+
+    /// 那颗开关的标题。**它就是用户当初要的那个功能**，用户原话：
+    /// 「你可以加一个功能，是否同时练习 part2 和 part3。」
+    ///
+    /// 标题写在这里而不是只写在视图里，是为了让「界面上真有这颗开关」这件事
+    /// 有一处可被测试引用的出处；视图那边 `Toggle(PracticePicker.linkPart3Title)` 直接用它。
+    public static let linkPart3Title = "练完 Part 2 接着练 Part 3"
+
+    /// 开关旁边那句解释。说清打开之后这一场会变成什么样、以及它为什么值得打开。
+    public static let linkPart3Hint = "真实考试里 Part 3 就是紧接着 Part 2 的同一个话题问下来的。"
+        + "打开之后这一场会先做 cue card 的两分钟陈述，再直接进入 Part 3 讨论，中间不停。"
+        + "关着就只做 Part 2。"
+
+    /// 这颗开关只在 Part 2 那一档出现——**其余档位一律不显示，也不生效**。
+    ///
+    /// 这不是偷懒，是在堵一个「屏幕上写着一回事、实际发生另一回事」的口子：
+    /// 「全部」那一档里既有 Part 1 也有 Part 3 的题，开关亮着而用户挑了一道 Part 1，
+    /// `FocusPart.forSession` 会照常回落成 Part 1（一张 Part 1 话题卡做不出两分钟长陈述），
+    /// 于是开关开着、这一场却和它毫无关系。不显示就不会有这种矛盾。
+    public static func showsLinkPart3(forPart part: Int) -> Bool { part == 2 }
+
+    /// 这一场最终按哪套考法跑。`nil` = 按题目自身的 Part 走。
+    ///
+    /// 结论只交给 `FocusPart.forSession` 去落地，这里只负责把界面上的两个状态
+    ///（当前档位 + 开关）翻译成一个 `FocusPart?`。
+    public static func mode(forPart part: Int, linksPart3: Bool) -> FocusPart? {
+        showsLinkPart3(forPart: part) && linksPart3 ? .part2And3 : nil
+    }
+
+    /// 打开弹层时那颗开关默认是开还是关。跟着学习计划的「重点 Part」走，理由与
+    /// `defaultPart(forPlanFocus:)` 完全一样：两处 Part 选择要像同一件事的两个层次。
+    public static func defaultLinksPart3(forPlanFocus focusPart: FocusPart?) -> Bool {
+        focusPart == .part2And3
     }
 
     /// 这一档下一道题都没有时说什么。有题时返回 nil。
@@ -105,6 +145,10 @@ public struct PracticePicker: Sendable {
         case .part1: return 1
         case .part2: return 2
         case .part3: return 3
+        // 「Part 2 + Part 3 连着练」排的就是 Part 2 那批 cue card（`PlanScope.select`），
+        // 所以档位停在 Part 2；那一档的差别由那颗开关表达，默认跟着计划打开
+        //（`defaultLinksPart3(forPlanFocus:)`）。
+        case .part2And3: return 2
         case .fullMock, nil: return allParts
         }
     }
@@ -115,8 +159,14 @@ public struct PracticePicker: Sendable {
     /// 全真模考 / 没有计划时返回 nil——那时默认就是「全部」，没有什么要解释的。
     public static func planFocusNotice(for focusPart: FocusPart?) -> String? {
         guard let focusPart, focusPart != .fullMock else { return nil }
-        return "默认停在 \(PlanScope.label(for: focusPart))，因为你在「学习计划」页"
-            + "把重点 Part 设成了它。下一步：想练别的 Part，点上面那排按钮直接切——"
+        var notice = "默认停在 \(PlanScope.label(for: focusPart))，因为你在「学习计划」页"
+            + "把重点 Part 设成了它。"
+        // 计划选的是「连着练」时，档位停在 Part 2 而那颗开关也替他打开了。
+        // 不说这一句的话，用户看到的是「Part 2」这一档，会以为计划里那个选择没生效。
+        if focusPart == .part2And3 {
+            notice += "题目列的是 Part 2 的 cue card，下面那个「\(linkPart3Title)」也已经替你打开。"
+        }
+        return notice + "下一步：想练别的 Part，点上面那排按钮直接切——"
             + "这只影响眼前这一场，学习计划不会跟着改。"
     }
 }

@@ -217,10 +217,11 @@ public struct TodayViewModel: Sendable {
     ///
     /// 时长与 `coach practice` 保持一致：Part 2 一场就一道题，四分钟足够；其余六分钟。
     public func practiceSetup(question: Question, route: PracticeRoute) -> SessionSetup {
-        SessionSetup(question: question,
-                     focusPart: FocusPart(rawValue: "Part \(question.part)") ?? .fullMock,
-                     durationMinutes: question.part == 2 ? 4 : 6,
-                     goal: goal(for: route))
+        let focusPart = FocusPart.inferred(fromQuestionPart: question.part)
+        return SessionSetup(question: question,
+                            focusPart: focusPart,
+                            durationMinutes: focusPart.defaultDurationMinutes,
+                            goal: goal(for: route))
     }
 
     /// 挑题时可选的题目。按 Part、再按题库原有顺序。

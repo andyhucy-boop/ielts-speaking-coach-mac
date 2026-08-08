@@ -123,8 +123,13 @@ struct TodayView: View {
                           // 在弹层里当场挑的那道题同样走解析器的取值，不在这里另拼一份：
                           // 另拼的那份一定会漏掉 feedbackTiming / part2PrepMode，
                           // 于是「自由选题」这条路线成了唯一不听用户练习偏好的一条。
-                          makeSetup: {
-                              PracticeRouteResolver.setup(for: $0, goal: "", defaults: defaults)
+                          //
+                          // 第二个参数是用户在弹层上当场选的考法（那颗「练完 Part 2
+                          // 接着练 Part 3」开关）。丢掉它，开关就成了一颗拨得动、
+                          // 却什么都不改的装饰品。
+                          makeSetup: { question, mode in
+                              PracticeRouteResolver.setup(for: question, goal: "",
+                                                          defaults: defaults, mode: mode)
                           },
                           onClose: { self.launch = nil })
         }

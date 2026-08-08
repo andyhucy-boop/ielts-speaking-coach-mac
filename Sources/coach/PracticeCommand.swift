@@ -58,9 +58,9 @@ enum PracticeCommand {
         readiness.messages.forEach { print($0) }
         guard readiness.ok else { return 1 }
 
-        let focusPart = FocusPart(rawValue: "Part \(question.part)") ?? .fullMock
+        let focusPart = FocusPart.inferred(fromQuestionPart: question.part)
         let setup = SessionSetup(question: question, focusPart: focusPart,
-                                 durationMinutes: question.part == 2 ? 4 : 6, goal: goal,
+                                 durationMinutes: focusPart.defaultDurationMinutes, goal: goal,
                                  feedbackTiming: feedbackTiming, part2PrepMode: prepMode)
 
         do {

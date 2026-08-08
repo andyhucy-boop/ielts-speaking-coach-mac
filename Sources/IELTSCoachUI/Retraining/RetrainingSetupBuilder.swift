@@ -28,13 +28,17 @@ public enum RetrainingSetupBuilder {
                                  question: Question,
                                  feedbackTiming: FeedbackTiming = .deferred,
                                  part2PrepMode: Part2PrepMode = .countdown) -> SessionSetup {
-        // FocusPart 的 raw value 就是 "Part 1"/"Part 2"/"Part 3"；
-        // 题库里出现越界的 part 时落到 full mock，不让脏数据把复训整场卡死。
-        let focusPart = FocusPart(rawValue: "Part \(question.part)") ?? .fullMock
+        // 越界的 part（手改坏的 state.json）落到 full mock，不让脏数据把复训整场卡死。
+        //
+        // **复训刻意不带「Part 2 + Part 3 连着练」这一档。** 复训是回去改一个具体的毛病
+        //（`goal`），越短越集中越好；而且这条路线有两个入口——复训中心和今日训练页的
+        // `PracticeRouteResolver.resolveRetrain`——两处都按题目自身的 Part 走，
+        // 才不会出现「从这个入口进是 9 分钟的 2+3、从那个入口进是 4 分钟的 Part 2」。
+        let focusPart = FocusPart.inferred(fromQuestionPart: question.part)
         return SessionSetup(question: question,
                             focusPart: focusPart,
                             // 与 coach practice 的既有取值一致：Part 2 是一段长答，4 分钟；其余 6 分钟。
-                            durationMinutes: question.part == 2 ? 4 : 6,
+                            durationMinutes: focusPart.defaultDurationMinutes,
                             goal: goalText(for: target),
                             feedbackTiming: feedbackTiming,
                             part2PrepMode: part2PrepMode)

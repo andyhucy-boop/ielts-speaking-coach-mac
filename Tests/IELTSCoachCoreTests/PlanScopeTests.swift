@@ -98,8 +98,31 @@ final class PlanScopeTests: XCTestCase {
 
     func testLabelsAreChineseAndDistinct() {
         let labels = FocusPart.allCases.map(PlanScope.label(for:))
-        XCTAssertEqual(Set(labels).count, labels.count, "四个重点 Part 的说明不能重名")
+        XCTAssertEqual(Set(labels).count, labels.count, "每个重点 Part 的说明不能重名")
         XCTAssertTrue(PlanScope.label(for: .fullMock).contains("全真模考"))
         XCTAssertTrue(PlanScope.label(for: .part1).contains("Part 1"))
+    }
+
+    /// **「Part 2 + Part 3 连着练」的名字要让人一眼看懂它会发生什么。**
+    ///
+    /// 这个名字会出现在学习计划页那组单选按钮上、以及开练弹层那句默认档位说明里。
+    /// 只写「Part 2 + Part 3」的话，用户分不清它和「全真模考」差在哪儿。
+    func testTheCombinedModeSaysWhatActuallyHappensInIt() {
+        let label = PlanScope.label(for: .part2And3)
+        XCTAssertTrue(label.contains("Part 2"), label)
+        XCTAssertTrue(label.contains("Part 3"), label)
+        XCTAssertTrue(label.contains("连着练"), "没说清是「连着」练的：" + label)
+        XCTAssertFalse(label.contains("模考"), "别让人以为这是三个 Part 的全真模考：" + label)
+    }
+
+    /// 「连着练」排的就是 Part 2 那批 cue card。
+    ///
+    /// **Part 3 那批题刻意不排**：题库里 Part 3 的题干本来就是它所属 cue card 的原文
+    /// （`TopicQuestions.part3`），排进来会让同一张卡在计划里占掉两天。
+    func testTheCombinedModeSchedulesTheCueCardsAndNothingElse() {
+        let bank = [Question(id: "a1", part: 1, topic: "T", prompt: "p"),
+                    Question(id: "b1", part: 2, topic: "事件", prompt: "Describe a law"),
+                    Question(id: "c1", part: 3, topic: "Describe a law", prompt: "Describe a law")]
+        XCTAssertEqual(PlanScope.select(from: bank, focusPart: .part2And3).map(\.id), ["b1"])
     }
 }

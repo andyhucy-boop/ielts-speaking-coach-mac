@@ -16,7 +16,7 @@ struct QuestionBankView: View {
     /// `Picker` 的 Optional tag 极容易写成不匹配的类型（`.tag(1)` 是 `Int`，
     /// 而 selection 是 `Int?`），一旦对不上，分段控件看着能点、列表却纹丝不动——
     /// 编译器不会说一个字。用 `Int` 就没有这一类失效。
-    @State private var partSelection = 0
+    @State private var partSelection = PracticePicker.allParts
 
     /// 上一次导入的交代。非 nil 时弹 `QuestionBankImportResultSheet`。
     ///
@@ -26,7 +26,7 @@ struct QuestionBankView: View {
     /// `QuestionBankViewTests` 扫源码守着这一条。
     @State private var feedback: QuestionBankImportFeedback?
 
-    private var partFilter: Int? { partSelection == 0 ? nil : partSelection }
+    private var partFilter: Int? { partSelection == PracticePicker.allParts ? nil : partSelection }
 
     private var model: QuestionBankViewModel {
         QuestionBankViewModel(questions: app.state.questions)
@@ -109,11 +109,15 @@ struct QuestionBankView: View {
 
     private var bank: some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
+            // 档位与每一格写什么，**与开练弹层那排按钮同一个出处**
+            //（`PracticePicker.partOptions` / `segmentTitle`）。
+            // 两页各写一份的话，「按 Part 筛」这件事会在 App 里长成两个样子——
+            // 一处叫「全部」、另一处叫「不限」，或者一处有四档、另一处三档，
+            // 而这不会体现在任何一条编译错误上。
             Picker("按 Part 筛选题目", selection: $partSelection) {
-                Text("全部").tag(0)
-                Text("Part 1").tag(1)
-                Text("Part 2").tag(2)
-                Text("Part 3").tag(3)
+                ForEach(PracticePicker.partOptions, id: \.self) { part in
+                    Text(PracticePicker.segmentTitle(forPart: part)).tag(part)
+                }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
@@ -229,7 +233,7 @@ struct QuestionBankView: View {
                      + "下一步：切回「全部」看看现有的题，或导入一份包含 Part \(partSelection) 的题库文件。")
                     .font(Typography.secondary)
                     .foregroundStyle(Palette.textSecondary)
-                Button("看全部题目") { partSelection = 0 }
+                Button("看全部题目") { partSelection = PracticePicker.allParts }
                     .buttonStyle(.bordered)
                     .padding(.top, Spacing.xs)
             }
