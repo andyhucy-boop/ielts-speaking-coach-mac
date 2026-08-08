@@ -68,6 +68,13 @@ public enum ReviewReportViewModel {
     }
 
     /// 分区顺序固定，不随 JSON 键序变化——否则同一份复盘每次打开顺序都不一样。
+    /// 顺序与 `ReviewRequestPrompt` 里那张键表一致。
+    ///
+    /// **这张表必须覆盖提示词要的每一个数组键。** 曾经这里只有四行，
+    /// `habits`（口语习惯）与 `logic_feedback`（逐题逻辑反馈）ChatGPT 每次都给、
+    /// 也原样存进了硬盘，界面却从头到尾一个字都不显示，连「有 N 节没能显示出来」
+    /// 那张警告卡都提不到它们（它只遍历这张表）——用户得到的信号是「这就是完整的复盘」。
+    /// 「回答前有较长停顿」「没有先直接回应问题」这类最该被看见的行为反馈，一条都不上屏。
     private static let layout: [Layout] = [
         Layout(title: "必须纠正的表达", key: "must_correct",
                fields: ("learner_said", "correction", "why_it_matters"),
@@ -78,10 +85,24 @@ public enum ReviewReportViewModel {
         Layout(title: "词汇升级", key: "vocabulary",
                fields: ("basic", "better", "collocation"),
                labels: ("你用的词", "更准确的表达", "搭配或例句")),
+        // 第二格取 `fix`（提示词里新加的一项）：这一节讲的是习惯，而习惯要的是「下次怎么改」。
+        // ChatGPT 没给 `fix` 时这一格空着不画，习惯本身与例证照样上屏。
+        Layout(title: "口语习惯", key: "habits",
+               fields: ("habit", "fix", "evidence"),
+               labels: ("这个习惯", "下次怎么改", "当时的例证")),
+        // 第二格是 improvement 而不是 issue：三格里被标绿、最先被读到的那一格，
+        // 留给「该怎么办」比留给「哪里不好」有用。
+        Layout(title: "逐题逻辑反馈", key: "logic_feedback",
+               fields: ("question", "improvement", "issue"),
+               labels: ("题目", "改进方向", "当时的问题")),
         Layout(title: "逐题高分版", key: "answer_upgrades",
                fields: ("question", "original_answer", "revised_answer"),
                labels: ("题目", "你当时的回答", "高分版"))
     ]
+
+    /// 整体总结那一块的抬头。`unreadableSections` 用它点名，界面也用它当标题——
+    /// 两处各写一份的话，警告卡说的名字会和页面上的标题对不上。
+    public static let summaryTitle = "整体总结"
 
     public static func sections(from report: JSONValue) -> [ReviewSection] {
         layout.compactMap { entry in
@@ -97,26 +118,53 @@ public enum ReviewReportViewModel {
         }
     }
 
+    /// ChatGPT 对这一场的整体总结（`summary`，一个字符串）。读不出来时是空串。
+    ///
+    /// **它必须上屏。** 这是整份复盘里唯一一段连贯的话，其余全是逐条清单；
+    /// 而且它和 `habits` / `logic_feedback` 一样，此前既不显示也不报缺。
+    public static func summary(from report: JSONValue) -> String {
+        (report["summary"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// 复盘里存在、且非空，却一条都没能读出来的分区名。
     ///
     /// 与 `ArchiveOutcome.skipped` 守的是同一件事：**读出 0 条不等于复盘里没有**，
     /// 更可能是 ChatGPT 换了字段名或整个形状（数组写成了对象）。
     /// 这种失败不报错、不崩溃，只是悄悄什么都不显示——本项目已知最危险的失败形态。
     public static func unreadableSections(in report: JSONValue) -> [String] {
-        layout.compactMap { entry in
+        // 整体总结先算：`summary` 被写成对象或数组（`{"overall":"…"}`）时取不出字符串，
+        // 那一整段话会凭空消失，而下面那圈只看数组键的检查一个字都提不到它。
+        var titles: [String] = []
+        if isPresentAndNonEmpty(report["summary"]) && summary(from: report).isEmpty {
+            titles.append(summaryTitle)
+        }
+        titles += layout.compactMap { entry in
             guard isPresentAndNonEmpty(report[entry.key]) else { return nil }
             return rows(for: entry, in: report).isEmpty ? entry.title : nil
         }
+        return titles
     }
 
-    public static func priorityTarget(from report: JSONValue) -> ReviewRow? {
-        guard let target = report["priority_target"], target.objectValue != nil,
-              let label = target["label"]?.stringValue, !label.isEmpty else { return nil }
-        let evidence = (target["evidence"]?.arrayValue ?? []).compactMap(\.stringValue)
-        return ReviewRow(id: target["id"]?.stringValue ?? "target",
-                         primary: label,
-                         secondary: target["status"]?.stringValue ?? "new",
-                         note: evidence.joined(separator: "；"))
+    /// 那张深色的「下一次唯一目标」卡片要画的内容。没有目标时返回 nil。
+    ///
+    /// **判据整个交给 `RetrainingPolicy.extractTarget`，这里一个条件都不许自己加。**
+    /// 曾经这里只要求 `label` 非空、归档那边只要求 `id` 非空，于是 ChatGPT 漏给 `id` 的那次，
+    /// 卡片照画、`state.targets` 一条不加、`ArchiveOutcome.skipped` 还是空数组——
+    /// 四个归档出口全都不吭声，用户在复训中心被告知「还没有待复训的目标」。
+    /// 现在这两处共用同一份判据：**画得出卡片 ⟺ 归得进档案**。
+    ///
+    /// `createdAt` 传空串：它只写进档案里那条记录，卡片一个字都不显示它，
+    /// 而这里要的只是「有没有目标、目标是什么」这份判断。
+    public static func priorityTarget(from report: JSONValue, sessionID: String) -> ReviewRow? {
+        guard let target = RetrainingPolicy.extractTarget(
+            from: report, sessionID: sessionID, createdAt: "") else { return nil }
+        // label 为空时退回 targetKey，与复训中心 `RetrainingCenterView.title(for:)` 的做法一致：
+        // 一块没有标题的深色卡片，用户根本不知道要盯的是什么。
+        let label = target.label.trimmingCharacters(in: .whitespacesAndNewlines)
+        return ReviewRow(id: target.targetKey,
+                         primary: label.isEmpty ? target.targetKey : label,
+                         secondary: target.status,
+                         note: target.evidence.joined(separator: "；"))
     }
 
     /// 左边那一列：已经存下复盘原文的练习，最近的排在最上面。

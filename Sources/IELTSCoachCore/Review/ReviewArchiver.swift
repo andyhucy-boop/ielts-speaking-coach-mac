@@ -3,8 +3,8 @@ import Foundation
 /// `archive` 的结果：归档后的新 state，加上「静默丢失」诊断。
 public struct ArchiveOutcome: Equatable, Sendable {
     public let state: CoachState
-    /// 顶层键存在、且非空，但本次一条都没能归进档案的字段名（目前只检查
-    /// must_correct 与 vocabulary，见 ReviewArchiver.archive 内的判定）。
+    /// 顶层键存在、且非空，但本次一条都没能归进档案的字段名（目前检查
+    /// must_correct、vocabulary 与 priority_target，见 ReviewArchiver.archive 内的判定）。
     ///
     /// **归档 0 条不等于没错题**——更可能是 ChatGPT 用的字段名（或整个结构的形状，
     /// 比如把数组写成了对象）与我们读的对不上，而这种失败不报错、不崩溃，
@@ -32,7 +32,15 @@ public enum ReviewArchiver {
             skipped.append("vocabulary")
         }
 
-        appendTarget(from: report, into: &updated, sessionID: sessionID, at: timestamp)
+        let targetKept = appendTarget(from: report, into: &updated,
+                                      sessionID: sessionID, at: timestamp)
+        if isPresentAndNonEmpty(report["priority_target"]) && !targetKept {
+            // 「下一次只盯这一个」是这个产品的改进闭环的起点。它存不下来却没人吭声的话，
+            // 用户刚在复盘页看过那张深色卡片，转身在复训中心看到的是「还没有待复训的目标」，
+            // 而他只会以为是自己漏了哪一步。
+            skipped.append("priority_target")
+        }
+
         advancePlan(in: &updated, questionID: questionID)
         markPracticed(in: &updated, questionID: questionID)
         return ArchiveOutcome(state: updated, skipped: skipped)
@@ -136,15 +144,21 @@ public enum ReviewArchiver {
 
     // MARK: - 重训目标
 
+    /// 返回「这份复盘的唯一目标最终在不在档案里」。
+    ///
+    /// **重复入库那一支返回 `true`**：目标本来就在，什么都没丢，那时报警等于对着
+    /// 一份归档得好好的复盘喊「有东西没归进去」——狼来了喊多了，真丢的那次就没人信了。
+    @discardableResult
     private static func appendTarget(from report: JSONValue, into state: inout CoachState,
-                                     sessionID: String, at timestamp: String) {
+                                     sessionID: String, at timestamp: String) -> Bool {
         guard let target = RetrainingPolicy.extractTarget(
-            from: report, sessionID: sessionID, createdAt: timestamp) else { return }
+            from: report, sessionID: sessionID, createdAt: timestamp) else { return false }
         // 同一 session 重复入库时不追加第二份
         guard !state.targets.contains(where: {
             $0.targetKey == target.targetKey && $0.sourceSessionId == sessionID
-        }) else { return }
+        }) else { return true }
         state.targets.append(target)
+        return true
     }
 
     // MARK: - 计划与题目状态

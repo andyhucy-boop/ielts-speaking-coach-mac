@@ -6,22 +6,30 @@ public struct ReviewDocument: Equatable, Sendable {
     /// 复盘原文的绝对路径。**要显示给用户**——他随时可以自己去看 ChatGPT 当时写了什么。
     public let path: String
     public let priorityTarget: ReviewRow?
+    /// ChatGPT 对这一场的整体总结。空串表示这份复盘没给（或没能读出来，那时它会出现在
+    /// `unreadableSections` 里）。
+    public let summary: String
     public let sections: [ReviewSection]
     /// 复盘里有内容、却一条都没读出来的分区名（见 `ReviewReportViewModel.unreadableSections`）。
     public let unreadableSections: [String]
 
-    public init(path: String, priorityTarget: ReviewRow?, sections: [ReviewSection],
-                unreadableSections: [String]) {
+    public init(path: String, priorityTarget: ReviewRow?, summary: String,
+                sections: [ReviewSection], unreadableSections: [String]) {
         self.path = path
         self.priorityTarget = priorityTarget
+        self.summary = summary
         self.sections = sections
         self.unreadableSections = unreadableSections
     }
 
     /// 解析成功了，但一个字都没有可显示的。界面必须据此说一句话——
     /// 右半边全白会让用户以为程序坏了。
+    ///
+    /// **`summary` 必须算进来。** 漏掉它的后果不是少显示一块，是**说一句假话**：
+    /// 一份只有整体总结（练得短、语法没硬伤时完全可能）的复盘会被打上
+    /// 「这份复盘是空的……多半是那次练习太短」，把用户支去重练一场本不必重练的练习。
     public var isEmpty: Bool {
-        priorityTarget == nil && sections.isEmpty && unreadableSections.isEmpty
+        summary.isEmpty && priorityTarget == nil && sections.isEmpty && unreadableSections.isEmpty
     }
 }
 
@@ -89,7 +97,12 @@ public enum ReviewReportLoader {
 
         return ReviewDocument(
             path: url.path,
-            priorityTarget: ReviewReportViewModel.priorityTarget(from: report),
+            // sessionID 只在 ChatGPT 漏给 `priority_target.id` 时用来兜底生成一个稳定的
+            // targetKey——与 `ReviewArchiver` 归档这一场时用的是同一个编号、同一份判据，
+            // 所以这一页画得出卡片就一定归得进档案。
+            priorityTarget: ReviewReportViewModel.priorityTarget(from: report,
+                                                                 sessionID: session.id),
+            summary: ReviewReportViewModel.summary(from: report),
             sections: ReviewReportViewModel.sections(from: report),
             unreadableSections: ReviewReportViewModel.unreadableSections(in: report))
     }

@@ -181,4 +181,73 @@ final class ReviewArchiverTests: XCTestCase {
         XCTAssertEqual(outcome.state.issues.count, 1)
         XCTAssertEqual(outcome.state.vocabulary.count, 1)
     }
+
+    // MARK: - 「下一次唯一目标」不许被静默丢掉（复审第 7 条）
+
+    /// ChatGPT 漏给 `priority_target.id`（提示词要求给全，但没有任何校验拦得住）时，
+    /// **目标照样要进档案**。
+    ///
+    /// 丢掉的后果不是少一条记录：复盘报告页照常画那张最显眼的深色卡片
+    /// 「下一次只盯这一个」，而用户转身打开复训中心看到的是
+    /// 「还没有待复训的目标。下一步：先完整练一场」——一句在他刚练完一整场的前提下
+    /// 字面上为假的话。这条链是这个产品自称的核心价值（改进闭环）。
+    func testATargetWithoutAnIDIsStillArchived() {
+        let noID = try! JSONValue.decode(from: """
+        {"summary":"ok",
+         "priority_target":{"label":"补一个原因和例子","status":"new","evidence":["I just like it."]}}
+        """)
+        let outcome = ReviewArchiver.archive(report: noID, into: baseState(),
+                                             sessionID: "2026-08-08-001", questionID: "q1",
+                                             at: "t")
+        XCTAssertEqual(outcome.state.targets.count, 1, "复盘给了目标，档案里一条都没有")
+        XCTAssertEqual(outcome.state.targets.first?.label, "补一个原因和例子")
+        XCTAssertEqual(outcome.state.targets.first?.targetKey, "target-2026-08-08-001")
+        XCTAssertFalse(outcome.skipped.contains("priority_target"),
+                       "目标已经好好归进去了，还报警等于狼来了——真丢的那次就没人信了")
+    }
+
+    /// 兜底 key 之后幂等仍然成立：同一场归档两次不会变成两条目标。
+    func testTheFallbackKeyKeepsArchivingIdempotent() {
+        let noID = try! JSONValue.decode(from:
+            #"{"priority_target":{"label":"补一个原因和例子"}}"#)
+        var state = ReviewArchiver.archive(report: noID, into: baseState(),
+                                           sessionID: "s1", questionID: "q1", at: "t1").state
+        state = ReviewArchiver.archive(report: noID, into: state,
+                                       sessionID: "s1", questionID: "q1", at: "t2").state
+        XCTAssertEqual(state.targets.count, 1, "同一场归档两次多出了一条重复目标")
+    }
+
+    /// 真的存不下来时（`priority_target` 有内容、但既不是对象、也说不出要盯什么），
+    /// **必须记进「跳过了什么」那份清单**——四个归档出口（应用内、两个命令行、ChatGPT 侧）
+    /// 全靠它说话。清单为空时它们只会写「重训目标 N 个」，数字和上一场一模一样。
+    func testSkippedReportsThePriorityTargetWhenItCannotBeStored() {
+        for json in [#"{"priority_target":"补一个原因和例子"}"#,
+                     #"{"priority_target":["补一个原因和例子"]}"#,
+                     #"{"priority_target":{"status":"new"}}"#] {
+            let outcome = ReviewArchiver.archive(report: try! JSONValue.decode(from: json),
+                                                 into: baseState(),
+                                                 sessionID: "s1", questionID: "q1", at: "t")
+            XCTAssertTrue(outcome.state.targets.isEmpty, json)
+            XCTAssertTrue(outcome.skipped.contains("priority_target"),
+                          "目标存不下来，四个归档出口却一个字都不说：\(json)")
+        }
+    }
+
+    /// 反面对照两条，缺一不可：
+    /// 键根本不存在时不报警（否则每份没给目标的复盘都会挨一句莫名其妙的警告），
+    /// 重复归档同一场时也不报警（目标本来就在，什么都没丢）。
+    func testThePriorityTargetIsNotReportedWhenThereIsNothingToLose() {
+        let noTarget = try! JSONValue.decode(from: #"{"must_correct":[]}"#)
+        XCTAssertFalse(ReviewArchiver.archive(report: noTarget, into: baseState(),
+                                              sessionID: "s1", questionID: "q1", at: "t")
+            .skipped.contains("priority_target"),
+                       "复盘压根没给目标，却报「有东西没归进去」")
+
+        let once = ReviewArchiver.archive(report: report, into: baseState(),
+                                          sessionID: "s1", questionID: "q1", at: "t1").state
+        XCTAssertFalse(ReviewArchiver.archive(report: report, into: once,
+                                              sessionID: "s1", questionID: "q1", at: "t2")
+            .skipped.contains("priority_target"),
+                       "同一场重复归档，目标本来就在档案里，不该报成「没归进去」")
+    }
 }

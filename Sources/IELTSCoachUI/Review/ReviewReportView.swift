@@ -201,6 +201,7 @@ struct ReviewReportView: View {
                     if !document.unreadableSections.isEmpty {
                         unreadableCard(document.unreadableSections)
                     }
+                    if !document.summary.isEmpty { summaryCard(document.summary) }
                     ForEach(document.sections) { section in
                         sectionCard(section)
                     }
@@ -250,6 +251,27 @@ struct ReviewReportView: View {
         .padding(Spacing.lg)
         .background(Palette.sidebarBackground)
         .clipShape(RoundedRectangle(cornerRadius: Radius.card))
+    }
+
+    /// ChatGPT 对这一场的整体总结。
+    ///
+    /// 整份复盘里唯一一段连贯的话，其余全是逐条清单。此前它**从来没有上过屏**：
+    /// 内容存在硬盘上、页面一个字不显示、也不提示缺了东西——用户得到的信号是
+    /// 「这就是完整的复盘」。摆在各个分区前面，因为它是「先说个整体」。
+    private func summaryCard(_ text: String) -> some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            Text(ReviewReportViewModel.summaryTitle)
+                .font(Typography.sectionTitle)
+                .foregroundStyle(Palette.textPrimary)
+            CoachCard {
+                Text(text)
+                    .font(Typography.body)
+                    .foregroundStyle(Palette.textPrimary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
     }
 
     private func sectionCard(_ section: ReviewSection) -> some View {
@@ -312,8 +334,10 @@ struct ReviewReportView: View {
                 Label("有 \(titles.count) 节没能显示出来", systemImage: "exclamationmark.triangle")
                     .font(Typography.cardTitle)
                     .foregroundStyle(Palette.warning)
+                // 「一个字都没能读出来」而不是「一条都没能读出来」：这张卡片现在也管
+                // 「整体总结」，而总结是一段话不是若干条，说「一条都没有」对不上它。
                 Text("「\(titles.joined(separator: "」「"))」在这份复盘里有内容，"
-                     + "但一条都没能读出来，多半是 ChatGPT 这次用的字段名和本工具读的对不上。"
+                     + "但本工具一个字都没能读出来，多半是 ChatGPT 这次用的字段名和本工具读的对不上。"
                      + "下一步：点下面的「在访达中显示原文」打开原文自己看一眼，内容一个字都没丢。")
                     .font(Typography.body)
                     .foregroundStyle(Palette.textPrimary)

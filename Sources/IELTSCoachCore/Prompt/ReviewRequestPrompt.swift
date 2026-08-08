@@ -27,7 +27,7 @@ public enum ReviewRequestPrompt {
         "usage_note": 用法说明}
            - vocabulary：**数组**（不是对象），每项 {"basic": 学员用的词, "better": 更准确的表达, \
         "collocation": 搭配或例句, "priority": "high"/"medium"/"low"}
-           - habits：数组，每项 {"habit": 习惯描述, "evidence": 例证}
+           - habits：数组，每项 {"habit": 习惯描述, "evidence": 例证, "fix": 下次怎么改}
            - logic_feedback：数组，每项 {"question": 题目, "issue": 问题, "improvement": 改进方向}
            - answer_upgrades：数组，每项 {"question": 题目, "original_answer": 原回答, \
         "revised_answer": 高分版, "changes": 中文说明的数组}
@@ -38,6 +38,10 @@ public enum ReviewRequestPrompt {
         5. priority_target 只给一个。
         6. 只在有音频证据时给发音反馈；仅凭文本时该项写 "Not assessed from text"。
         7. 复盘的所有说明、点评、解释一律用中文；引用学员原话与给出的英文范例保持英文原文，不要翻译。
+        8. **不要给任何形式的雅思分数、评级或水平判断**：不要写 band、不要写「大概 6.5」\
+        「相当于 7 分水平」，也不要按词数、流利度推断分数。summary 里同样一个字都不许出现——\
+        它要说的是「哪里已经稳了、哪里还不稳」，不是打一个分。\
+        这个数字既不准也有害，会让学员盯着数字而不是盯着具体哪句话该怎么改。
 
         \(open)
         {在这里输出 JSON}

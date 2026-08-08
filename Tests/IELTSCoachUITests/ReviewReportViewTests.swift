@@ -138,7 +138,41 @@ final class ReviewReportViewTests: XCTestCase {
         }
     }
 
-    // MARK: - 二、四个分区：复盘的正文
+    // MARK: - 一点五、整体总结：整份复盘里唯一一段连贯的话
+
+    /// **这一条守的是一块此前从来没上过屏的内容。**
+    ///
+    /// ChatGPT 每次都给 `summary`，也原样存进了硬盘上的复盘文件，而这一页从头到尾
+    /// 一个字都不显示，连「有 N 节没能显示出来」那张警告卡都提不到它——
+    /// 用户得到的信号是「这就是完整的复盘」。
+    ///
+    /// 连数据源一起钉：换成写死的字符串或别人家的总结，比不显示更糟。
+    func testTheOverallSummaryIsPaintedFromTheDocument() throws {
+        SourceGuard.assertRenders(
+            "document.summary", inBodyOf: "private var reportPane", of: Self.view,
+            because: "右半边根本没有去取 `document.summary`。ChatGPT 对这一场的整体总结"
+                + "（整份复盘里唯一一段连贯的话）一个字都不上屏，而页面也不会说少了什么——"
+                + "用户以为自己看到的就是完整的复盘。"
+                + "下一步：把 `if !document.summary.isEmpty { summaryCard(document.summary) }` "
+                + "放回 `reportPane`。")
+
+        SourceGuard.assertRenders(
+            "summaryCard(document.summary)", inBodyOf: "private var reportPane", of: Self.view,
+            because: "取到了整体总结却没有画出来，或者画的不是 `document.summary` 里那一段。"
+                + "下一步：把 `summaryCard(document.summary)` 放回去。")
+
+        for (needle, what) in [
+            ("ReviewReportViewModel.summaryTitle", "这一块的抬头（和警告卡点名时用的是同一个常量，"
+                + "各写一份的话，「整体总结没能显示出来」说的名字会和页面上的标题对不上）"),
+            ("Text(text)", "总结正文本身——这一块唯一不可省的内容")
+        ] {
+            SourceGuard.assertRenders(
+                needle, inBodyOf: "private func summaryCard", of: Self.view,
+                because: "整体总结那张卡片里没有\(what)。下一步：把它画回去。")
+        }
+    }
+
+    // MARK: - 二、六个分区：复盘的正文
 
     /// **这一条守的是复盘正文，而且是连数据源一起守。**
     ///
@@ -154,8 +188,8 @@ final class ReviewReportViewTests: XCTestCase {
     func testEverySectionOfTheReviewIsPaintedFromTheDocumentsSections() throws {
         SourceGuard.assertRenders(
             "ForEach(document.sections)", inBodyOf: "private var reportPane", of: Self.view,
-            because: "右半边不再遍历 `document.sections`——复盘的四个分区（必须纠正的表达、"
-                + "更自然的表达、词汇升级、逐题高分版）一条都不会画出来，"
+            because: "右半边不再遍历 `document.sections`——复盘的六个分区（必须纠正的表达、"
+                + "更自然的表达、词汇升级、口语习惯、逐题逻辑反馈、逐题高分版）一条都不会画出来，"
                 + "而 `ReviewReportViewModelTests` 里那十几条拆分区的断言会一起退化成空转："
                 + "拆得再对也没人画。**注意换成 `ForEach([ReviewSection]())` 这种空数组也算这一类**，"
                 + "它编得过、跑得动、界面上什么都没有。"
@@ -508,7 +542,8 @@ final class ReviewReportViewTests: XCTestCase {
             ("sessionRow", "列表里的每一行"),
             ("reportPane", "右边整块复盘"),
             ("priorityCard", "NEXT SINGLE TARGET——这个产品真正的价值所在"),
-            ("sectionCard", "复盘的四个分区"),
+            ("summaryCard", "整体总结——整份复盘里唯一一段连贯的话"),
+            ("sectionCard", "复盘的六个分区"),
             ("rowView", "每一条的三格"),
             ("field", "三格里的每一格"),
             ("unreadableCard", "「有 N 节没能显示出来」那句警告"),

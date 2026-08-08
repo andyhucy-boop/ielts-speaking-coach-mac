@@ -148,6 +148,41 @@ final class ExaminerPromptTests: XCTestCase {
         XCTAssertTrue(text.contains("一律用中文"))
     }
 
+    /// **DEFINITION-OF-DONE 第 4 节第一条：不预测雅思分数。**
+    ///
+    /// 这条红线此前在复盘这条路上没有任何守卫：七条输出要求里一条都没禁止 ChatGPT 打分。
+    /// 之所以一直没透出来，纯粹是因为 `summary` 压根没被显示——
+    /// 而「把 summary 显示出来」正是复审第 2 条要修的事，两件事必须同时做完。
+    /// 界面这一侧拦不住：`summary` 是 ChatGPT 写的，扫源码扫不到它。
+    /// 唯一能拦的地方就是这份提示词。
+    func testReviewRequestForbidsAnyBandScoreOrLevelJudgement() {
+        for part in FocusPart.allCases {
+            let text = ReviewRequestPrompt.build(requestID: "sync-1", focusPart: part)
+            XCTAssertTrue(text.contains("不要给任何形式的雅思分数、评级或水平判断"),
+                          "\(part) 的复盘请求里没有禁止打分这一条。"
+                              + "「你大概 6.5 分」既不准也有害，会让学员盯着数字"
+                              + "而不是盯着具体哪句话该怎么改（DEFINITION-OF-DONE 第 4 节）。")
+            XCTAssertTrue(text.contains("summary 里同样一个字都不许出现"),
+                          "禁令没有点名 summary。整体总结是唯一一段连贯的话，"
+                              + "也是最容易顺手写上一句「大概 6.5」的地方——"
+                              + "而它现在会原样显示在复盘报告页上。")
+        }
+    }
+
+    /// 提示词要 ChatGPT 输出的每一个顶层键，界面上都得有人显示。
+    /// 这条钉的是那张键表本身没有被悄悄缩水——它是「复盘里有哪些内容」的唯一出处，
+    /// 而 `ReviewReportViewModel` 的分区表照着它写。
+    func testReviewRequestStillAsksForTheHabitsAndLogicFeedbackBlocks() {
+        let text = ReviewRequestPrompt.build(requestID: "sync-1", focusPart: .part2)
+        for key in ["summary", "must_correct", "natural_upgrades", "vocabulary",
+                    "habits", "logic_feedback", "answer_upgrades", "priority_target"] {
+            XCTAssertTrue(text.contains(key), "复盘请求里不再要 \(key) 这一项了")
+        }
+        XCTAssertTrue(text.contains(#""fix": 下次怎么改"#),
+                      "口语习惯少了「下次怎么改」这一格。只说「你有这个毛病」而不说怎么改，"
+                          + "正是本项目铁律 4 要拦的那种话。")
+    }
+
     func testFullMockThreadsPart2PrepMode() {
         let countdown = ExaminerPrompt.build(
             setup: setup(focusPart: .fullMock, part2PrepMode: .countdown))
