@@ -256,7 +256,29 @@ final class FocusPartTests: XCTestCase {
         XCTAssertEqual(FocusPart.part1.defaultDurationMinutes, 6)
         XCTAssertEqual(FocusPart.part2.defaultDurationMinutes, 4)
         XCTAssertEqual(FocusPart.part3.defaultDurationMinutes, 6)
-        XCTAssertEqual(FocusPart.fullMock.defaultDurationMinutes, 6)
+        // 全真模考 = 三段相加。真实考试 11–14 分钟，这里是 14。
+        // **它曾经冻在 6 分钟**，见下面那条测试。
+        XCTAssertEqual(FocusPart.fullMock.defaultDurationMinutes, 14)
+    }
+
+    /// **一整场模考不许比它的任何一个子集短。**
+    ///
+    /// 2026-08-09 复审实测：`fullMock` 冻在 6 分钟，而 `part1And3` 是 10、
+    /// `part1And2` 与 `part2And3` 是 9——勾三个 Part 反而比勾两个短。
+    /// 这个数字会写进提示词的 `Target session length`，
+    /// 考官为了对上 6 分钟会把三段压缩、或者干脆砍掉 Part 3。
+    ///
+    /// 断言写成「对每一个真子集都更长」而不是写死 14：
+    /// 将来谁调各段的分钟数，这条仍然拦得住「模考比子集短」这件事本身。
+    func testAFullMockIsNeverShorterThanAnyOfItsOwnSubsets() {
+        let mock = FocusPart.fullMock.defaultDurationMinutes
+        for candidate in FocusPart.allCases where candidate != .fullMock {
+            XCTAssertGreaterThan(
+                mock, candidate.defaultDurationMinutes,
+                "全真模考（\(mock) 分钟）比 \(candidate.rawValue)"
+                    + "（\(candidate.defaultDurationMinutes) 分钟）还短，"
+                    + "而它把那几段全考一遍。这个数字会进提示词，考官会照它砍内容。")
+        }
     }
 
     /// **连着练必须比单练 Part 2 长。** 它是一段两分钟陈述加一整段讨论；

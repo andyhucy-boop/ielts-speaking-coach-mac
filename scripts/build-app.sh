@@ -292,14 +292,40 @@ echo "   $DESIGNATED"
 INSTALLED="$HOME/Applications/$APP_NAME.app"
 mkdir -p "$HOME/Applications"
 
+# **正在运行的那个实例先说清楚。**
+#
+# 这个脚本存在的全部理由是「让你拿到新包去测」。而 2026-08-08 到 09 之间
+# 已经因为「跑的是旧包」白测过两轮：改完提示词没重新打包一次，
+# 重新打包了但用户点的是 Dock 里那个还亮着的旧进程一次。
+#
+# macOS 允许删掉正在运行的 .app（进程握着已经 unlink 的 inode 继续跑），
+# 所以下面那个 rm -rf 不会失败、也不会有任何征兆——用户切回 Dock，
+# 看到的是老界面、老行为，然后来报「没变呀」。
+#
+# 不自动杀进程：那是他正开着的窗口，可能正练到一半。只说清楚。
+if pgrep -f "$INSTALLED/Contents/MacOS/" >/dev/null 2>&1; then
+    echo "⚠️  「${APP_NAME}」正开着，而这次会把它整个替换掉。"
+    echo "    Dock 里那个图标还是旧进程，点它打开的是**旧代码**——"
+    echo "    本项目已经因为这件事白测过两轮。"
+    echo "    下一步：先 ⌘Q 退出它，再重新打开（Spotlight 搜「IELTS」）。"
+fi
+
 # 先删后拷，不用 cp -R 覆盖：覆盖会把上一版残留的文件留在包里
 # （比如某个版本有、下个版本删掉的资源），签名当场作废。
 rm -rf "$INSTALLED"
 if ! cp -R "$APP" "$INSTALLED"; then
-    echo "⚠️  拷到 ~/Applications 失败，但 .build 里那份是好的。"
-    echo "    下一步：手动把 $APP 拖进「访达 › 前往 › 个人 › Applications」，"
-    echo "    或者直接从 .build 打开（用 open \"$APP\"）。"
-    exit 0
+    # **这里必须 exit 1。**
+    #
+    # 从前是 exit 0：脚本打印一行 ⚠️ 然后宣告成功。而文档与日常用的命令是
+    #     ./scripts/build-app.sh && open ~/Applications/"IELTS Speaking Coach.app"
+    # `&&` 看到 0 就往下走，`open` 打开的是上一版残留（或者因为上面那句
+    # rm -rf 已经执行、压根打不开）。同一个脚本里「拷完签名坏了」走的是 exit 1，
+    # 两条失败路径对调用方的含义完全一样：这一份没装上。
+    echo "❌ 拷到 ~/Applications 失败。"
+    echo "   .build 里那一份是好的、也已经签好名，只是没装到 ~/Applications。"
+    echo "   下一步：直接从 .build 打开（open \"$APP\"），"
+    echo "   或手动把它拖进「访达 › 前往 › 个人 › Applications」。"
+    exit 1
 fi
 
 # 拷完再验一次签名：cp -R 在极少数情况下会破坏扩展属性，

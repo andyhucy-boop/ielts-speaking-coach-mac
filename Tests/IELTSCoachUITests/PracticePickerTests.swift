@@ -174,6 +174,25 @@ final class PracticePickerTests: XCTestCase {
                        "题库空的时候还劝人去改勾选，改完同样一道题都没有：" + notice)
     }
 
+    /// **题库空着、又一个 Part 都没勾** —— 刚装好的用户正好落在这一格。
+    ///
+    /// 2026-08-09 复审实测：这一格返回 nil，于是 `PracticeSheet` 走 else 分支，
+    /// `sectionsNotice`（0 栏时为 nil）和 `questionSections`（0 栏）都画不出东西，
+    /// 屏幕上是一段说明文字底下一片空白，没有任何交代。
+    ///
+    /// 走到这一格不需要任何异常操作：`defaultParts(forPlanFocus: nil)` 就是
+    /// 「一个都不勾」，而还没建过学习计划、还没导过题库的人两个条件同时成立。
+    func testAnEmptyBankWithNothingTickedStillExplainsItself() throws {
+        let notice = try XCTUnwrap(
+            PracticePicker(questions: []).emptyNotice(forParts: PracticePicker.unspecified),
+            "题库空着又一个 Part 都没勾时什么都不说——用户看到的是一片空白（铁律：空状态必须有说明）")
+        XCTAssertTrue(notice.contains("下一步"), notice)
+        XCTAssertTrue(notice.contains("训练题库"),
+                      "没告诉他去哪儿导题库：" + notice)
+        XCTAssertFalse(notice.contains("把上面"),
+                       "一个都没勾的时候劝他「把上面某个勾去掉」，那个勾根本不存在：" + notice)
+    }
+
     // MARK: - 默认勾哪几个：与学习计划的「重点 Part」的关系
 
     /// 默认勾选跟着学习计划的「重点 Part」走。

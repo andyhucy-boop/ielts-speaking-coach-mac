@@ -47,7 +47,7 @@ public enum DiscussionTheme {
     /// 比把一个专有名词小写掉要好。
     private static let lowercasableOpeners: Set<String> = [
         "a", "an", "the", "some", "someone", "something", "somewhere",
-        "your", "one", "two", "any", "this", "that", "an"
+        "your", "one", "two", "any", "this", "that"
     ]
 
     /// cue card 题干 → 话题短语。
@@ -84,9 +84,18 @@ public enum DiscussionTheme {
     }
 
     private static func strippingTaskVerb(_ text: String) -> String {
-        let lowered = text.lowercased()
-        for verb in taskVerbs where lowered.hasPrefix(verb) {
-            let rest = String(text.dropFirst(verb.count))
+        for verb in taskVerbs {
+            // **在原串上取范围，不能拿小写串的长度去截原串。**
+            //
+            // 从前写的是 `lowered.hasPrefix(verb)` + `text.dropFirst(verb.count)`：
+            // 判断用小写串、截取用原串。`String.lowercased()` 不保证 Character 数守恒
+            // （`İ` 小写成两个 Character），两者一旦不等长，截出来的短语就会
+            // 少一个或多一个字符——而这段文本直接进考官提示词。
+            // 今天的题库全是 ASCII 所以碰不到，但那是个没写下来、也没测试守着的前提。
+            guard let range = text.range(of: verb, options: [.caseInsensitive, .anchored]) else {
+                continue
+            }
+            let rest = String(text[range.upperBound...])
             // 只在动词后面真的断开时才砍：`Describes`、`Talk aboutish` 不该被误伤。
             guard let first = rest.first else { return text }
             guard first.isWhitespace else { continue }

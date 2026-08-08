@@ -132,11 +132,19 @@ public struct PracticePicker: Sendable {
     /// 三样一个不少：说明现状、说明下一步、下一步指向的控件在这张弹层上真实存在
     /// （那三个勾选框就在这句话上面）。
     public func emptyNotice(forParts parts: Set<Int>) -> String? {
-        guard let opening = parts.min(), count(inPart: opening) == 0 else { return nil }
+        // **「题库空着」这一条先判，且不看勾了什么。**
+        //
+        // 从前它排在 `parts.min()` 那道 guard 后面，于是「一个 Part 都没勾」时
+        // `min()` 返回 nil、整个函数直接 return nil——而那正是刚装好的用户所在的格子
+        // （`defaultParts(forPlanFocus: nil)` 就是「一个都不勾」，
+        // 还没建计划、还没导题库的人两个条件同时成立）。
+        // 结果是 `PracticeSheet` 走 else 分支，两个子视图都画不出东西，
+        // 屏幕上一段说明底下一片空白，没有任何交代（铁律：空状态必须有说明）。
         guard !questions.isEmpty else {
             return "题库还是空的，哪个 Part 都没有题。"
                 + "下一步：关掉这个窗口，到「训练题库」页导入你的题库文件。"
         }
+        guard let opening = parts.min(), count(inPart: opening) == 0 else { return nil }
         return "题库里共有 \(questions.count) 道题，但没有一道属于 Part \(opening)——"
             + "而这一场是从 Part \(opening) 开场的，所以列不出题来。"
             + "下一步：把上面「Part \(opening)」那个勾去掉，"

@@ -218,15 +218,21 @@ public struct FocusPart: RawRepresentable, Codable, Hashable, Sendable, CaseIter
 
     // MARK: - 时长
 
-    /// 这五档的时长**是历史取值，不许动**：它们决定提示词里那句
-    /// "Target session length: about N minutes."，也决定每条路线上「今天练多久」的提示。
+    /// 这几档的时长是历史取值，沿用它们只是为了不顺手改掉用户已经看惯的数字。
     ///
-    /// 其中两个数字和真实考试对不上（单练 Part 1 / Part 3 各写了 6 分钟，
-    /// 全真模考也只写了 6 分钟，而一整场实际要 11–14 分钟）。**这次不改。**
-    /// 改它是另一件事：会同时改掉每一条既有路线上的提示，得单独验一遍。
+    /// **`fullMock` 不在这张表里，它按各段相加（14 分钟）。**
+    ///
+    /// 它原本也冻在 6 分钟，而多选功能上线后新增的组合档是 9、9、10——
+    /// 勾三个 Part 反而比勾两个短。这不只是数字难看：它会写进提示词的
+    /// `Target session length`，考官为了对上 6 分钟会把三段压缩，
+    /// 或者干脆砍掉 Part 3——正是这一轮刚修完的那类跑偏的另一种形态。
+    /// 真实考试 11–14 分钟，相加得到的 14 正落在里面。
+    ///
+    /// 单 Part 那三档保持原样：它们各自没有内部矛盾，而且是用户看了最久的三个数字。
+    /// `part2And3` 的 9 同样保留（相加也是 9，本来就一致）。
     private static let frozenDurations: [String: Int] = [
         part1.rawValue: 6, part2.rawValue: 4, part3.rawValue: 6,
-        part2And3.rawValue: 9, fullMock.rawValue: 6
+        part2And3.rawValue: 9
     ]
 
     /// 新增组合按各段时长相加。取值对着真实考试：Part 1 约 4–5 分钟，

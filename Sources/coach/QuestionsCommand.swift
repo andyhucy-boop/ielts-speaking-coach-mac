@@ -177,7 +177,26 @@ enum QuestionsCommand {
         print("💾 已备份整个数据目录到：\(backup.path)")
 
         do {
-            let outcome = try store.mutate { QuestionBankRemodel.apply(to: &$0) }
+            // **安全闸必须在写盘那一次事务里再判一遍，不能只判干跑那一份。**
+            //
+            // 上面第 138 行的干跑跑在 `store.load()` 拿到的内存副本上；这里的
+            // `store.mutate` 会**重新从磁盘读一遍**再算。两次之间 state 可以变
+            // （下面那句错误文案自己就写着「确认 App 没有同时在运行」，
+            // 也就是说我们知道它可能正在写）。只判干跑的话，会出现
+            // 「干跑说 0 条丢失 → 真跑吃掉了题干 → 报告如实告诉你吃掉了 →
+            // 而数据已经改完了」——报告说得再清楚也没用，字已经没了。
+            //
+            // `Outcome.isSafeToApply` 就是为这一步写的（它的注释写着「调用方必须
+            // 拒绝写盘」），在此之前全仓库零调用。抛错的位置也是刻意的：
+            // `StateStore.mutate` 是「body 抛错 → 不执行 writeUnlocked」，
+            // 所以在闭包里抛 = 这次事务一个字节都不落盘。
+            let outcome = try store.mutate { state -> QuestionBankRemodel.Outcome in
+                let outcome = QuestionBankRemodel.apply(to: &state)
+                guard outcome.isSafeToApply else {
+                    throw CoachError.stateUnreadable(unsafeToApplyMessage(outcome))
+                }
+                return outcome
+            }
             print("——— 已经写盘 ———")
             print(QuestionBankRemodel.report(outcome))
             print("ℹ️  想撤销的话：退出 App，把 \(backup.path) 整个复制回 "
@@ -189,6 +208,30 @@ enum QuestionsCommand {
                 + "确认磁盘可写、App 没有同时在运行，然后重跑。")
             return 1
         }
+    }
+
+    /// 写盘那一刻才发现不安全时说什么。
+    ///
+    /// 与干跑那两条（第 144–156 行）措辞刻意不同：那两条说的是「不会写盘」，
+    /// 而走到这里意味着**干跑说没事、真跑却不安全**——用户需要知道这两次结果不一样，
+    /// 否则他会以为自己看错了干跑的输出。
+    static func unsafeToApplyMessage(_ outcome: QuestionBankRemodel.Outcome) -> String {
+        var reasons: [String] = []
+        if !outcome.lostPrompts.isEmpty {
+            reasons.append("有 \(outcome.lostPrompts.count) 句题干会从题库里彻底消失"
+                + "（\(outcome.lostPrompts.prefix(3).joined(separator: "、"))"
+                + "\(outcome.lostPrompts.count > 3 ? " 等" : "")）")
+        }
+        if !outcome.newOrphans.isEmpty {
+            reasons.append("有 \(outcome.newOrphans.count) 处历史记录会指向不存在的题"
+                + "（\(outcome.newOrphans.prefix(3).joined(separator: "、"))"
+                + "\(outcome.newOrphans.count > 3 ? " 等" : "")）")
+        }
+        return "写盘前的最后一次检查没通过：\(reasons.joined(separator: "；"))。"
+            + "**这次事务已经整个放弃，数据一个字节都没有改动。**"
+            + "干跑时这些问题还没出现，说明两次读到的训练数据不一样——"
+            + "多半是 App 正开着并且在写。"
+            + "下一步：退出 App，再重新运行 coach questions remodel（先不加 --apply）看一遍干跑结果。"
     }
 
     private static func list(partFilter: Int?) -> Int32 {
