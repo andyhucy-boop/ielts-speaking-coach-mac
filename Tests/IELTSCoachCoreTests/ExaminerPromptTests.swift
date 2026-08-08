@@ -307,13 +307,20 @@ final class ExaminerPromptTests: XCTestCase {
     }
 
     /// **Part 3 的节奏：一共 4–8 问，且要往抽象层面走。**
+    ///
+    /// 「往抽象走」这一条原先钉的是 `more abstract, general level`，那是接在 Part 2 后面
+    /// 那一支的措辞。单练 Part 3 这一支现在把要求提前到了第一问（见
+    /// `testPart3AloneMakesTheVeryFirstQuestionAbstract`），措辞跟着变了，
+    /// 但这条测试要拦的东西没变：**单练 Part 3 也必须往抽象层面走，不能停在个人层面。**
     func testPart3PacingFollowsTheRealExam() {
         // 特意不给 followups：抬头那一栏就不会出现，
         // 于是这条断言只可能命中 section rules 本身。
         let text = part3Text()
         XCTAssertTrue(text.contains("Ask 4–8 questions in total."), "没说共问 4–8 个：\n\(text)")
-        XCTAssertTrue(text.contains("more abstract, general level"),
-                      "没要求从 Part 2 的话题往抽象层面延伸：\n\(text)")
+        XCTAssertTrue(text.contains("Increase abstraction gradually."),
+                      "没要求逐步往抽象层面走：\n\(text)")
+        XCTAssertTrue(text.contains("abstract, general, society-level"),
+                      "单练 Part 3 没要求讨论走到抽象、社会层面：\n\(text)")
     }
 
     /// **参考问句是素材，不是清单。** Part 1 与 Part 3 都要有这句。
@@ -477,7 +484,8 @@ final class ExaminerPromptTests: XCTestCase {
     /// **第一句就得是一个 Part 3 层面的讨论问题**，不是准备时间、不是长独白。
     func testPart3AloneOpensWithADiscussionQuestionAndGivesNoPreparationTime() {
         let text = part3OnlyText()
-        XCTAssertTrue(text.contains("your very first utterance is a Part 3 discussion question"),
+        XCTAssertTrue(text.contains("your very first utterance is an abstract Part 3 "
+                                    + "discussion question"),
                       "没说清第一句该是什么。只说「不许做 X」而不说「那该做什么」，"
                           + "模型仍然可能停在原地或者自己发明一套开场：\n\(text)")
         XCTAssertFalse(text.contains("one minute of preparation"),
@@ -490,17 +498,18 @@ final class ExaminerPromptTests: XCTestCase {
     ///
     /// 规则段说「不许出 cue card」，题目段却写着「Today's question (Part 3): Describe a law…」，
     /// 那是一份自相矛盾的提示词——模型照哪一半做都不奇怪。
+    ///
+    /// 第二轮又改了一次：抬头改对了，题干原文却还留在下面（见
+    /// `testPart3AloneNeverShowsTheRawDescribeSentence`），实测第一句依然是 Part 1 的问法。
     func testPart3QuestionBlockIsLabelledAsADiscussionThemeInsteadOfTodaysQuestion() {
         let text = part3OnlyText()
-        XCTAssertTrue(text.contains("Discussion theme for this Part 3 session"),
-                      "题目那一段还在用通用抬头。下一步：Part 3 的题目块要写明这是讨论话题：\n\(text)")
+        XCTAssertTrue(text.contains("Part 3 theme: a law on environmental protection"),
+                      "题目那一段没有写成用户要的那一行「Part 3 theme: <话题短语>」：\n\(text)")
         XCTAssertTrue(text.contains("it is NOT a task, NOT a cue card"),
                       "题目块没有当场否掉「这是一道任务」这个读法：\n\(text)")
         XCTAssertFalse(text.contains("Today's question (Part 3"),
                        "题目块还是「今天的题目（Part 3）：Describe a law…」，"
                            + "一句 Describe 摆在「今天的题目」底下，本身就在诱导它当成 Part 2 任务：\n\(text)")
-        // 题干本身当然还要给出去，否则考官不知道讨论什么。
-        XCTAssertTrue(text.contains("Describe a law on environmental protection"))
     }
 
     /// 两种反馈时机下都得成立——`.immediate` 那一支的开场白不一样，
@@ -686,6 +695,274 @@ final class ExaminerPromptTests: XCTestCase {
         }
         XCTAssertTrue(text.contains("Present one cue card."),
                       "全真模考里 Part 2 该出的那张 cue card 被禁令误伤了：\n\(text)")
+    }
+
+    // MARK: - 「这个 Part 到底是什么」——提示词此前最大的缺口
+    //
+    // 用户（考生本人）的原话：
+    //   「我觉得如果你直接说 part three 的话，他可能自己也不知道雅思 part three 有哪些东西。
+    //     你最好给他加点提示词，解释一下 part three 具体是什么。」
+    // 在这之前，三段 section rules 只写了「做什么 / 不做什么」，一个字都没解释这个 Part 本身。
+
+    /// **三个 Part 都要有一段「这是什么」。**
+    ///
+    /// 把 `part1Primer` / `part2Primer` / `part3Primer` 里任意一段从规则里摘掉，这条就红。
+    func testEveryPartExplainsWhatThatPartActuallyIs() {
+        let cases: [(String, String, String)] = [
+            ("Part 1", part1Text(), "What Part 1 is:"),
+            ("Part 2", ExaminerPrompt.build(setup: setup(focusPart: .part2)), "What Part 2 is:"),
+            ("Part 3", part3OnlyText(), "What Part 3 is:")
+        ]
+        for (name, text, heading) in cases {
+            XCTAssertTrue(text.contains(heading),
+                          "\(name) 只有规则，没有一句话解释这个 Part 是什么。"
+                              + "规则只能修剪一个已经存在的概念——模型脑子里那个概念长歪了，"
+                              + "再多的 Never 也是在歪的东西上修剪：\n\(text)")
+        }
+    }
+
+    /// **Part 3 那段说明必须点明「往上抽象一层、不谈考生个人经历」。**
+    ///
+    /// 这是 Part 3 与 Part 1 / Part 2 的唯一分界线。少了它，那段说明就只是复述规则。
+    func testPart3PrimerSaysItGoesUpALevelAndIsNotAboutTheLearnersOwnLife() {
+        let text = part3OnlyText()
+        XCTAssertTrue(text.contains("move it UP one level"),
+                      "没说 Part 3 是把 Part 2 的话题往上抽象一层：\n\(text)")
+        for expected in ["society", "causes and", "advantages and disadvantages"] {
+            XCTAssertTrue(text.contains(expected),
+                          "Part 3 的说明里没提到「\(expected)」这一维度：\n\(text)")
+        }
+        XCTAssertTrue(
+            text.contains("personal habits and personal preferences "
+                          + "belong to Part 1 and Part 2"),
+            "没说清个人经历 / 个人习惯属于 Part 1、Part 2 而不是 Part 3——"
+                + "这正是实测里第一句问偏的那条线：\n\(text)")
+    }
+
+    /// **反例必须标出「这是 Part 几的问法」，而不只是「不许这样」。**
+    ///
+    /// 只写「不许问个人经历题」是一句抽象的话；标明它属于哪个 Part，
+    /// 模型才知道错在哪一个维度（层级不对，不是措辞不对），也才举得一反三。
+    func testPart3PrimerLabelsEachCounterExampleWithThePartItBelongsTo() {
+        let text = part3OnlyText()
+
+        // 正例：真题形状，覆盖变化、原因/比较、影响这几类。
+        for good in ["What makes an environmental law effective or ineffective?",
+                     "How have shopping habits changed in your country over the last twenty years?",
+                     "Why do some people prefer small local shops to large chain stores?"] {
+            XCTAssertTrue(text.contains("✅ \"\(good)\""),
+                          "Part 3 的说明里缺了这个正例「\(good)」：\n\(text)")
+        }
+
+        // 反例：三句都标明了出处，其中最后一句是用户真机里 ChatGPT 实际问出来的那一句。
+        let labelled: [(String, String)] = [
+            ("Describe a shop you like.", "PART 2"),
+            ("Do you enjoy shopping?", "PART 1"),
+            ("Do you often go to the shops near your home?", "PART 1"),
+            ("Can you describe a place you enjoy spending time in?", "PART 1 / PART 2")
+        ]
+        for (bad, label) in labelled {
+            guard let range = text.range(of: "❌ \"\(bad)\"") else {
+                return XCTFail("Part 3 的说明里缺了这个反例「\(bad)」：\n\(text)")
+            }
+            let explanation = String(text[range.upperBound...].prefix(160))
+            XCTAssertTrue(explanation.contains("that is a \(label)"),
+                          "反例「\(bad)」没有标明它是 \(label) 的问法，"
+                              + "模型只知道「不许这样」，不知道错在哪一层：\(explanation)")
+        }
+    }
+
+    /// Part 1 / Part 2 的说明也要给正反例，反例同样标出处。短即可，但不能没有。
+    func testPart1AndPart2PrimersAlsoGiveLabelledCounterExamples() {
+        let part1 = part1Text()
+        XCTAssertTrue(part1.contains("✅ \"Do you work, or are you a student?\""),
+                      "Part 1 的说明缺正例：\n\(part1)")
+        XCTAssertTrue(part1.contains("that is a PART 2 question"),
+                      "Part 1 的说明里没有一个被标成 Part 2 问法的反例：\n\(part1)")
+        XCTAssertTrue(part1.contains("that is a PART 3 question"),
+                      "Part 1 的说明里没有一个被标成 Part 3 问法的反例：\n\(part1)")
+
+        let part2 = ExaminerPrompt.build(setup: setup(focusPart: .part2))
+        XCTAssertTrue(part2.contains("that is a PART 1 question"),
+                      "Part 2 的说明里没有一个被标成 Part 1 问法的反例：\n\(part2)")
+        XCTAssertTrue(part2.contains("that is a PART 3 question"),
+                      "Part 2 的说明里没有一个被标成 Part 3 问法的反例：\n\(part2)")
+    }
+
+    /// **说明要跟着 Part 走。** 全真模考里三段都在；单练某一档时不该混进别的 Part 的说明——
+    /// 单练 Part 3 的提示词里出现「What Part 2 is: … 给一张 cue card」，
+    /// 正是上一次翻车的成因。
+    func testPrimersAreScopedToThePartsThatActuallyRunInThisSession() {
+        let part3Only = part3OnlyText()
+        XCTAssertFalse(part3Only.contains("What Part 2 is:"),
+                       "单练 Part 3 的提示词里混进了「Part 2 是什么」的说明：\n\(part3Only)")
+        XCTAssertFalse(part3Only.contains("What Part 1 is:"),
+                       "单练 Part 3 的提示词里混进了「Part 1 是什么」的说明：\n\(part3Only)")
+
+        let mock = ExaminerPrompt.build(setup: setup(focusPart: .fullMock))
+        for heading in ["What Part 1 is:", "What Part 2 is:", "What Part 3 is:"] {
+            XCTAssertEqual(mock.components(separatedBy: heading).count - 1, 1,
+                           "全真模考里「\(heading)」出现的次数不是 1 次。"
+                               + "重复一遍等于让模型读两次同一段，缺一段等于那个 Part 没被解释。")
+        }
+
+        let both = part2And3Text()
+        XCTAssertTrue(both.contains("What Part 2 is:") && both.contains("What Part 3 is:"),
+                      "「Part 2 + Part 3」缺了其中一段说明：\n\(both)")
+        XCTAssertFalse(both.contains("What Part 1 is:"),
+                       "「Part 2 + Part 3」里混进了 Part 1 的说明——这一档没有 Part 1：\n\(both)")
+    }
+
+    // MARK: - 提问前自检
+    //
+    // 用户与 ChatGPT 一起给出的第三条修法：每次提问前默检——是否为英语、是否围绕主题、
+    // 是否不是 Part 1/2 的问法、是否基于上一个回答；不符合就重写再问。
+
+    /// **三个 Part 都要有自检段，且措辞各不相同。**
+    func testEveryPartChecksItsQuestionBeforeAskingIt() {
+        let cases: [(String, String, String)] = [
+            ("Part 1", part1Text(), "Check before you speak (Part 1):"),
+            ("Part 2", ExaminerPrompt.build(setup: setup(focusPart: .part2)),
+             "Check before you speak (Part 2):"),
+            ("Part 3", part3OnlyText(), "Check before you speak (Part 3):")
+        ]
+        for (name, text, heading) in cases {
+            XCTAssertTrue(text.contains(heading),
+                          "\(name) 没有提问前自检。禁令是读的时候生效的，自检是每次开口前生效的——"
+                              + "长对话里模型早就滑离了开头那些约束：\n\(text)")
+        }
+    }
+
+    /// **Part 3 的自检要逐条写死那四项，还要说清不合格就重写再问。**
+    func testPart3SelfCheckSpellsOutAllFourChecksAndTheRewriteRule() {
+        let text = part3OnlyText()
+        for check in ["1. Is it in English?",
+                      "2. Is it about the discussion theme of this session?",
+                      "3. Is it a Part 3 question",
+                      "4. Does it build on what the learner has just said?"] {
+            XCTAssertTrue(text.contains(check), "Part 3 的自检缺了「\(check)」：\n\(text)")
+        }
+        XCTAssertTrue(text.contains("NOT a Part 1 question")
+                        && text.contains("NOT a Part 2 \"Describe …\" task"),
+                      "自检第三条没有反过来点名 Part 1 / Part 2 的问法，"
+                          + "等于把最要紧的那一项写空了：\n\(text)")
+        XCTAssertTrue(text.contains("Never say a question that fails one of these checks."),
+                      "没说不合格就不许问出口：\n\(text)")
+        XCTAssertTrue(text.contains("Fix it first, then ask."),
+                      "没说不合格该怎么办（重写再问）：\n\(text)")
+    }
+
+    /// 第一问没有「上一个回答」可依据——不点破的话，自检第四条会在开场那一刻就自相矛盾。
+    func testPart1AndPart3SelfChecksExemptTheVeryFirstQuestionFromTheFollowOnCheck() {
+        for (name, text) in [("Part 1", part1Text()), ("Part 3", part3OnlyText())] {
+            XCTAssertTrue(text.contains("does not apply to your very first question"),
+                          "\(name) 的自检没有豁免第一问——开场那一刻第四条无从满足，"
+                              + "一条自相矛盾的自检会被整段忽略：\n\(text)")
+        }
+    }
+
+    /// 自检也要跟着 Part 走，别把 Part 2 的自检塞进单练 Part 3。
+    func testSelfChecksAreScopedToThePartsThatActuallyRun() {
+        let text = part3OnlyText()
+        XCTAssertFalse(text.contains("Check before you speak (Part 2):"),
+                       "单练 Part 3 里混进了 Part 2 的自检：\n\(text)")
+        let mock = ExaminerPrompt.build(setup: setup(focusPart: .fullMock))
+        for heading in ["Check before you speak (Part 1):", "Check before you speak (Part 2):",
+                        "Check before you speak (Part 3):"] {
+            XCTAssertTrue(mock.contains(heading), "全真模考缺了「\(heading)」：\n\(mock)")
+        }
+    }
+
+    // MARK: - 主题行不再以 Describe 开头
+
+    /// **单练 Part 3 时，那张卡的原句一个字都不许出现在提示词里。**
+    ///
+    /// 上一轮已经在题目块旁边写满了「这不是任务、不许当成 cue card」，
+    /// 而实测第一句仍然是 `Can you describe a place you enjoy spending time in?`。
+    /// 用户的判断：**`Describe` 摆在那儿本身就在诱导，旁边写「别念这句」没用。**
+    ///
+    /// 把 `DiscussionTheme.phrase` 换成 `{ $0 }`（原样返回），这条就红。
+    func testPart3AloneNeverShowsTheRawDescribeSentence() {
+        let text = part3OnlyText()
+        XCTAssertFalse(text.contains("Describe a law on environmental protection"),
+                       "题干原句还在提示词里。它就是一张 Part 2 的任务卡，"
+                           + "写多少句否定都盖不住：\n\(text)")
+        XCTAssertTrue(text.contains("Part 3 theme: a law on environmental protection"),
+                      "话题本身必须还在，否则考官不知道讨论什么：\n\(text)")
+    }
+
+    /// 用户给的目标形状，逐字：`Part 3 theme: a shop or store you enjoy visiting`
+    ///（原题干是 `Describe a shop/store you enjoy visiting`）。
+    func testPart3ThemeLineMatchesTheShapeTheLearnerAskedFor() {
+        let text = ExaminerPrompt.build(setup: SessionSetup(
+            question: Question(id: "p3-shop", part: 3,
+                               topic: "Describe a shop/store you enjoy visiting",
+                               prompt: "Describe a shop/store you enjoy visiting"),
+            focusPart: .part3, durationMinutes: 6, goal: ""))
+        XCTAssertTrue(text.contains("Part 3 theme: a shop or store you enjoy visiting"),
+                      "主题行不是用户要的那一行：\n\(text)")
+    }
+
+    /// 题干空掉时退回话题名；两者都空时**明说主题没给出来并交代怎么办**，
+    /// 不许留一行 `Part 3 theme:` 后面什么都没有（禁止静默失败）。
+    func testPart3ThemeFallsBackToTheTopicAndThenSaysSoWhenNothingIsSupplied() {
+        let onlyTopic = ExaminerPrompt.build(setup: SessionSetup(
+            question: Question(id: "p3-blank", part: 3, topic: "Shopping habits", prompt: "   "),
+            focusPart: .part3, durationMinutes: 6, goal: ""))
+        XCTAssertTrue(onlyTopic.contains("Part 3 theme: Shopping habits"),
+                      "题干空掉时没有退回话题名：\n\(onlyTopic)")
+
+        let nothing = ExaminerPrompt.build(setup: SessionSetup(
+            question: Question(id: "p3-empty", part: 3, topic: "", prompt: ""),
+            focusPart: .part3, durationMinutes: 6, goal: ""))
+        XCTAssertFalse(nothing.contains("Part 3 theme: \n"),
+                       "主题行空着就发出去了——考官会自己编一个话题，"
+                           + "而用户挑的那道题一次都不会被问到：\n\(nothing)")
+        XCTAssertTrue(nothing.contains("none was supplied"),
+                      "主题缺失时没有明说缺失：\n\(nothing)")
+        XCTAssertTrue(nothing.contains("ask the learner in English which"),
+                      "主题缺失时没有交代考官下一步该怎么办：\n\(nothing)")
+    }
+
+    /// **「Part 2 + Part 3」与全真模考不能被这条改动误伤**：
+    /// 那两档里那道题真的是一张 cue card，题干必须原样递过去。
+    func testModesThatReallyRunPart2StillGetTheCueCardVerbatim() {
+        for (name, text) in [("Part 2", ExaminerPrompt.build(setup: setup(focusPart: .part2))),
+                             ("Part 2 + Part 3", part2And3Text()),
+                             ("全真模考", ExaminerPrompt.build(setup: setup(focusPart: .fullMock)))] {
+            XCTAssertTrue(text.contains("Describe a useful skill you learned"),
+                          "\(name) 的 cue card 题干被改写了——那一档考生真的要照着它做长陈述：\n\(text)")
+        }
+    }
+
+    // MARK: - Part 3 第一问必须是抽象讨论
+
+    /// 单练 Part 3：起手规则不能只说「问它」，必须说「问到什么层级」。
+    ///
+    /// 原先写的是 "open with a question about it"，实测第一句就是
+    /// `Can you describe a place you enjoy spending time in?`——完全合规，也完全不是 Part 3。
+    func testPart3AloneMakesTheVeryFirstQuestionAbstract() {
+        let text = part3OnlyText()
+        XCTAssertTrue(text.contains("Your very first question must already be an abstract, "
+                                    + "general, society-level"),
+                      "起手规则没要求第一问就已经是抽象讨论：\n\(text)")
+        XCTAssertTrue(text.contains("Do NOT warm up with a "
+                                    + "personal question about the learner's own experience"),
+                      "没禁止用一个个人经历问题「热身」——实测翻车的正是这一步：\n\(text)")
+        XCTAssertFalse(text.contains("open with a question about it"),
+                       "还留着那句只说「问它」不说层级的旧规则：\n\(text)")
+    }
+
+    /// 接在 Part 2 后面的那一支同样要说死：不然它会被做成「再追问一遍刚才那件事」，
+    /// 那是 Part 2 的尾巴，不是 Part 3 的开头。
+    func testPart3AfterPart2AlsoRequiresTheFirstQuestionToBeAboveThePersonalLevel() {
+        for (name, text) in [("Part 2 + Part 3", part2And3Text()),
+                             ("全真模考", ExaminerPrompt.build(setup: setup(focusPart: .fullMock)))] {
+            XCTAssertTrue(
+                text.contains("Your very first Part 3 question must already be above the "
+                              + "personal level"),
+                "\(name) 没要求 Part 3 的第一问已经高于个人层面：\n\(text)")
+        }
     }
 
     /// **红线三：本次的复训目标不许提前告诉考生。**
