@@ -82,7 +82,7 @@ enum PracticeCommand {
             print("\n✅ 开练了。跟 ChatGPT 说话就行。")
             print("   练完之后在 ChatGPT 里结束通话即可；也可以回到这里按回车。\n")
 
-            let enter = EnterWaiter()
+            let enter = ConsoleEnterWaiter()
             waitForSessionEnd(driver: driver, enter: enter)
 
             if driver.isVoiceActive() {
@@ -213,7 +213,7 @@ enum PracticeCommand {
     /// 后台线程读一行 stdin 作为手动兜底，主循环用 VoiceEndPolicy 判断语音是否已结束。
     /// 只做手动那一半的话，Phase 1 造的 VoiceEndPolicy 就成了死代码；
     /// 只做自动那一半的话，AX 万一失灵用户就卡住了。
-    private static func waitForSessionEnd(driver: AXDriver, enter: EnterWaiter) {
+    private static func waitForSessionEnd(driver: AXDriver, enter: ConsoleEnterWaiter) {
         enter.arm()
 
         var state = VoiceEndState()
@@ -223,7 +223,11 @@ enum PracticeCommand {
                                            busy: false)
             if state.shouldFinalize {
                 print("▶︎ 检测到语音已结束（\(state.reason)）")
-                return   // 没人按回车：让 EnterWaiter 继续挂着，后面用得上就直接复用
+                // 没人按回车：让读取线程继续挂着，后面用得上就直接复用。
+                // ⚠️ 这条路上**不消费**按键标志，所以用户此刻顺手按的那一下会粘在这儿；
+                // 后面手动兜底那一步必须用 `waitForFreshPress()` 把它丢掉再等新的
+                //（复审第 13 条：不丢的话那一步会 0 秒穿过去，整场复盘一个字不留）。
+                return
             }
             Thread.sleep(forTimeInterval: 0.5)   // 与 requiredInactiveTicks=3 配合约 1.5 秒去抖
         }
@@ -234,36 +238,10 @@ enum PracticeCommand {
         print("▶︎ 已手动结束")
     }
 
-    /// **独占 stdin 的读取器。整个流程只能有一个线程在读。**
-    ///
-    /// 两个线程同时等回车时，内核只会唤醒其中一个，另一个永远阻塞——
-    /// 这正是「AX 自动探测到语音结束（手动线程仍挂着）→ 取复盘失败 → 剪贴板兜底
-    /// 又调一次 readLine」这条路径上会发生的事，直接违反「禁止无限等待」。
-    private final class EnterWaiter: @unchecked Sendable {
-        private let lock = NSLock()
-        private var pressed = false
-        private var reading = false
-
-        /// 确保有且只有一个后台线程在读 stdin。已在读或已按下时不再新起线程。
-        func arm() {
-            lock.lock(); defer { lock.unlock() }
-            guard !reading, !pressed else { return }
-            reading = true
-            Thread.detachNewThread { [self] in
-                _ = readLine()
-                lock.lock(); pressed = true; reading = false; lock.unlock()
-            }
-        }
-
-        var isPressed: Bool { lock.lock(); defer { lock.unlock() }; return pressed }
-
-        /// 阻塞直到用户按回车，并消费掉这次按键。
-        func waitForPress() {
-            arm()
-            while !isPressed { Thread.sleep(forTimeInterval: 0.1) }
-            lock.lock(); pressed = false; lock.unlock()
-        }
-    }
+    // `EnterWaiter` 已经搬进 `ChatGPTBridge.ConsoleEnterWaiter`。
+    // 搬家的唯一理由是可测性：`coach` 是可执行 target，没有测试 target，
+    // 这段等待逻辑留在这里就一行都测不到——而它出过一个真缺陷
+    //（粘滞的按键标志让手动兜底 0 秒穿过去，复审第 13 条）。
 
     /// 取复盘：三级降级，每级失败都打印一句「为什么换下一条路」，让用户知道发生了什么，
     /// 而不是默默换路。`expectedMarker` 必须是本次复盘请求的标记（见调用处），不能省略。
@@ -276,7 +254,7 @@ enum PracticeCommand {
     ///    路试试，不至于直接落到最麻烦的手动兜底。
     /// ③ 提示用户手动 ⌘C——最终兜底，两条自动路径都失败时才用。
     private static func captureReview(driver: AXDriver, expectedMarker: String,
-                                      enter: EnterWaiter) -> String? {
+                                      enter: ConsoleEnterWaiter) -> String? {
         do {
             return try driver.copyLatestAssistantMessage(pasteboard: SystemPasteboard(), timeout: 10)
         } catch {
@@ -289,12 +267,9 @@ enum PracticeCommand {
             print("⚠️  直接读 AX 树也没读到，改成手动兜底：\(error.localizedDescription)")
         }
 
-        print("\n请在 ChatGPT 里选中整段复盘按 ⌘C，然后回到这里按回车。")
-        enter.waitForPress()
-        do { return try ClipboardFallback.readReview(from: SystemPasteboard()) } catch {
-            print("❌ \(error.localizedDescription)")
-            return nil
-        }
+        // 提示、等一次**新的**回车、读剪贴板、失败重试，全在 `ManualReviewCapture` 里，
+        // 它有测试（`ManualReviewCaptureTests`）。这里只负责接上真实的剪贴板与终端输出。
+        return ManualReviewCapture.read(pasteboard: SystemPasteboard(), enter: enter) { print($0) }
     }
 
     private static func valueFor(_ flag: String, in args: [String]) -> String? {

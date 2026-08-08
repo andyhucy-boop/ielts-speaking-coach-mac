@@ -61,6 +61,14 @@ struct VocabularyView: View {
     @State private var lastChosenFormat: VocabularyExportFormat = .ankiTSV
     /// 导出/复制之后那句反馈。nil 表示还没点过。
     @State private var notice: VocabularyExportNotice?
+    /// 正在等用户确认删除的那一行。非 nil 时确认框开着。
+    ///
+    /// **存整行而不是只存 id**：确认框和删完那句反馈都要说清「删的是哪个词」，
+    /// 而列表会随 `app.state` 变，拿 id 回头查有可能查不到（那正好是它刚被删掉的那一刻）。
+    @State private var pendingDeletion: VocabularyRow?
+    /// 删完之后那句话。**不做成一闪而过的提示**——它说清了什么被删了、什么没被动，
+    /// 而这是一次不可撤销的操作，用户来不及读就等于没说（铁律 7）。
+    @State private var deletionNotice: String?
 
     init(app: AppState, onGo: @escaping (SidebarItem) -> Void,
          writeToPasteboard: @escaping (String) -> Bool = { text in
@@ -92,6 +100,7 @@ struct VocabularyView: View {
                 exportSection
                 howToUseSection
                 noticeSection
+                deletionNoticeSection
                 listSection
             }
             .padding(Spacing.xl)
@@ -114,6 +123,19 @@ struct VocabularyView: View {
                 // 本项目发生过一次，不许再有（铁律 7）。
                 notice = Self.failureNotice(error)
             }
+        }
+        // 删一条词是不可撤销的，所以先弹确认框，不直接删。
+        // 标题、正文全部取 `VocabularyDeletion` 那一份——这一页不另写一套说法，
+        // 那边的每一句都有 `VocabularyDeletionTests` 钉着。
+        .confirmationDialog(pendingDeletion.map(Self.deletionTitle) ?? "",
+                            isPresented: isConfirmingDeletion,
+                            titleVisibility: .visible,
+                            presenting: pendingDeletion) { row in
+            // 默认焦点不给这一颗：`.cancel` 那颗才是回车/ESC 落点。
+            Button("删掉这个词", role: .destructive) { destroy(row) }
+            Button("取消", role: .cancel) { pendingDeletion = nil }
+        } message: { row in
+            Text(VocabularyDeletion.confirmationText(for: row.record))
         }
     }
 
@@ -393,6 +415,65 @@ struct VocabularyView: View {
         }
     }
 
+    // MARK: - 删掉一条词
+
+    private var isConfirmingDeletion: Binding<Bool> {
+        Binding(get: { pendingDeletion != nil },
+                set: { if !$0 { pendingDeletion = nil } })
+    }
+
+    /// 确认框的标题要说清是**哪一个词**。词汇本里几十条长得差不多，
+    /// 只说「确定删除吗」的话，用户根本不敢按。
+    ///
+    /// 残缺条目（原词也空）正是这个入口存在的头号理由，所以那一种也得有个说法，
+    /// 不能拼出一个「删掉「」？」。
+    static func deletionTitle(_ row: VocabularyRow) -> String {
+        let word = row.basicWord.trimmingCharacters(in: .whitespacesAndNewlines)
+        return word.isEmpty ? "删掉这条没有原词的记录？" : "删掉「\(word)」？"
+    }
+
+    private func destroy(_ row: VocabularyRow) {
+        pendingDeletion = nil
+        // 返回的是给用户看的中文说明，三种情况都可能：删成功了、那条已经不在了、写盘失败。
+        // 三种都必须显示出来（铁律 7）。
+        deletionNotice = app.deleteVocabulary(row.record)
+    }
+
+    /// 行尾的删除入口。图标按钮，鼠标悬停有说明；点了先弹确认框，不直接删。
+    ///
+    /// 与 `HistoryView` 的删除按钮同一个形状：那一页已经教会用户「行尾的垃圾桶 = 删这一条」。
+    private func deleteButton(_ row: VocabularyRow) -> some View {
+        Button {
+            pendingDeletion = row
+        } label: {
+            Image(systemName: "trash")
+                .font(Typography.body)
+                .foregroundStyle(Palette.textSecondary)
+                .padding(Spacing.sm)
+        }
+        .buttonStyle(.plain)
+        .contentShape(RoundedRectangle(cornerRadius: Radius.control))
+        .help("删掉这个词")
+        .accessibilityLabel("删掉这个词")
+    }
+
+    /// 删完那句话。**留在屏幕上**，直到用户自己关掉。
+    @ViewBuilder private var deletionNoticeSection: some View {
+        if let deletionNotice {
+            CoachCard {
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    Text(deletionNotice)
+                        .font(Typography.body)
+                        .foregroundStyle(Palette.textPrimary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("知道了") { self.deletionNotice = nil }
+                        .buttonStyle(.bordered)
+                }
+            }
+        }
+    }
+
     // MARK: - 列表
 
     /// 顺序与内容**原样**来自 `VocabularyViewModel`。这一页不排、不筛、不藏。
@@ -445,6 +526,8 @@ struct VocabularyView: View {
                                     in: RoundedRectangle(cornerRadius: Radius.pill))
                         .overlay(RoundedRectangle(cornerRadius: Radius.pill)
                             .strokeBorder(Palette.cardBorder, lineWidth: BorderWidth.hairline))
+
+                    deleteButton(row)
                 }
 
                 Text("搭配：\(row.collocation)")

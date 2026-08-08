@@ -238,10 +238,16 @@ public final class AXDriver: CoachBridge, Sendable {
         // 未给标记时退回旧行为（原有的 ≥40 字符取最长），保持既有测试不变
         let texts = allTexts.filter { $0.count >= 40 }
         guard let longest = texts.max(by: { $0.count < $1.count }) else {
+            // ⚠️ 这句话从前写的是「用 coach practice --from-clipboard 继续」——
+            // **那个 flag 从来就不存在**（`PracticeCommand.flagsWithValue` 只认 --goal，
+            // 而 --from-clipboard 会被 `questionID(in:)` 当成题号忽略掉）。
+            // 用户照做只会得到「题库里没有 id 为「--from-clipboard」的题目」。
+            // 真正接得住这一步的是调用方的手动兜底（`ManualReviewCapture`），
+            // 所以这里只说「按提示继续」，与同文件里另外两处一致。
             throw BridgeError.elementNotFound(
                 "没能从 ChatGPT 窗口读到足够长的文字，复盘可能还没生成完。"
                 + "下一步：等 ChatGPT 输出完再重试；若已经输出完，请在 ChatGPT 里选中复盘全文按 ⌘C，"
-                + "然后用 coach practice --from-clipboard 继续。")
+                + "然后按提示继续。")
         }
         return longest
     }

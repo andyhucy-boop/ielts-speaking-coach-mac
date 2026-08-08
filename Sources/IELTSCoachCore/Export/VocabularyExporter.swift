@@ -104,16 +104,25 @@ public enum VocabularyExporter {
 
         for record in records {
             let front = sanitize(record.basicWord)
+            // ⚠️ 下面两句「下一步」提到的两条路**都必须真的做得到**，这不是修辞。
+            // 2026-08-08 复审第 11 条实测：那时两条都是死路——全应用（含命令行与 MCP）
+            // 没有删除单条词汇的能力，而 `ReviewArchiver.mergeVocabulary` 按 basicWord
+            // 命中已有记录之后只加一次出现次数，缺掉的字段一个都不回填。
+            // 现在两条都补上了：删除入口是「我的词汇」页每条词右边的「删掉这个词」，
+            // 回填在 `mergeVocabulary` 里（只填空字段，不覆盖已有内容）。
+            // 哪天要动这两处任意一处，这两句话得跟着改。
             guard !front.isEmpty else {
                 skipped.append("跳过了一条词汇：它没有「原来的说法」，而 Anki 会拒收正面为空的卡片。"
-                    + "下一步：到「我的词汇」页把这条删掉，或等下一次复盘把它补全。")
+                    + "下一步：到「我的词汇」页点这条右边的「删掉这个词」，"
+                    + "或等下一次复盘再推荐到这个词时自动把它补全。")
                 continue
             }
             let parts = [sanitize(record.betterExpression), sanitize(record.collocation)]
                 .filter { !$0.isEmpty }
             guard !parts.isEmpty else {
                 skipped.append("跳过了「\(front)」：它既没有更好的说法，也没有搭配，做成卡片背面是空的。"
-                    + "下一步：等下一次复盘补上，或到「我的词汇」页把这条删掉。")
+                    + "下一步：等下一次复盘再推荐到这个词，缺的部分会自动补上；"
+                    + "不想等就到「我的词汇」页点它右边的「删掉这个词」。")
                 continue
             }
             notes.append(Note(front: front,

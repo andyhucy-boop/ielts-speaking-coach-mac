@@ -207,6 +207,51 @@ final class TrainingStatsTests: XCTestCase {
         XCTAssertEqual(stats.weeklySpokenMinutes, 2)
     }
 
+    // MARK: - 趋势那一格的场次口径
+
+    /// `trendSessionCount` 数的必须是**趋势真正用的那条时间轴**上的场次，
+    /// 不是 `state.sessions.count`。
+    ///
+    /// 两者不相等是日常：在训练记录页删掉几条旧记录、或早期用命令行练过几场，
+    /// 档案里都会留下 `state.sessions` 里没有的场次 id。首页第四格的大号数字走的是
+    /// `IssueTrendAnalyzer`（也就是这条时间轴），脚注要是改用 `totalSessions` 判
+    /// 「够不够看出趋势」，同一张卡片就会自己跟自己打架。
+    func testTrendSessionCountFollowsTheTimelineNotTheRecordedSessions() {
+        func julySession(_ day: Int) -> PracticeSession {
+            let stamp = String(format: "2026-07-%02d", day)
+            return session("\(stamp)-001", started: "\(stamp)T10:00:00Z",
+                           ended: "\(stamp)T10:30:00Z")
+        }
+        // 训练记录里只有 7 场；第 8 场（07-08）只在错题档案里被引用到。
+        let issue = IssueRecord(id: "gone", learnerSaid: "s", correction: "c", whyItMatters: "w",
+                                occurrences: 3,
+                                sourceSessionIds: ["2026-07-01-001", "2026-07-02-001",
+                                                   "2026-07-08-001"],
+                                lastSeenAt: "2026-07-08T10:00:00Z")
+        let stats = compute(state((1...7).map(julySession), issues: [issue]))
+        XCTAssertEqual(stats.totalSessions, 7)
+        XCTAssertEqual(stats.trendSessionCount, 8,
+                       "只在档案里留了记录的那一场也参与窗口划分，必须算进这个口径")
+        XCTAssertEqual(stats.archiveOnlySessionCount, 1,
+                       "训练记录页看不到的那一场必须能被界面点出来")
+        XCTAssertEqual(stats.improvingIssueCount, 1,
+                       "8 场就够划出窗口了，这个毛病最近没再出现 → 已经在「变少」里")
+    }
+
+    func testArchiveOnlySessionCountIsZeroWhenEveryReferencedSessionIsRecorded() {
+        func julySession(_ day: Int) -> PracticeSession {
+            let stamp = String(format: "2026-07-%02d", day)
+            return session("\(stamp)-001", started: "\(stamp)T10:00:00Z",
+                           ended: "\(stamp)T10:30:00Z")
+        }
+        let issue = IssueRecord(id: "i", learnerSaid: "s", correction: "c", whyItMatters: "w",
+                                occurrences: 1, sourceSessionIds: ["2026-07-01-001"],
+                                lastSeenAt: "2026-07-01T10:00:00Z")
+        let stats = compute(state((1...8).map(julySession), issues: [issue]))
+        XCTAssertEqual(stats.trendSessionCount, 8)
+        XCTAssertEqual(stats.archiveOnlySessionCount, 0)
+    }
+
     func testEmptyStateProducesAllZerosWithoutCrashing() {
         let stats = compute(CoachState.empty())
         XCTAssertEqual(stats.weeklyDone, 0)
@@ -214,6 +259,8 @@ final class TrainingStatsTests: XCTestCase {
         XCTAssertEqual(stats.weeklySpokenMinutes, 0)
         XCTAssertEqual(stats.improvingIssueCount, 0)
         XCTAssertEqual(stats.trackedIssueCount, 0)
+        XCTAssertEqual(stats.trendSessionCount, 0)
+        XCTAssertEqual(stats.archiveOnlySessionCount, 0)
         XCTAssertEqual(stats.weeklyGoal, 5)
     }
 }

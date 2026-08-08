@@ -86,6 +86,51 @@ final class CoachCLIGuidanceTests: XCTestCase {
                 + "实际内容：\(branch)")
     }
 
+    // MARK: - 命令行导题库要和 App 排出同一份计划
+
+    /// 复审第 9 条的接线守卫的另一半。
+    ///
+    /// 两边行为不一致的话，用命令行导题库的人回到 App 会发现首页没有「按计划练今天」——
+    /// 而引导（`OnboardingStep.ready`）刚刚亲口说过已经排好了。
+    /// 那条路走得通不是理论：`OnboardingFlow.steps` 在题库非空时**会跳过导入那一步**，
+    /// 于是他看到的正是那句承诺，却没有计划。
+    func testTheCommandLineImportLaysOutTheSamePlanTheAppDoes() throws {
+        let code = try SourceGuard.repositoryCode("Sources/coach/QuestionsCommand.swift")
+        XCTAssertTrue(
+            code.contains("PlanBootstrap.planForFirstImport"),
+            "命令行导题库没有走 PlanBootstrap，App 导会排计划、命令行导不会。"
+                + "下一步：两条导入路径都调同一条规则（这条规则本身在 PlanBootstrapTests 里测）。")
+        XCTAssertTrue(
+            code.contains("PlanBootstrap.notice"),
+            "命令行排了计划却一个字都不说。凭空多出一份计划，用户会以为是上一次用留下的。")
+    }
+
+    // MARK: - 手动兜底那一步接在谁身上
+
+    /// 命令行练完一场可能整场复盘一个字都不留（复审第 13 条）的**接线守卫**。
+    ///
+    /// 真正的行为测试在 `ChatGPTBridgeTests.ManualReviewCaptureTests` / `ConsoleEnterWaiterTests`
+    /// ——那边跑的是生产实现本身。这里守的是另一半：`PracticeCommand` 有没有真的接上它。
+    /// 少了这一条，谁把这一行改回「打一句提示 + `enter.waitForPress()` + 读一次剪贴板」，
+    /// 那两组测试照样全绿，而缺陷原样回来。
+    func testTheManualFallbackGoesThroughTheTestedCapture() throws {
+        let code = try SourceGuard.repositoryCode(Self.practicePath)
+
+        XCTAssertTrue(
+            code.contains("ManualReviewCapture.read"),
+            "手动兜底那一步没有走 ManualReviewCapture。它是整条命令行流程里最后一道"
+                + "能救回这一场的闸门（走不过去就是「复盘原文一个字不落盘」），"
+                + "而 \(Self.practicePath) 所在的 coach 是可执行 target、没有测试 target，"
+                + "自己写一份等于没有测试。下一步：把这一步交回 ManualReviewCapture.read。")
+
+        XCTAssertFalse(
+            code.contains("enter.waitForPress()") && code.contains("ClipboardFallback.readReview"),
+            "这里又出现了「自己等一次回车 + 自己读一次剪贴板」的写法。"
+                + "用 waitForPress 会把用户结束通话时顺手按的那一下回车当成对"
+                + "「请按 ⌘C 然后回车」的回答，0 秒穿过去，这一场当场作废（复审第 13 条）。"
+                + "下一步：交给 ManualReviewCapture.read，它内部用的是 waitForFreshPress。")
+    }
+
     // MARK: - reimport 里那段解释文件名来历的注释
 
     func testReimportCommentPointsAtWhoActuallyNamesThePendingFiles() throws {

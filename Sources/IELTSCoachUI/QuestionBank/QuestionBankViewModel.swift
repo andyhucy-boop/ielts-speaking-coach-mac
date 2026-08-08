@@ -45,11 +45,18 @@ public struct QuestionBankImportOutcome: Equatable, Sendable {
     public let totalCount: Int
     /// 导入器给出的逐条警告（哪一行有问题、该怎么改）。
     public let warnings: [String]
+    /// 这次导入顺手替用户排了一份学习计划时，要告诉他的那句话；没排就是 nil。
+    ///
+    /// **凭空多出一份计划却不吭声是不行的**：用户会以为是上一次用留下的，
+    /// 也不知道去哪儿改周期或重点 Part（见 `PlanBootstrap.notice`）。
+    public let planNotice: String?
 
-    public init(importedCount: Int, totalCount: Int, warnings: [String]) {
+    public init(importedCount: Int, totalCount: Int, warnings: [String],
+                planNotice: String? = nil) {
         self.importedCount = importedCount
         self.totalCount = totalCount
         self.warnings = warnings
+        self.planNotice = planNotice
     }
 
     /// 导入完成后显示的那句话。铁律 6：同时说清「发生了什么」和「下一步做什么」。
@@ -69,7 +76,13 @@ public struct QuestionBankImportOutcome: Equatable, Sendable {
         guard warnings.isEmpty else {
             return head + "下面 \(warnings.count) 条警告指出了文件里有问题的行，"
                 + "下一步：改好之后可以再导入一次，同一道题会被覆盖而不是变成两道。"
+            // ⚠️ 有警告这一支刻意**不**接 planNotice：那时用户该先去改文件，
+            // 再堆一段计划说明只会把「有几行没进来」这件更要紧的事挤下去。
+            // 计划确实排好了，回首页就看得到，且学习计划页随时能改。
         }
+        // 顺手排了计划的话，这句话接在后面——凭空多出一份计划却不吭声，
+        // 用户会以为是上一次用留下的（复审第 9 条）。
+        if let planNotice { return head + planNotice }
         return head + "下一步：到「今日训练」页开始练习。"
     }
 }

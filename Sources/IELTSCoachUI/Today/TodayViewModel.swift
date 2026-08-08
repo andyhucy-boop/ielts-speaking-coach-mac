@@ -21,7 +21,11 @@ public enum PracticeRoute: String, CaseIterable, Identifiable, Sendable {
     public var subtitle: String {
         switch self {
         case .planToday: return "按学习计划安排的今日题目"
-        case .freePick: return "先选 Part，再挑具体题目"
+        // ⚠️ 这里从前写的是「先选 Part，再挑具体题目」，描述的是一个**不存在的两步选择**：
+        // 弹层里只有一张按 Part 排好序的平铺列表，没有 Part 筛选器，也没有搜索框
+        //（`PracticeSheet.questionRow`，2026-08-08 复审第 9 条）。
+        // 说成两步的话，用户会先去找那个筛选器。
+        case .freePick: return "从整份题库里挑一道题，列表按 Part 排好序"
         case .continueLast: return "接着上次那道题再练"
         case .retrain: return "带上一次复盘给出的目标"
         }
@@ -293,19 +297,34 @@ public struct TodayViewModel: Sendable {
     /// 第四格。**这里不是分数、不是评级。** 它是「问题档案里趋势为
     /// 『最近没再出现』或『出现变少了』的毛病有几个」——一个用户能自己数出来核对的计数。
     private var improvingTile: StatTile {
-        let footnote: String
+        var footnote: String
         if stats.trackedIssueCount == 0 {
             footnote = "问题档案还是空的。"
                 + "下一步：练一场并让 ChatGPT 生成复盘，反复出现的毛病会自动记到这里。"
-        } else if stats.totalSessions < IssueTrendAnalyzer.minimumSessionsForTrend {
+        } else if stats.trendSessionCount < IssueTrendAnalyzer.minimumSessionsForTrend {
+            // **判据必须是 `trendSessionCount`，不能是 `totalSessions`。**
+            // 上面那个大号数字来自 `IssueTrendAnalyzer`，而它数的是
+            // `SessionTimeline` 上的场次（含只在档案里留了记录的那些）；
+            // 拿 `state.sessions.count` 来判「够不够」，两个口径一岔，
+            // 这张卡片就会一边显示「出现变少的毛病 1 个」、一边说「还看不出来，
+            // 再练 1 次才会显示」——数字已经在显示了，而那句「下一步」承诺的是
+            // 一件已经发生的事（2026-08-08 复审第 12 条实测复现）。
+            //
             // 场次不够时说「0 个毛病在变少」会被误读成「一点没进步」。
             // 必须说清是「还看不出来」，并给出还差几场。
-            let needed = IssueTrendAnalyzer.minimumSessionsForTrend - stats.totalSessions
+            let needed = IssueTrendAnalyzer.minimumSessionsForTrend - stats.trendSessionCount
             footnote = "练习场次还不够，暂时看不出哪个毛病在变少。"
                 + "下一步：再练 \(needed) 次，这里会自动开始显示。"
         } else {
             footnote = "档案里一共 \(stats.trackedIssueCount) 个问题，这里只数「最近变少了」的那些。"
                 + "下一步：到问题档案页看每个毛病的具体变化。"
+        }
+        // 两个口径不一致时必须把差额说出来，否则用户按训练记录页那几条自己数，
+        // 怎么数都对不上这里的「还差几次」——问题档案页有这句交代，首页从前没有。
+        if stats.archiveOnlySessionCount > 0 {
+            footnote += "另有 \(stats.archiveOnlySessionCount) 次练习只在档案里留了记录，"
+                + "训练记录页看不到它们，但它们同样算进了上面这个数。"
+                + "下一步：到问题档案页看那条完整说明。"
         }
         return StatTile(id: "improving", caption: "出现变少的毛病",
                         value: "\(stats.improvingIssueCount)", unit: "个", footnote: footnote)

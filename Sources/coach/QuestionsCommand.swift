@@ -55,13 +55,28 @@ enum QuestionsCommand {
 
             let directory = DataDirectory.resolve()
             try directory.createIfNeeded()
-            let total = try StateStore(directory: directory).mutate { state -> Int in
-                state.questions = QuestionBankImporter.merge(existing: state.questions,
-                                                             incoming: result.questions)
-                state.questionSources.append(result.source)
-                return state.questions.count
-            }
-            print("✅ 导入 \(result.questions.count) 题，题库现共 \(total) 题")
+            let outcome = try StateStore(directory: directory)
+                .mutate { state -> (total: Int, plan: String?) in
+                    // 「导入之前有没有题」在写事务里取，理由见 AppState.applyImport。
+                    let hadQuestionsBefore = !state.questions.isEmpty
+                    state.questions = QuestionBankImporter.merge(existing: state.questions,
+                                                                 incoming: result.questions)
+                    state.questionSources.append(result.source)
+
+                    // 与 App 走同一条规则（PlanBootstrap），不各写各的：
+                    // 两边行为不一致的话，用命令行导题库的人回到 App 会发现首页
+                    // 没有「按计划练今天」，而引导刚刚亲口说过已经排好了（复审第 9 条）。
+                    var planNotice: String?
+                    if let bootstrapped = PlanBootstrap.planForFirstImport(
+                        state: state, hadQuestionsBefore: hadQuestionsBefore,
+                        createdAt: CoachTime.string(from: Date())) {
+                        PlanRegenerator.apply(bootstrapped, to: &state)
+                        planNotice = PlanBootstrap.notice(for: bootstrapped)
+                    }
+                    return (state.questions.count, planNotice)
+                }
+            print("✅ 导入 \(result.questions.count) 题，题库现共 \(outcome.total) 题")
+            if let plan = outcome.plan { print("📅 \(plan)") }
             if result.questions.isEmpty {
                 print("ℹ️  这次没有导入任何题目。下一步：检查上面的警告。")
             }

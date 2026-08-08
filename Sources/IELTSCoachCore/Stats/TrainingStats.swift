@@ -15,6 +15,21 @@ public struct TrainingStats: Equatable, Sendable {
     /// 问题档案里一共有几个毛病，给「N 个里的 M 个」这种说法用。
     public let trackedIssueCount: Int
 
+    /// **趋势那一格的场次口径**：`SessionTimeline` 上真正参与窗口划分的场次数
+    /// （训练记录里的，加上只在档案里留了记录、但时间读得出来的那些）。
+    ///
+    /// **界面上凡是要说「场次够不够看出趋势」，只能用这个数，不许用 `totalSessions`。**
+    /// 两个口径经常不相等（在训练记录页删掉几条旧记录、或用命令行练过几场，
+    /// 都会让档案里引用到的场次多于 `state.sessions`），而 `improvingIssueCount`
+    /// 走的是 `IssueTrendAnalyzer` → `SessionTimeline` 这一条。拿 `totalSessions`
+    /// 去判「够不够」，就会出现同一张卡片上大号数字写着「出现变少的毛病 1 个」、
+    /// 紧挨着的脚注写着「还看不出来，再练 1 次才会显示」——数字已经在显示了，
+    /// 而那句「下一步」承诺的是一件已经发生的事（2026-08-08 复审第 12 条实测复现）。
+    public let trendSessionCount: Int
+    /// 只在错题/词汇/复训目标档案里留了记录、训练记录页看不到的场次数。
+    /// 非 0 时界面必须解释：它们算进了趋势，但用户在训练记录页数不出来。
+    public let archiveOnlySessionCount: Int
+
     // MARK: 诊断字段。非 0 时界面必须解释，禁止静默吞掉。
 
     /// 本周有记录、但算不出时长的场次（缺 endedAt，或 endedAt 不晚于 startedAt）。
@@ -30,11 +45,14 @@ public struct TrainingStats: Equatable, Sendable {
 
     public init(weeklyDone: Int, weeklyGoal: Int, totalSessions: Int,
                 weeklySpokenMinutes: Int, improvingIssueCount: Int, trackedIssueCount: Int,
+                trendSessionCount: Int, archiveOnlySessionCount: Int,
                 sessionsMissingDuration: Int, cappedSessionCount: Int,
                 undatedSessionCount: Int) {
         self.weeklyDone = weeklyDone; self.weeklyGoal = weeklyGoal
         self.totalSessions = totalSessions; self.weeklySpokenMinutes = weeklySpokenMinutes
         self.improvingIssueCount = improvingIssueCount; self.trackedIssueCount = trackedIssueCount
+        self.trendSessionCount = trendSessionCount
+        self.archiveOnlySessionCount = archiveOnlySessionCount
         self.sessionsMissingDuration = sessionsMissingDuration
         self.cappedSessionCount = cappedSessionCount
         self.undatedSessionCount = undatedSessionCount
@@ -82,6 +100,10 @@ public struct TrainingStats: Equatable, Sendable {
 
         let trends = IssueTrendAnalyzer.analyze(state: state)
         let improving = trends.filter { $0.trend == .gone || $0.trend == .decreasing }.count
+        // 趋势那一格的两个数字必须出自同一条时间轴：`improving` 是
+        // `IssueTrendAnalyzer` 算的，而它内部走的正是 `SessionTimeline`。
+        // 这里再取一次同一条轴，界面上「够不够看出趋势」才和「看出来了几个」同口径。
+        let timeline = SessionTimeline.build(state: state)
 
         return TrainingStats(
             weeklyDone: weeklyDone,
@@ -90,6 +112,8 @@ public struct TrainingStats: Equatable, Sendable {
             weeklySpokenMinutes: minutes,
             improvingIssueCount: improving,
             trackedIssueCount: state.issues.count,
+            trendSessionCount: timeline.orderedSessionIDs.count,
+            archiveOnlySessionCount: timeline.unmatchedSessionIDs.count,
             sessionsMissingDuration: missingDuration,
             cappedSessionCount: capped,
             undatedSessionCount: undated)

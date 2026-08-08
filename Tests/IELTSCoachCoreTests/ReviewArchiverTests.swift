@@ -110,6 +110,69 @@ final class ReviewArchiverTests: XCTestCase {
         XCTAssertEqual(state.vocabulary[0].priority, "high")
     }
 
+    // MARK: - 残缺词条的回填（复审第 11 条）
+
+    /// 第一次复盘只给了原词，第二次给全了——**缺的字段必须补上**。
+    ///
+    /// 补不上的话，这条记录会永远渲染成「good →（空白）」，每次导出都被跳过，
+    /// 而跳过的提示写着「等下一次复盘补上」——那句话就是假的。
+    func testASecondReviewFillsInTheFieldsThatWereMissingTheFirstTime() throws {
+        let partial = try JSONValue.decode(from: """
+        {"summary":"ok","must_correct":[],"answer_upgrades":[],
+         "vocabulary":[{"basic":"good"}]}
+        """)
+        var state = ReviewArchiver.archive(report: partial, into: baseState(),
+                                           sessionID: "s1", questionID: "q1", at: "t1").state
+        XCTAssertEqual(state.vocabulary.count, 1)
+        XCTAssertEqual(state.vocabulary[0].betterExpression, "", "前提：第一次确实是残缺的")
+
+        state = ReviewArchiver.archive(report: report, into: state,
+                                       sessionID: "s2", questionID: "q1", at: "t2").state
+        XCTAssertEqual(state.vocabulary.count, 1, "同一个词不该变成两条")
+        XCTAssertEqual(state.vocabulary[0].betterExpression, "rewarding",
+                       "「更好的说法」没有回填，这条卡片会被永久跳过")
+        XCTAssertEqual(state.vocabulary[0].collocation, "a rewarding experience",
+                       "搭配没有回填")
+        XCTAssertEqual(state.vocabulary[0].sourceSessionIds, ["s1", "s2"])
+        // priority 刻意不回填：它落盘时就有默认值 "normal"，从来不是空的，
+        // 按「缺字段」去覆盖等于让后一次复盘悄悄改掉这个词在列表里的排序。
+        XCTAssertEqual(state.vocabulary[0].priority, "normal",
+                       "优先级不该被后来的复盘改掉——那会悄悄重排用户的背词顺序")
+    }
+
+    /// 回填**只填空的**。已经有内容的字段绝不许被后来的复盘悄悄换掉——
+    /// 用户已经在背那句话了，换掉它而不吭声比不补更糟。
+    func testBackfillNeverOverwritesSomethingTheUserAlreadyHas() throws {
+        var state = ReviewArchiver.archive(report: report, into: baseState(),
+                                           sessionID: "s1", questionID: "q1", at: "t1").state
+        let different = try JSONValue.decode(from: """
+        {"summary":"ok","must_correct":[],"answer_upgrades":[],
+         "vocabulary":[{"basic":"good","better":"某个完全不同的说法",
+                        "collocation":"另一个搭配","priority":"low"}]}
+        """)
+        state = ReviewArchiver.archive(report: different, into: state,
+                                       sessionID: "s2", questionID: "q1", at: "t2").state
+        XCTAssertEqual(state.vocabulary[0].betterExpression, "rewarding")
+        XCTAssertEqual(state.vocabulary[0].collocation, "a rewarding experience")
+        XCTAssertEqual(state.vocabulary[0].priority, "high")
+        XCTAssertEqual(state.vocabulary[0].sourceSessionIds, ["s1", "s2"],
+                       "内容不改，但「在几场里出现过」还是要照记")
+    }
+
+    /// 第二次也没给的话，不许把空的写进去搅乱已有内容（等价于上一条的反向边界）。
+    func testAnEmptyIncomingFieldLeavesTheExistingOneAlone() throws {
+        var state = ReviewArchiver.archive(report: report, into: baseState(),
+                                           sessionID: "s1", questionID: "q1", at: "t1").state
+        let blank = try JSONValue.decode(from: """
+        {"summary":"ok","must_correct":[],"answer_upgrades":[],
+         "vocabulary":[{"basic":"good","better":"   ","collocation":""}]}
+        """)
+        state = ReviewArchiver.archive(report: blank, into: state,
+                                       sessionID: "s2", questionID: "q1", at: "t2").state
+        XCTAssertEqual(state.vocabulary[0].betterExpression, "rewarding")
+        XCTAssertEqual(state.vocabulary[0].collocation, "a rewarding experience")
+    }
+
     func testAppendsRetrainingTarget() {
         let state = ReviewArchiver.archive(report: report, into: baseState(),
                                            sessionID: "s1", questionID: "q1", at: "t").state

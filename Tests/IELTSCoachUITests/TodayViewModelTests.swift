@@ -122,6 +122,26 @@ final class TodayViewModelTests: XCTestCase {
         XCTAssertEqual(Set(titles).count, titles.count, "有两条路线叫同一个名字")
     }
 
+    /// 副标题描述的操作步骤得和弹层里真有的东西对得上（复审第 9 条）。
+    ///
+    /// 「从题库自由选题」从前的副标题写着「先选 Part，再挑具体题目」——
+    /// 那是一个**不存在的两步选择**：弹层里只有一张平铺列表，没有 Part 筛选器，
+    /// 也没有搜索框，季度题库几百道题时要一直滚。用户会先去找那个筛选器。
+    func testTheFreePickSubtitleDoesNotDescribeAPickerThatIsNotThere() throws {
+        let subtitle = PracticeRoute.freePick.subtitle
+        XCTAssertFalse(subtitle.contains("先选 Part"),
+                       "副标题描述了一个不存在的两步选择：\(subtitle)")
+
+        // 前提：那个弹层今天确实没有筛选器/搜索框。
+        // 哪天真做出来了，这条会红，逼人回头把副标题一起改回去。
+        let sheet = try SourceGuard.code("Session/PracticeSheet.swift")
+        XCTAssertFalse(sheet.contains("Picker("),
+                       "挑题弹层里出现了 Picker——要是 Part 筛选器做出来了，"
+                           + "「从整份题库里挑一道题」这句副标题就该改回两步的说法。")
+        XCTAssertFalse(sheet.contains("searchable"),
+                       "挑题弹层里出现了搜索框，副标题该跟着说。")
+    }
+
     // MARK: - 点「开始练习」到底要练哪道题、按什么设置练
 
     /// 这几条守的是 Task 9 那颗按钮背后的取数：点下去之后要拿哪道题、带什么目标、按哪个 Part

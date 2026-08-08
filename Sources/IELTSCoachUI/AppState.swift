@@ -245,18 +245,35 @@ public final class AppState {
     /// 下次打开却一道都没有，而中间那次「成功」的提示让他根本不会怀疑导入这一步。
     @discardableResult
     public func applyImport(_ result: ImportResult) throws -> QuestionBankImportOutcome {
-        let total = try store.mutate { state -> Int in
+        let outcome = try store.mutate { state -> (total: Int, plan: String?) in
+            // **「导入之前有没有题」必须在这个写事务里取。** `store.mutate` 在锁内重新
+            // 从磁盘读一遍，事务外那份内存快照可能已经过期（命令行同期导过一份）。
+            let hadQuestionsBefore = !state.questions.isEmpty
             // merge 按 id 去重、同 id 后者覆盖前者。雅思题库每季度换题，
             // 二次导入是常态而非边缘情况——不能变成两道一模一样的题。
             state.questions = QuestionBankImporter.merge(existing: state.questions,
                                                          incoming: result.questions)
             state.questionSources.append(result.source)
-            return state.questions.count
+
+            // 第一次把题库导进来时顺手排好第一份计划（复审第 9 条）：
+            // 引导承诺「首页已经给你排好今天练什么了」，而在这之前导入题库从不生成计划，
+            // 首页排得出来的唯一路线是「从题库自由选题」——用户每一场都得自己从
+            // 几百道题里挑，正是这个产品声称要替他解决的那件事。
+            // 三道闸门（题库原先是空的、还没有计划、题目够排）都在 PlanBootstrap 里。
+            var planNotice: String?
+            if let bootstrapped = PlanBootstrap.planForFirstImport(
+                state: state, hadQuestionsBefore: hadQuestionsBefore,
+                createdAt: CoachTime.string(from: Date())) {
+                PlanRegenerator.apply(bootstrapped, to: &state)
+                planNotice = PlanBootstrap.notice(for: bootstrapped)
+            }
+            return (state.questions.count, planNotice)
         }
         reload()
         return QuestionBankImportOutcome(importedCount: result.questions.count,
-                                         totalCount: total,
-                                         warnings: result.warnings)
+                                         totalCount: outcome.total,
+                                         warnings: result.warnings,
+                                         planNotice: outcome.plan)
     }
 
     // Phase 10 Task 16：`setTranscriptEnabled(_:)`、`setWeeklyGoal(_:)` 与 `settingsError`
@@ -282,6 +299,26 @@ public final class AppState {
         // 而这一次删的是一条已经不存在的记录。
         reload()
         return failure
+    }
+
+    /// 删掉词汇本里的一条词。**永不抛错**：返回的字符串是给用户看的中文说明，必须显示出来。
+    ///
+    /// 存在的理由见 `VocabularyDeletion`：导出时跳过残缺词条的提示里写着
+    /// 「到「我的词汇」页把这条删掉」，而这个入口从前根本不存在（复审第 11 条）。
+    ///
+    /// 放在这里而不是让视图自己开 `StateStore`，理由和 `applyImport`、`deleteSession` 一样：
+    /// App 与命令行必须写同一个目录，多一处解析目录就多一处走岔的机会。
+    public func deleteVocabulary(_ record: VocabularyRecord) -> String {
+        var removed = false
+        if let failure = mutate({ state in
+            removed = VocabularyDeletion.remove(id: record.id, from: &state)
+        }) {
+            return failure
+        }
+        // `mutate` 成功之后已经重读过磁盘，`state` 是最新的。
+        return removed
+            ? VocabularyDeletion.successNotice(for: record, remaining: state.vocabulary.count)
+            : VocabularyDeletion.alreadyGoneNotice(remaining: state.vocabulary.count)
     }
 
     /// 造一台练习驱动器：**与本 AppState 同一个数据目录**，桥接注入进来的那个 Bridge。

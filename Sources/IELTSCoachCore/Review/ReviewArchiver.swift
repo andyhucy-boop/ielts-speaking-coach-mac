@@ -129,6 +129,24 @@ public enum ReviewArchiver {
                 if !state.vocabulary[index].sourceSessionIds.contains(sessionID) {
                     state.vocabulary[index].sourceSessionIds.append(sessionID)
                 }
+                // **缺的字段要回填。**
+                //
+                // ChatGPT 偶尔会给出只有原词、没有「更好的说法」也没有搭配的条目
+                //（提示词要求给全，但没有校验拦它）。那条记录在「我的词汇」页上渲染成
+                //「word →（空白）」，导出时每次都被跳过，而跳过的提示写着
+                //「等下一次复盘补上」——从前这句话是假的：按 basicWord 命中已有记录之后
+                // 只加一次出现次数，缺掉的字段一个都不补，这条残缺卡片会一边被永久跳过、
+                // 一边把计数越滚越大（2026-08-08 复审第 11 条实测）。
+                //
+                // 只填**空的**字段，绝不覆盖已有内容：覆盖等于把用户已经在背的那句话
+                // 悄悄换掉，而他不会收到任何提示。
+                //
+                // **`priority` 不在回填之列**：它落盘时就有默认值（"normal"），永远不是空的，
+                // 把它当成「缺字段」去覆盖，等于让后一次复盘悄悄改掉这个词在列表里的排序。
+                // 而空白的只有 better / collocation 那两栏——它们正是卡片背面的全部内容，
+                // 也是导出被跳过的原因。
+                fill(&state.vocabulary[index].betterExpression, with: entry["better"])
+                fill(&state.vocabulary[index].collocation, with: entry["collocation"])
             } else {
                 state.vocabulary.append(VocabularyRecord(
                     id: "vocab-\(state.vocabulary.count + 1)-\(sessionID)",
@@ -140,6 +158,17 @@ public enum ReviewArchiver {
             }
         }
         return merged
+    }
+
+    /// 把 `field` 填上——**只在它现在是空的、而且新值非空时**。
+    ///
+    /// 抽成一个函数而不是在上面写三遍 `if`：三处各写一遍时，漏掉其中一个字段
+    /// 编译器不会吭声，而漏掉的那个字段会永远停在空白上。
+    private static func fill(_ field: inout String, with value: JSONValue?) {
+        guard field.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let incoming = (value?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !incoming.isEmpty else { return }
+        field = incoming
     }
 
     // MARK: - 重训目标

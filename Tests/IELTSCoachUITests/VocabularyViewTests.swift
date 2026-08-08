@@ -511,6 +511,68 @@ final class VocabularyViewTests: XCTestCase {
                       "筛选后的空状态没告诉用户可以换回「全部」：\(hint)")
     }
 
+    // MARK: - 删掉一条词（复审第 11 条）
+
+    /// 导出跳过残缺词条时给的下一步是「到「我的词汇」页点这条右边的「删掉这个词」」。
+    /// **这条测试就是那句话的兑现凭证**：那颗按钮得真的在这一页上，
+    /// 而且点下去要先弹确认框、真的走 `AppState.deleteVocabulary`。
+    ///
+    /// 复审实测：在这之前全应用（含命令行与 MCP）没有任何地方能删掉一条词汇，
+    /// 用户站在这一页上翻遍整页也找不到入口，只能手动去改 state.json。
+    func testTheDeleteEntryPromisedByTheExporterReallyExistsOnThisPage() throws {
+        let exporter = try SourceGuard.repositoryCode(
+            "Sources/IELTSCoachCore/Export/VocabularyExporter.swift")
+        XCTAssertTrue(exporter.contains("「我的词汇」页"),
+                      "导出那两句「下一步」不再把用户指到这一页了，这条测试的前提失效。"
+                          + "下一步：确认那两句现在指的是哪儿，再改这条断言。")
+        let promised = "删掉这个词"
+        XCTAssertTrue(exporter.contains(promised),
+                      "导出的提示没有点名那颗按钮，用户得自己在页面上找：\(exporter.prefix(0))")
+
+        let controls = try SourceGuard.literalControlTitles()
+        XCTAssertTrue(controls.contains(promised),
+                      "全 App 找不到叫「\(promised)」的按钮，而导出的提示正让用户去点它（铁律 4）。"
+                          + "界面上真有的是：\(controls.sorted().joined(separator: "、"))")
+
+        let code = try Self.viewCode()
+        SourceGuard.assertRenders("deleteButton(row)", inBodyOf: "private func vocabularyCard",
+                                  of: Self.view,
+                                  because: "删除入口没有画在词汇卡片上——声明着但一个像素都不上屏，"
+                                      + "而导出的提示正让用户去点它。")
+        XCTAssertTrue(code.contains(".confirmationDialog("),
+                      "删一条词是不可撤销的，必须先弹确认框，不许点一下就删。")
+        XCTAssertTrue(code.contains("app.deleteVocabulary("),
+                      "删除没有走 AppState.deleteVocabulary，那就没有落盘、也没有重读，"
+                          + "用户关掉窗口再打开会发现它又回来了。")
+    }
+
+    /// 确认框和删完那句话**原样取 Core 那一份**，这一页不另写一套说法。
+    /// 另写一套的话，只有 Core 那份有测试守着，而屏幕上显示的是没人守的那份。
+    func testTheDeletionCopyComesFromTheOneTestedSource() throws {
+        let code = try Self.viewCode()
+        XCTAssertTrue(code.contains("VocabularyDeletion.confirmationText(for:"),
+                      "确认框里的正文不是 VocabularyDeletion 那一份。")
+        XCTAssertTrue(code.contains("deletionNotice = app.deleteVocabulary("),
+                      "删完之后没有把那句中文说明接到界面上——成功也要说话，"
+                          + "一行悄悄消失，用户分不清「删掉了」和「点了没反应」。")
+        SourceGuard.assertRenders("deletionNotice", inBodyOf: "@ViewBuilder private var deletionNoticeSection",
+                                  of: Self.view, atLeast: 2,
+                                  because: "删完那句话没有被画出来。")
+    }
+
+    /// 确认框标题得说清删的是哪个词；残缺条目（原词也空）不许拼出「删掉「」？」。
+    func testTheDeletionTitleNamesTheWordAndSurvivesABlankOne() {
+        let named = VocabularyRow(record: record("v1", basic: "good", priority: "high"))
+        XCTAssertTrue(VocabularyView.deletionTitle(named).contains("good"),
+                      VocabularyView.deletionTitle(named))
+        let blank = VocabularyRow(record: VocabularyRecord(id: "v2", basicWord: " ",
+                                                          betterExpression: "", collocation: "",
+                                                          priority: "normal",
+                                                          sourceSessionIds: ["s1"]))
+        XCTAssertFalse(VocabularyView.deletionTitle(blank).contains("「」"),
+                       VocabularyView.deletionTitle(blank))
+    }
+
     // MARK: - 接线：这一页得真的挂在侧边栏上
 
     func testTheSidebarActuallyRoutesToThisPage() throws {

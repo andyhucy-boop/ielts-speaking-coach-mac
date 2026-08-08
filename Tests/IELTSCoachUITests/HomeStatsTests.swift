@@ -120,6 +120,42 @@ final class HomeStatsTests: XCTestCase {
         XCTAssertTrue(tile?.footnote.contains("再练 \(needed) 次") == true, tile?.footnote ?? "")
     }
 
+    /// **同一张卡片不许自己跟自己打架**（2026-08-08 复审第 12 条）。
+    ///
+    /// 复现条件：训练记录只有 7 条，但档案里引用到第 8 场（在训练记录页删过旧记录、
+    /// 或早期用命令行练过，都会造出这种数据）。那时大号数字走 `IssueTrendAnalyzer`
+    /// （用 `SessionTimeline`，8 场，够划窗口）已经显示「1 个」，而脚注从前拿
+    /// `state.sessions.count`（7）去判，说的是「还看不出来，再练 1 次才会显示」——
+    /// 承诺一件已经发生的事，用户要么以为数字是 bug 而不敢信，要么以为自己没进步。
+    func testImprovingTileNeverShowsANumberWhileTheFootnoteSaysItCannotTellYet() {
+        var value = CoachState.empty()
+        value.sessions = (1...7).map(julySession)          // 训练记录里只有 7 场
+        value.issues = [issue("gone", occurrences: 3, days: [1, 2, 8])]   // 第 8 场只在档案里
+        let tile = model(value).statTiles.first { $0.id == "improving" }
+
+        XCTAssertEqual(tile?.value, "1", "8 场足够划出窗口，这个毛病最近没再出现")
+        XCTAssertFalse(tile?.footnote.contains("还不够") == true,
+                       "数字已经在显示了，脚注不许说「练习场次还不够」：\(tile?.footnote ?? "")")
+        XCTAssertFalse(tile?.footnote.contains("再练") == true,
+                       "脚注不许再承诺「再练 N 次这里才会开始显示」：\(tile?.footnote ?? "")")
+        XCTAssertTrue(tile?.footnote.contains("只在档案里留了记录") == true,
+                      "训练记录页数不出来的那一场必须在首页也交代一句，"
+                          + "否则用户按训练记录自己数怎么都对不上：\(tile?.footnote ?? "")")
+        XCTAssertTrue(tile?.footnote.contains("下一步") == true)
+    }
+
+    /// 反过来也要成立：场次**真的**不够时，那句「还差几次」必须还在，
+    /// 而且差额按同一条时间轴算。把它删掉的话，用户看到「0 个」会以为自己一点没进步。
+    func testImprovingFootnoteStillCountsDownUsingTheTimelineWhenSessionsAreGenuinelyTooFew() {
+        var value = CoachState.empty()
+        value.sessions = (1...4).map(julySession)
+        value.issues = [issue("a", occurrences: 2, days: [1, 8])]   // 第 8 场只在档案里 → 时间轴 5 场
+        let tile = model(value).statTiles.first { $0.id == "improving" }
+        XCTAssertEqual(tile?.value, "0")
+        XCTAssertTrue(tile?.footnote.contains("再练 \(IssueTrendAnalyzer.minimumSessionsForTrend - 5) 次") == true,
+                      "还差几次要按趋势真正用的那条时间轴算：\(tile?.footnote ?? "")")
+    }
+
     func testImprovingTileCountsGoneAndDecreasing() {
         var value = CoachState.empty()
         value.sessions = (1...10).map(julySession)

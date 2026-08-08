@@ -407,6 +407,52 @@ final class AppStateTests: XCTestCase {
                        "内存里对了，磁盘上还是抹掉的——重开一次 App 又没了")
     }
 
+    // MARK: - 第一次导入题库要顺手排好计划（复审第 9 条）
+
+    /// 引导的最后一步写着「首页已经给你排好今天练什么了」。在这之前那是假话：
+    /// 导入题库不生成计划，没有计划「按计划练今天」那张卡片整块不显示，
+    /// 首页排得出来的唯一路线是「从题库自由选题」——每一场都得自己从整份题库里挑。
+    ///
+    /// **这条走的是「导入题库」按钮唯一的生产路径 `applyImport`。**
+    /// `PlanBootstrapTests` 测的是那条纯规则，跨不过这一层：
+    /// 哪天有人把这里那句调用删掉，那边照样全绿。
+    func testTheFirstImportAlsoLaysOutAPlanAndSaysSo() throws {
+        let app = AppState(directory: directory, preflight: { .init(ok: true, messages: []) })
+        let bank = (1...9).map {
+            Question(id: "q\($0)", part: ($0 - 1) % 3 + 1, topic: "t\($0)", prompt: "p\($0)")
+        }
+
+        let outcome = try app.applyImport(importResult(bank))
+
+        XCTAssertNotNil(app.state.plan, "第一次导入之后首页还是没有计划可排")
+        XCTAssertEqual(app.state.plan?.days.flatMap(\.questionIds).count, 9)
+        let notice = try XCTUnwrap(outcome.planNotice,
+                                   "凭空多出一份计划却一个字都不说，用户会以为是上一次用留下的")
+        XCTAssertTrue(outcome.summary.contains(notice),
+                      "那句话没有接进导入结果里，用户根本看不到它：\(outcome.summary)")
+
+        // 牙齿：只改内存不落盘的话上面几条照样绿，而重开一次 App 计划就没了。
+        XCTAssertNotNil(try StateStore(directory: directory).load().plan,
+                        "计划没有写进 state.json")
+    }
+
+    /// 换季重新导入**不许**被塞回一份计划：那时用户手上那份里有他练过的进度，
+    /// 而且他可能刚在学习计划页把计划删掉——一声不吭地重建，是推翻他明确做过的选择。
+    func testASecondImportDoesNotResurrectAPlanTheUserDeleted() throws {
+        let app = AppState(directory: directory, preflight: { .init(ok: true, messages: []) })
+        let bank = (1...9).map {
+            Question(id: "q\($0)", part: ($0 - 1) % 3 + 1, topic: "t\($0)", prompt: "p\($0)")
+        }
+        _ = try app.applyImport(importResult(bank))
+        // 用户自己在学习计划页删掉了计划（那颗「删除计划」按钮做的就是这件事）。
+        XCTAssertNil(app.mutate { $0.plan = nil })
+
+        let outcome = try app.applyImport(importResult(bank, title: "秋季题库"))
+
+        XCTAssertNil(app.state.plan, "换季重新导入把用户删掉的计划又塞回来了")
+        XCTAssertNil(outcome.planNotice)
+    }
+
     // MARK: - 删除按钮不许删掉别的东西（复审第 4 条）
 
     /// **这条走的是删除按钮唯一的生产路径 `AppState.deleteSession`，用真实文件系统。**
