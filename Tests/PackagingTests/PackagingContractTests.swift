@@ -70,9 +70,9 @@ final class PackagingContractTests: XCTestCase {
     }
 
     func testAllPackagingScriptsAreExecutable() {
-        // Task 10 会往这个列表里补 verify-portability.sh。
         for script in ["build-app.sh", "verify-signature-stability.sh",
-                       "package-app.sh", "notarize.sh", "make-icon.sh"] {
+                       "package-app.sh", "notarize.sh", "make-icon.sh",
+                       "verify-portability.sh"] {
             let path = root.appending(path: "scripts/\(script)").path
             XCTAssertTrue(FileManager.default.isExecutableFile(atPath: path),
                           "scripts/\(script) 没有可执行位——别人 clone 下来会直接跑不了")
