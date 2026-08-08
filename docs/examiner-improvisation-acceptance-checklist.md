@@ -2,7 +2,10 @@
 
 日期：2026-08-08
 改动文件：`Sources/IELTSCoachCore/Prompt/ExaminerPrompt.swift`
-测试：`Tests/IELTSCoachCoreTests/ExaminerPromptTests.swift`（本次 36 条，全套 `swift test` 1902 条全绿）
+测试：`Tests/IELTSCoachCoreTests/ExaminerPromptTests.swift`（本次 36 条）
+
+> 全套条数 2026-08-08 晚复核时实测是 **1941 条 / 0 失败 / 19.9–20.6 秒**（工作区含题库重建模改动）。
+> 本文最初写的 1902 是当时的数字，现在别再拿它对。
 
 ---
 
