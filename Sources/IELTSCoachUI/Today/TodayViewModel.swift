@@ -205,7 +205,8 @@ public struct TodayViewModel: Sendable {
     /// 把一道题变成一场练习的设置。
     ///
     /// `focusPart` 取这道题自己的 Part——它决定 ChatGPT 按哪套规则考
-    /// （`ExaminerPrompt.partRules`：Part 2 是一分钟准备 + 两分钟长回答，Part 1 是 6–10 个短问题）。
+    /// （`ExaminerPrompt.partRules`：Part 2 是一分钟准备 + 两分钟长回答，
+    /// Part 1 是 2–3 个话题、每话题 3–4 问）。
     /// 定错了，用户练的就是另一种题型，而界面上一点异样都看不出来。
     ///
     /// 时长与 `coach practice` 保持一致：Part 2 一场就一道题，四分钟足够；其余六分钟。
