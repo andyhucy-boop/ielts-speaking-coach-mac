@@ -49,7 +49,7 @@ public enum RecordingStoreError: Error, Equatable, LocalizedError {
 /// 只依赖 Foundation（FileManager 属于 Foundation），因此留在 Core 里。
 public struct RecordingStore: Sendable {
     public static let fileExtension = "m4a"
-    public static let relativePrefix = "recordings/"
+    public static let relativePrefix = DataDirectory.recordingsFolder + "/"
 
     public let directory: DataDirectory
 
@@ -87,6 +87,10 @@ public struct RecordingStore: Sendable {
     ///
     /// **不挡的代价：** recordingPath 是可以被手工改坏的字符串，
     /// 一个 "recordings/../state.json" 就能让「删掉这条录音」删掉用户的全部训练数据。
+    ///
+    /// 真正的判据在 `DataDirectory.safeURL(forRelativePath:in:)` —— **只有一份实现**。
+    /// 这里留下的是分支不同的两句话：「不在 recordings 目录下」和「文件名不合法」
+    /// 对用户是两回事，混成一句话他不知道该改哪儿。
     public func url(forRelativePath path: String) throws -> URL {
         guard path.hasPrefix(Self.relativePrefix) else {
             throw RecordingStoreError.unsafePath(
@@ -94,13 +98,13 @@ public struct RecordingStore: Sendable {
                 + "下一步：这条训练记录的录音路径可能被改坏了；"
                 + "打开数据目录里的 state.json，检查这一条的 recordingPath 字段。")
         }
-        let name = String(path.dropFirst(Self.relativePrefix.count))
-        guard !name.isEmpty, !name.contains("/"), name != ".", name != ".." else {
+        guard let url = directory.safeURL(forRelativePath: path,
+                                          in: [DataDirectory.recordingsFolder]) else {
             throw RecordingStoreError.unsafePath(
                 "录音路径「\(path)」不是一个合法的文件名，已拒绝操作，什么都没动。"
                 + "下一步：打开数据目录里的 state.json，检查这一条的 recordingPath 字段。")
         }
-        return directory.recordingsDirectory.appending(path: name)
+        return url
     }
 
     public func fileExists(relativePath: String) -> Bool {

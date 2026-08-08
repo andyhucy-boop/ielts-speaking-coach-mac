@@ -347,16 +347,21 @@ struct HistoryView: View {
         // 整条记录都要删掉了，展开着的播放器也得跟着收——留着的话它指着一条
         // 已经不存在的记录，点「删除录音」会去删一个刚被连带删掉的文件。
         if expandedSessionID == row.id { expandedSessionID = nil; playback = nil }
-        // 返回 nil 表示一切顺利；非 nil 是「记录删了，但有文件没删掉」的中文说明。
+        // 返回 nil 表示一切顺利；非 nil 是一段中文说明，三种情况都可能：
+        // 记录删了但有文件没删掉、记录本身就没写进去、路径不合法所以整趟都没做。
         deletionFailure = app.deleteSession(row.session)
     }
 
-    /// 删除只完成了一半。**必须留在屏幕上**——这段话里有哪几个文件没删掉、在哪儿，
+    /// 删除没有按预期完成。**必须留在屏幕上**——这段话里有哪几个文件没删掉、在哪儿，
     /// 用一闪而过的提示的话，用户来不及读，那些孤儿文件就永远躺在磁盘上了（铁律 7）。
+    ///
+    /// **抬头刻意不写「只做完了一半」**：三条失败路径里有两条（写盘失败、路径不合法）
+    /// 是一个字节都没动，抬头说「做完了一半」对它们是假话，而用户第一眼读的就是抬头。
+    /// 具体做没做、做了多少，由 `message` 那一段逐字说清。
     private func deletionFailureCard(_ message: String) -> some View {
         CoachCard {
             VStack(alignment: .leading, spacing: Spacing.sm) {
-                Label("这次删除只做完了一半", systemImage: "exclamationmark.triangle")
+                Label("这次删除没有正常完成", systemImage: "exclamationmark.triangle")
                     .font(Typography.cardTitle)
                     .foregroundStyle(Palette.warning)
                 Text(message)

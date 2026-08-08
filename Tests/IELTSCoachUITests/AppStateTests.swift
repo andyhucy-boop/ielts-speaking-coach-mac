@@ -369,6 +369,79 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(app.state.questions.map(\.prompt), ["新的题干"], "重新导入没有覆盖旧题干")
     }
 
+    /// **复审第 10 条走界面这条路的判据。**
+    ///
+    /// 「导入题库」按钮通往合并的唯一生产路径就是 `applyImport`。
+    /// `QuestionStatusAcrossImportsTests` 测的是 `merge` 这个纯函数，跨不过这一层——
+    /// 哪天有人在 `applyImport` 里顺手补一句「导入完把 status 归位」，那边照样全绿。
+    ///
+    /// 用户会经历的：换季导完，题库页顶上「已经练过 N 题」的数字掉下去、
+    /// 每道题右边的勾消失，全程没有提示、没有报错，而引导页刚保证过「换季重新导入是安全的」。
+    func testASeasonalReimportThroughTheImportButtonKeepsThePracticedMarks() throws {
+        let app = AppState(directory: directory, preflight: { .init(ok: true, messages: []) })
+        _ = try app.applyImport(importResult([
+            Question(id: "q1", part: 1, topic: "Home", prompt: "Do you live in a house?")
+        ], title: "夏季题库"))
+        // 练完一场（`ReviewArchiver` 就是这么标的），顺带留下证明它练过的那条记录。
+        try StateStore(directory: directory).mutate { state in
+            state.questions[0].status = "practiced"
+            state.sessions = [PracticeSession(
+                id: "2026-08-06-001", questionId: "q1", focusPart: .part1,
+                startedAt: "2026-08-06T10:00:00Z", endedAt: "2026-08-06T10:20:00Z",
+                goal: "", transcript: [], reportPath: "", recordingPath: "")]
+        }
+        app.reload()
+
+        _ = try app.applyImport(importResult([
+            Question(id: "q1", part: 1, topic: "Home", prompt: "Do you live in a house?"),
+            Question(id: "q2", part: 2, topic: "Skills", prompt: "Describe a useful skill.")
+        ], title: "秋季题库"))
+
+        XCTAssertEqual(app.state.questions.first { $0.id == "q1" }?.status, "practiced",
+                       "换季重新导入把「已练」标记抹回「没练过」了——题库页那个数字会掉下去，"
+                           + "而这个标记丢了就再也回不来")
+        XCTAssertEqual(app.state.questions.first { $0.id == "q2" }?.status, "new",
+                       "新题被误标成练过了")
+        XCTAssertEqual(try StateStore(directory: directory).load()
+                        .questions.first { $0.id == "q1" }?.status, "practiced",
+                       "内存里对了，磁盘上还是抹掉的——重开一次 App 又没了")
+    }
+
+    // MARK: - 删除按钮不许删掉别的东西（复审第 4 条）
+
+    /// **这条走的是删除按钮唯一的生产路径 `AppState.deleteSession`，用真实文件系统。**
+    ///
+    /// `SessionDeleterTests` 那几条直接 new 一台 `SessionDeleter`；
+    /// 而按钮走的是这里这条路，`AppState` 在中间还会 `reload()` 一次——
+    /// 修之前那一次 reload 读到的是「文件不存在 → 静默返回一份空数据」，
+    /// 于是用户眼睁睁看着所有东西在点一下之后消失，同时被告知一切正常。
+    ///
+    /// 触发前提不是纯理论：本工具自己的录音错误提示会引导用户
+    /// 「打开数据目录里的 state.json，检查这一条的 recordingPath 字段」。
+    func testDeletingASessionWithATamperedPathDoesNotWipeTheWholeDataFile() throws {
+        let session = PracticeSession(
+            id: "2026-08-06-001", questionId: "q1", focusPart: .part1,
+            startedAt: "2026-08-06T10:00:00Z", endedAt: "2026-08-06T10:20:00Z",
+            goal: "", transcript: [],
+            reportPath: "", recordingPath: "recordings/../state.json")
+        try StateStore(directory: directory).mutate { state in
+            state.sessions = [session]
+            state.questions = [Question(id: "q1", part: 1, topic: "Home", prompt: "题干")]
+        }
+        let app = AppState(directory: directory, preflight: { .init(ok: true, messages: []) })
+
+        let notice = app.deleteSession(session)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.stateFile.path),
+                      "state.json 被删掉了：全部练习记录、错题本、词汇本、复训目标、题库、"
+                          + "设置在点一下之后一次性消失")
+        XCTAssertNotNil(notice, "拒绝了却一个字都不说，用户只会以为按钮坏了（铁律 5）")
+        XCTAssertEqual(app.state.sessions.map(\.id), ["2026-08-06-001"],
+                       "路径不合法时那一条要留着——它是用户找到那条坏路径的唯一线索")
+        XCTAssertEqual(try StateStore(directory: directory).load().questions.count, 1,
+                       "题库跟着没了")
+    }
+
     // MARK: - 「记录对话逐字稿」开关必须真的落盘（铁律 7）
     //
     // **Phase 10 Task 16 之后，这个开关的写入口只剩 `CoachSettingsViewModel` 一处**

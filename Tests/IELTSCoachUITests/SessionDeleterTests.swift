@@ -240,6 +240,112 @@ final class SessionDeleterTests: XCTestCase {
                        "文件删不掉不该拦住记录本身的删除，否则用户就卡住了")
     }
 
+    // MARK: - 路径穿越：删一场不许删掉别的东西（复审第 4 条）
+
+    /// **这一组必须用真实文件系统，不能用 `FakeFileRemover`。**
+    ///
+    /// 假件把「落在数据目录之外」的路径一律当成「文件不存在」，于是路径穿越在它面前
+    /// 永远测不出来——复审实测确认过：拿假件补的测试全绿，真实文件系统上
+    /// `state.json` 真的被删掉了。所以这几条一律走 `SystemFileRemover`（默认那台），
+    /// 断言的是**磁盘上的文件还在不在**。
+    ///
+    /// 触发前提不是纯理论：`RecordingStore` 的错误提示会引导用户
+    /// 「打开数据目录里的 state.json，检查这一条的 recordingPath 字段」，人打开了就可能打错；
+    /// 跨机器搬数据目录时手工拼路径也是同一条路。
+
+    /// 造一条「路径被改坏了」的记录，落盘，然后真的去点删除。返回给用户的那句话。
+    private func deleteWithRealFileSystem(
+        reportPath: String = "", recordingPath: String = ""
+    ) throws -> String? {
+        let broken = session("2026-08-06-001", reportPath: reportPath, recordingPath: recordingPath)
+        try store.mutate { $0.sessions = [broken] }
+        return SessionDeleter(directory: directory, store: store).delete(broken)
+    }
+
+    /// `recordings/../state.json`：指回训练数据文件本身。
+    /// 修之前这一按会把**全部练习记录、错题本、词汇本、复训目标、题库、设置**一次性删掉，
+    /// 而界面显示删除成功。
+    func testARecordingPathThatClimbsOutOfRecordingsDoesNotDeleteTheWholeDataFile() throws {
+        let notice = try deleteWithRealFileSystem(recordingPath: "recordings/../state.json")
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.stateFile.path),
+                      "state.json 被删掉了——用户的全部训练数据在点一下之后消失")
+        XCTAssertNotNil(notice, "拒绝了就必须说出来，不许静默（铁律 5）")
+        XCTAssertEqual(try store.load().sessions.count, 1,
+                       "路径不合法时什么都不该动，那条记录要留着让用户能查到是哪一条")
+    }
+
+    /// `recordings` 本身（没有文件名那一截）：整个录音目录被递归删光。
+    func testARecordingPathThatNamesTheWholeFolderDoesNotWipeEveryRecording() throws {
+        let keep = directory.recordingsDirectory.appending(path: "2026-08-06T10-00-00Z.m4a")
+        try Data("audio".utf8).write(to: keep)
+
+        let notice = try deleteWithRealFileSystem(recordingPath: "recordings")
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: keep.path),
+                      "整个 recordings 目录被递归删光了，别的场次的录音一起没了")
+        XCTAssertNotNil(notice)
+    }
+
+    /// `reports/../../…`：删到数据目录**外面**去。
+    func testAReportPathThatEscapesTheDataDirectoryDoesNotDeleteFilesOutside() throws {
+        let outside = directory.root.deletingLastPathComponent()
+            .appending(path: "outside-\(UUID().uuidString).txt")
+        try Data("别人的文件".utf8).write(to: outside)
+        defer { try? FileManager.default.removeItem(at: outside) }
+
+        let notice = try deleteWithRealFileSystem(
+            reportPath: "reports/../../\(outside.lastPathComponent)")
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: outside.path),
+                      "删到数据目录外面去了")
+        XCTAssertNotNil(notice)
+    }
+
+    /// 绝对路径同样要挡：`/` 开头的字符串拼到数据目录上会被 URL 直接当成绝对路径。
+    func testAnAbsolutePathIsRejectedInsteadOfBeingFollowed() throws {
+        let outside = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "absolute-\(UUID().uuidString).txt")
+        try Data("别人的文件".utf8).write(to: outside)
+        defer { try? FileManager.default.removeItem(at: outside) }
+
+        let notice = try deleteWithRealFileSystem(recordingPath: outside.path)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: outside.path), "绝对路径没被挡住")
+        XCTAssertNotNil(notice)
+    }
+
+    /// 拒绝那句话得让用户真做得到下一步：说清是哪一条、哪个字段、该长什么样。
+    func testTheRefusalSaysWhichFieldToFixAndThatNothingWasTouched() throws {
+        let notice = try XCTUnwrap(
+            try deleteWithRealFileSystem(recordingPath: "recordings/../state.json"))
+
+        XCTAssertTrue(notice.contains("recordings/../state.json"),
+                      "不显示真实路径的话，用户根本不知道是哪一条坏了：\(notice)")
+        XCTAssertTrue(notice.contains("recordingPath"), "得点名是哪个字段：\(notice)")
+        XCTAssertTrue(notice.contains("state.json"), "得说清去哪个文件里改：\(notice)")
+        XCTAssertTrue(notice.contains("下一步"), "铁律 4：必须说清下一步做什么：\(notice)")
+        XCTAssertTrue(notice.contains("什么都没") || notice.contains("没有删"),
+                      "必须说清这次什么都没动，否则用户会以为已经删了：\(notice)")
+    }
+
+    /// 正常的路径一个都不许被这道闸误伤——误伤的话每删一条记录都留下孤儿文件。
+    func testOrdinaryPathsStillGetDeletedForReal() throws {
+        let report = directory.reportsDirectory.appending(path: "2026-08-06-001.json")
+        let recording = directory.recordingsDirectory.appending(path: "2026-08-06T10-00-00Z.m4a")
+        try Data("{}".utf8).write(to: report)
+        try Data("audio".utf8).write(to: recording)
+
+        let notice = try deleteWithRealFileSystem(
+            reportPath: "reports/2026-08-06-001.json",
+            recordingPath: "recordings/2026-08-06T10-00-00Z.m4a")
+
+        XCTAssertNil(notice, "路径完全正常，不该有任何提示：\(notice ?? "")")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: report.path), "复盘报告没删掉")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: recording.path), "录音没删掉")
+        XCTAssertEqual(try store.load().sessions.count, 0)
+    }
+
     func testAFailingStateWriteIsReportedInsteadOfSilentlyDoingNothing() throws {
         // 数据目录整个不可写时，删除必须报出来，不能装作删掉了。
         try FileManager.default.removeItem(at: directory.root)

@@ -155,6 +155,35 @@ public struct CoachState: Codable, Equatable, Sendable {
         )
     }
 
+    /// 按练习记录把题库的「已练」标记算回来。**纯函数，读盘时跑一次。**
+    ///
+    /// 两件事：
+    ///
+    /// 1. **给已经踩过坑的用户的自动迁移。** 换季重新导入曾经把每道练过的题的
+    ///    `status` 抹回 `"new"`（复审第 10 条），而那个标记「丢了就再也回不来」。
+    ///    数据其实是够的——每条练习记录都存着 `questionId`，所以这里能算回来，
+    ///    用户不需要做任何事，也不需要一次性的迁移脚本。做法与
+    ///    `IssueRecord.occurrences` 那处自愈一致。
+    /// 2. **一道恒久的守卫。** 以后再有谁在合并、重排、生成计划的路上顺手重置
+    ///    `status`，下一次读盘就会把它纠回来，用户看不到进度倒退。
+    ///
+    /// **只升不降。** 没有练习记录的题一个字都不动：训练记录允许被单条删除
+    /// （确认框逐字承诺「已经归进错题本和词汇本的内容不会跟着删」），
+    /// 删掉一条记录不该连带把题库上那道题的进度也抹掉。
+    ///
+    /// 只认 `sessions`，不认 `currentSession`：正在练、还没归档的那一场随时可能被放弃。
+    public static func reconcilePracticedStatus(questions: [Question],
+                                                sessions: [PracticeSession]) -> [Question] {
+        let practiced = Set(sessions.map(\.questionId))
+        guard !practiced.isEmpty else { return questions }
+        return questions.map { question in
+            guard question.status != "practiced", practiced.contains(question.id) else { return question }
+            var upgraded = question
+            upgraded.status = "practiced"
+            return upgraded
+        }
+    }
+
     /// 容忍缺字段的解码，等价于上游 ensureWorkspace 的补齐逻辑。
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -174,6 +203,9 @@ public struct CoachState: Codable, Equatable, Sendable {
             ?? CoachSettings(recordingEnabled: false, recordingConsentAt: "")
         questionCursor = try c.decodeIfPresent(QuestionCursor.self, forKey: .questionCursor)
             ?? QuestionCursor(part1: 0, part2: 0, part3: 0)
+        // ↓ 读盘这一刻把被抹掉的「已练」标记算回来（见 reconcilePracticedStatus）。
+        //   放在最后，因为它同时要用 questions 和 sessions。
+        questions = Self.reconcilePracticedStatus(questions: questions, sessions: sessions)
     }
 
     public init(schemaVersion: Int, learner: LearnerProfile, currentSession: PracticeSession?,
