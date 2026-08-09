@@ -133,6 +133,67 @@ public final class AXDriver: CoachBridge, Sendable {
     /// 新建一个空会话。Live 语音只能在未发送过消息的会话里启动，
     /// 所以每次练习开始前都要先做这一步，否则 startVoice 会静默失败
     /// （按钮按得下去，但语音起不来）。
+    /// 按一颗按钮，**并且确认它真的生效了；没生效就重新找元素再按**。
+    ///
+    /// ## 为什么必须重按，而不是按一次然后干等
+    ///
+    /// `AXUIElementPerformAction` 对一个**已经失效的元素**会返回成功、什么都不做
+    /// （spec 2.3.1 记过这条：「返回 true 不等于动作生效」）。ChatGPT 是 Chromium，
+    /// 「新建会话」按下去之后整个对话区会重挂载一次；我们随后抓的那份树若正好落在
+    /// 重绘中途，拿到的元素在按下去那一刻就已经作废了。
+    ///
+    /// 2026-08-09 用户真机现象：「有时候好有时候又有问题」，失败那次 ChatGPT
+    /// **一点反应都没有**，而 App 干等 25 秒后报「语音会话开始仍未发生」。
+    /// 重绘落在哪一刻每次都不同，所以时好时坏。
+    ///
+    /// **本项目的规矩是「等 → 做 → 验」，这里从前只有「等 → 做」。** 补上第三步之后，
+    /// 一次落空不再等于整场练习失败：重新抓树（拿到的就是新元素）、重新按一次。
+    ///
+    /// - Parameters:
+    ///   - settled: 怎么算「真的生效了」。**必须是状态判据，不能是按钮返回值。**
+    ///   - attempts: 最多按几次。默认 3——重绘窗口是毫秒级的，连撞三次的概率极低；
+    ///     无限重试则会在 ChatGPT 真的卡住时变成一场看不见的死循环。
+    private func press(_ candidates: [String],
+                       until settled: ([AXNodeSnapshot]) -> Bool,
+                       attempts: Int = 3,
+                       timeout: TimeInterval,
+                       failedToPress: String,
+                       describing what: String) throws {
+        // 每次尝试分到的等待时间。除不尽时宁可多给第一次，不要出现 0 秒的等待。
+        let slice = max(timeout / Double(attempts), 0.01)
+        var lastPressFailure: BridgeError?
+
+        for attempt in 1...attempts {
+            // **每一轮都重新找元素。** 复用上一轮那个正是本 bug 的成因——
+            // 它可能已经在重绘里作废了，而作废元素的 press 照样返回 true。
+            let button = try locator.waitForControl(candidates, timeout: shortTimeout)
+            guard access.press(button.element) else {
+                lastPressFailure = .actionFailed(failedToPress)
+                continue
+            }
+            do {
+                try locator.waitUntil(settled, timeout: slice, describing: what)
+                return
+            } catch {
+                // 这一轮没等到。还有机会就重新来过；这是最后一轮就把原错误抛出去，
+                // 那句话里已经写清了「点击返回成功但 ChatGPT 没有真的响应」。
+                if attempt == attempts { throw error }
+            }
+        }
+        // 只有「每一轮 press 都返回 false」才会走到这里。
+        throw lastPressFailure ?? .actionFailed(failedToPress)
+    }
+
+    /// 新建一个空会话。
+    ///
+    /// **这一步刻意没有「按完验一眼」。** 不是漏了，是 AX 树上找不到一个诚实的判据：
+    /// 新会话与「本来就停在一个空会话上」长得一模一样——输入框空着、对话区没有消息、
+    /// 按钮一颗不少。拿这些当判据就落进本项目反复栽过的那个坑：
+    /// **验证只问「现在是不是目标态」，没问「到底变没变」**，于是它在没生效时照样通过。
+    /// 编一个假验证比不验更糟：不验至少诚实，假验证会让下一个人以为这里守住了。
+    ///
+    /// 真正兜住这一步的是下一步：Live 语音只能在没发过消息的会话里启动（spec 2.3.5），
+    /// 所以「新建会话」没生效时 `startVoice` 起不来——而它现在会重按三次再报错。
     public func startNewChat() throws {
         let button = try locator.waitForControl(ChatGPTLabels.newChat, timeout: shortTimeout)
         guard access.press(button.element) else {
@@ -168,18 +229,20 @@ public final class AXDriver: CoachBridge, Sendable {
                 "ChatGPT 里已经有一场语音通话在进行中，不能再开一场。"
                 + "下一步：先在 ChatGPT 窗口里结束当前通话，再重新开始练习。")
         }
-        let button = try locator.waitForControl(ChatGPTLabels.startVoice, timeout: shortTimeout)
-        guard access.press(button.element) else {
-            throw BridgeError.actionFailed("按下语音按钮失败。"
-                + "下一步：确认 ChatGPT 窗口在前台，然后重试。")
-        }
-        // kAXPressAction 返回成功不等于动作生效（spec 2.3.1），必须验证状态真的变了
+        // kAXPressAction 返回成功不等于动作生效（spec 2.3.1），必须验证状态真的变了。
         //
         // 实测：点下语音按钮后约 9 秒 Voice chat active 才出现（逐秒采样 25 秒得到）。
         // 原默认 8 秒正好卡在它起来的前一秒，是首次真机联调失败的直接原因。
         // 25 秒留足余量——慢网络或冷启动会更久。
-        try locator.waitUntil({ ChatGPTLabels.isVoiceActive($0) },
-                              timeout: stateTimeout, describing: "语音会话开始")
+        //
+        // 这 25 秒现在由 `press(_:until:…)` 分给三次尝试：一次落空不再等于整场失败，
+        // 而是重新抓树、重新按（见那个函数的文档）。
+        try press(ChatGPTLabels.startVoice,
+                  until: { ChatGPTLabels.isVoiceActive($0) },
+                  timeout: stateTimeout,
+                  failedToPress: "按下语音按钮失败。"
+                      + "下一步：确认 ChatGPT 窗口在前台，然后重试。",
+                  describing: "语音会话开始")
     }
 
     public func isVoiceActive() -> Bool { ChatGPTLabels.isVoiceActive(access.snapshotTree()) }

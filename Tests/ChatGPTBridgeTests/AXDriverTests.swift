@@ -427,6 +427,33 @@ final class AXDriverTests: XCTestCase {
         XCTAssertEqual(access.pressedElements.map(\.rawID), [1])
     }
 
+    /// **一次按下不生效就要重按，不能干等。**
+    ///
+    /// 2026-08-09 用户真机报的：「有时候好有时候又有问题」，失败时 ChatGPT
+    /// 一点反应都没有，而 App 报的是「等了 25 秒，语音会话开始仍未发生」。
+    ///
+    /// 成因是 Chromium 的无障碍接口对**已失效的元素**执行动作会返回成功、什么都不做
+    /// （spec 2.3.1 记过这条）。「新建会话」按完 ChatGPT 会重绘整个对话区，
+    /// 我们随后抓的那份树若正好在重绘中途，拿到的元素在按下去那一刻已经作废——
+    /// 于是 press 返回 true、界面纹丝不动、然后干等 25 秒。
+    /// 重绘落在哪一刻每次都不同，所以时好时坏。
+    ///
+    /// 这条测试模拟的正是那一幕：第一次按下什么都不发生，第二次才生效。
+    func testStartVoiceRetriesWhenTheFirstPressSilentlyDoesNothing() throws {
+        let access = FakeAXAccess()
+        access.nodes = [control(1, "Start voice chat")]
+        var presses = 0
+        access.onPress = { _, nodes in
+            presses += 1
+            // 第一次按下：返回成功，但界面一点变化都没有（失效元素的真实表现）。
+            guard presses > 1 else { return }
+            nodes.append(self.voiceActive(9))
+        }
+        try driver(access).startVoice()
+        XCTAssertGreaterThan(presses, 1,
+                             "第一次按下没生效之后再也没重按过——用户看到的就是干等 25 秒然后报错")
+    }
+
     func testStartVoiceFailsWhenIndicatorNeverAppears() {
         let access = FakeAXAccess()
         access.nodes = [control(1, "Start voice chat")]
