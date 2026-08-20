@@ -143,6 +143,13 @@ struct TodayView: View {
                                   for: question, goal: "", defaults: defaults,
                                   chosen: mode, bank: app.state.questions)
                           },
+                          // 抽出来的一整组同样走解析器取值，不在这里另拼一份：
+                          // 另拼的那份一定会漏掉 feedbackTiming / part2PrepMode，
+                          // 而且时长与考法要按**真的抽到的**那几段算（见那个方法的说明）。
+                          makeDrawSetup: { draw in
+                              PracticeRouteResolver.setup(forDraw: draw, defaults: defaults,
+                                                          bank: app.state.questions)
+                          },
                           onClose: { self.launch = nil })
         }
     }
@@ -170,7 +177,9 @@ struct TodayView: View {
         // 下一步：先在题目列表里点一道题」——那句话在这里不是故障而是流程的下一步，
         // 而且这张卡片上根本没有题目列表，摆出来等于把用户指向一个不存在的地方（铁律 6）。
         // 所以直接开挑题弹层，题目在那儿选。
-        guard route != .freePick || questionID != nil else {
+        // 「随机抽题」同理，而且更彻底：它**任何时候**都要先进弹层
+        //（数量、练过的要不要、按抽题，三步都在那儿），解析器永远解不出一场来。
+        if route == .randomDraw || (route.picksMaterialInTheSheet && questionID == nil) {
             blockedRoutes[route] = nil
             startPractice(route, setup: nil)
             return
@@ -427,9 +436,27 @@ struct TodayView: View {
         switch route {
         case .planToday: planTodayDetail
         case .freePick: freePickDetail
+        case .randomDraw: randomDrawDetail
         case .continueLast: continueLastDetail
         case .retrain: retrainDetail
         }
+    }
+
+    /// 「随机抽题练一场」：现在有多少题可抽、其中多少还没练过。
+    ///
+    /// **「没练过多少道」是这张卡片非说不可的一件事**：这条路线的卖点之一就是
+    /// 「只抽没练过的」，而那个开关有没有用，全看这个数字还剩多少。
+    /// 数字从 `RandomDrawViewModel` 出，与弹层里每个步进器下面那一行同一个出处——
+    /// 这一页另数一份的话，两处迟早对不上。
+    private var randomDrawDetail: some View {
+        let model = RandomDrawViewModel(questions: app.state.questions)
+        let fresh = ExamPart.allCases.reduce(0) { $0 + model.fresh(inPart: $1) }
+        // 等宽数字：抽完一场之后这两个数会变，行宽不许跟着抖（规范第 6 节最后一条）。
+        return Text("题库里现在有 \(app.state.questions.count) 道题，其中 \(fresh) 道还没练过。"
+                    + "点右边那颗按钮之后先定每个 Part 抽几道，抽出来才会开始。")
+            .font(Typography.body)
+            .monospacedDigit()
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     /// 「按计划练今天」：今天是第几天、今天有哪几道题、哪几道已经练过了。

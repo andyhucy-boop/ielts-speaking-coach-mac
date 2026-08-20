@@ -56,22 +56,28 @@ public enum ExamPart: Int, Codable, Hashable, Sendable, CaseIterable, Comparable
         }
     }
 
-    /// 这一段**每多一份材料**再加多久（分钟）。
+    /// 这一段供了 `count` 份材料时大概要多久（分钟）。0 份是 0 分钟。
     ///
-    /// 三个数字各有各的来源，不能统一成一个：
+    /// **三段的算法不一样，而且不能统一**——因为「多一份材料」在三段里根本不是同一件事：
     ///
-    /// - Part 1 多一个话题只是多问 3–4 个短问题，加 2 分钟；
-    /// - Part 2 多一张卡是**再来一遍**「一分钟准备 + 两分钟独白 + 收尾一问」，加满 4 分钟；
-    /// - Part 3 多一个讨论主题是再来一轮 4–8 问的讨论，加 4 分钟。
+    /// - **Part 1 是按整段计时的。** 真实考试里这一段就是 4–5 分钟，里面装 2–3 个话题
+    ///   （`ExaminerPrompt.part1Rules` 里那句 "Cover 2–3 everyday topics" 是同一个出处）。
+    ///   多给一个话题只是把这 5 分钟填满，不是再来一段，所以 1 个和 2 个都是 5 分钟；
+    ///   超过 3 个才真的开始变长。
+    /// - **Part 2 是按张数计时的。** 每张卡都是完整的一轮「一分钟准备 + 两分钟独白 +
+    ///   收尾一问」，抽 3 张就是老老实实的 12 分钟。
+    /// - **Part 3 介于两者之间。** 第一组讨论就是那 4–5 分钟的一整段；再多一组是
+    ///   另起一个话题重来一轮 4–8 问，加 4 分钟。
     ///
-    /// 一份材料时 `firstItemMinutes` 与 `FocusPart` 那三档冻住的历史时长完全对得上
-    /// （5 + 4 + 5 = 14，正是全真模考的 14 分钟），所以随机抽 1/1/1 与勾三个 Part
-    /// 得到的是同一个数字——两条路给出两个时长的话，用户没有任何办法知道哪个是真的。
-    public var additionalItemMinutes: Int {
+    /// 一份材料时三段相加 = 5 + 4 + 5 = 14，正是 `FocusPart.fullMock` 冻住的那个数字，
+    /// 所以「随机抽 1/1/1」与「勾满三个 Part」得到的是同一个时长——
+    /// 两条路给出两个数字的话，用户没有任何办法知道哪个是真的。
+    public func minutes(forItems count: Int) -> Int {
+        guard count > 0 else { return 0 }
         switch self {
-        case .one: return 2
-        case .two: return 4
-        case .three: return 4
+        case .one: return max(firstItemMinutes, 2 * count)
+        case .two: return firstItemMinutes * count
+        case .three: return firstItemMinutes + (count - 1) * 4
         }
     }
 }

@@ -34,6 +34,12 @@ struct PracticeSheet: View {
     /// 勾选框点得动、`SessionSetup` 照样是那道题自己的 Part，
     /// 而屏幕上一个字都不会提——本项目最忌讳的那种失败。
     let makeSetup: (Question, FocusPart?) -> SessionSetup
+    /// 把**抽出来的一整组题**变成一场练习（`PracticeRouteResolver.setup(forDraw:…)`）。
+    /// 抽了个空时返回 nil，那时「开始练习」是灰的。
+    ///
+    /// 与 `makeSetup` 分成两个闭包而不是合成一个：一场随机抽题带的是一整套材料、
+    /// 时长按份数算、考法按**真的抽到的**那几段算——三件事没有一件和挑一道题相同。
+    let makeDrawSetup: (RandomDraw.Result) -> SessionSetup?
     let onClose: () -> Void
 
     /// 这一场最终定下来的设置。nil 时显示挑题列表。
@@ -53,10 +59,27 @@ struct PracticeSheet: View {
     /// 展开状态还停在切换之前那一套——Part 3 那一栏明明是他刚选的，却是折着的。
     @State private var expandedParts: Set<Int>?
 
+    // MARK: - 随机抽题那条路线的状态
+
+    /// 每个 Part 各抽几道。初值是默认值夹到「现在真的抽得到」的范围里
+    /// （`RandomDrawViewModel.clampedToAvailable`）。
+    @State private var drawCounts = RandomDrawViewModel.defaultCounts
+    /// 「只抽没练过的」。**默认开着**：用户提这个功能时说的是
+    /// 「也可以选择支持我选择是否要之前练过的题目」，而会去想这件事的人默认要的是新题。
+    @State private var excludePracticed = true
+    /// 抽出来的那一组。nil = 还没抽（这时「开始练习」是灰的）。
+    @State private var drawn: RandomDraw.Result?
+    /// 抽签动画正在滚。**它只是动画**：结果在按下按钮那一刻就已经定了（见 `roll()`）。
+    @State private var isRolling = false
+    @State private var rollingLabel = ""
+    /// 系统的「减弱动态效果」。开着时直接出结果，不滚。
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     init(runner: PracticeRunner, route: PracticeRoute, preselected: SessionSetup?,
          candidates: [Question], defaultParts: Set<Int> = PracticePicker.unspecified,
          planFocusPart: FocusPart? = nil,
          makeSetup: @escaping (Question, FocusPart?) -> SessionSetup,
+         makeDrawSetup: @escaping (RandomDraw.Result) -> SessionSetup? = { _ in nil },
          onClose: @escaping () -> Void) {
         self.runner = runner
         self.route = route
@@ -65,9 +88,14 @@ struct PracticeSheet: View {
         self.defaultParts = defaultParts
         self.planFocusPart = planFocusPart
         self.makeSetup = makeSetup
+        self.makeDrawSetup = makeDrawSetup
         self.onClose = onClose
         _partSelection = State(initialValue: defaultParts)
+        _drawCounts = State(initialValue: RandomDrawViewModel(questions: candidates)
+            .clampedToAvailable(RandomDrawViewModel.defaultCounts))
     }
+
+    private var drawModel: RandomDrawViewModel { RandomDrawViewModel(questions: candidates) }
 
     private var partPicker: PracticePicker { PracticePicker(questions: candidates) }
 
@@ -190,6 +218,8 @@ struct PracticeSheet: View {
                     .font(Typography.body)
                     .foregroundStyle(Palette.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
+            } else if route == .randomDraw {
+                randomDrawPicker
             } else {
                 Text("先勾这一场练哪几个 Part（可以多勾，勾了就按 Part 1 → 2 → 3 的顺序连着练），"
                      + "再挑一道题。挑好之后本工具会自动打开 ChatGPT、进语音、"
@@ -205,6 +235,210 @@ struct PracticeSheet: View {
                     questionSections
                 }
             }
+        }
+    }
+
+    // MARK: - 还没定题：随机抽一组
+
+    /// **用户要的「随机抽题」就是这一段。** 原话：
+    ///
+    /// > 我来选 part one part two part three 分别多少道，然后你可以来个转盘或者怎么样的，
+    /// > 然后来随机抽选。然后也可以选择支持我选择是否要之前练过的题目。
+    ///
+    /// 三个步进器 + 一个「只抽没练过的」勾选框 + 一颗抽题按钮，抽完在下面列出抽到的整组。
+    /// 所有文案与数字都走 `RandomDrawViewModel`（那边有测试），这里一句都不现拼。
+    private var randomDrawPicker: some View {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            // 字面量里不要写 Markdown 的星号：`Text` 收的是 String，星号会原样显示出来。
+            Text("先定每个 Part 各抽几道，再点「抽题」。抽到的题会一整套发给考官："
+                 + "抽到几个 Part 1 话题就问几个，抽到几张 Part 2 卡就做几张，"
+                 + "Part 3 会接着抽到的那张卡往下讨论。")
+                .font(Typography.body)
+                .foregroundStyle(Palette.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+            drawCountsSection
+            if let notice = drawModel.emptyNotice(forCounts: drawCounts) {
+                emptyPartNotice(notice)
+            } else {
+                if let summary = drawModel.summary(forCounts: drawCounts) {
+                    subtleLine(summary)
+                }
+                // 抽之前就提醒「要的比现在能抽的多」。等抽完再说的话，用户已经看着
+                // 一组比他要的少的题，得先弄明白少了什么才知道怎么办。
+                ForEach(drawModel.warnings(forCounts: drawCounts,
+                                           excludingPracticed: excludePracticed), id: \.self) {
+                    warningLine($0)
+                }
+            }
+            drawButton
+            drawOutcome
+        }
+    }
+
+    private var drawCountsSection: some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            ForEach(ExamPart.allCases, id: \.self) { part in
+                HStack(spacing: Spacing.md) {
+                    Text(part.englishName)
+                        .font(Typography.body)
+                        .foregroundStyle(Palette.textPrimary)
+                        .frame(width: 56, alignment: .leading)
+                    Stepper(value: drawCountBinding(for: part),
+                            in: 0...max(drawModel.maximum(inPart: part), 0)) {
+                        // 等宽数字：0 → 1 → 10 时这一行不许横向抖（规范第 6 节最后一条）。
+                        Text("\(drawCounts[part]) 道")
+                            .font(Typography.body)
+                            .monospacedDigit()
+                            .foregroundStyle(Palette.textPrimary)
+                    }
+                    .frame(width: 132)
+                    // 两个数都要有：只写总数的话，勾上「只抽没练过的」之后用户不知道还剩多少。
+                    Text(drawModel.availabilityLine(forPart: part))
+                        .font(Typography.label)
+                        .monospacedDigit()
+                        .foregroundStyle(Palette.textSecondary)
+                    Spacer(minLength: 0)
+                }
+            }
+            Toggle("只抽没练过的题", isOn: $excludePracticed)
+                .font(Typography.body)
+                .foregroundStyle(Palette.textPrimary)
+                .accessibilityHint("勾上之后，训练题库里已经标成「已练」的题不会被抽到")
+        }
+    }
+
+    /// 改数量要**把上一次抽的结果清掉**。不清的话，用户把 Part 2 从 1 调成 3、
+    /// 下面还挂着上一次那组只有 1 张卡的结果，而「开始练习」按下去练的正是那一组旧的——
+    /// 屏幕上的数字和真正会练的东西对不上，一个字的提示都没有。
+    private func drawCountBinding(for part: ExamPart) -> Binding<Int> {
+        Binding(get: { drawCounts[part] },
+                set: { value in
+                    drawCounts[part] = value
+                    drawn = nil
+                })
+    }
+
+    private var drawButton: some View {
+        HStack(spacing: Spacing.sm) {
+            // 还没抽时抽题是这张弹层的主行动；抽完之后主行动变成底下那颗「开始练习」，
+            // 这颗降成次一级（规范第 4 节：每页最多一个主行动）。
+            if drawn == nil {
+                Button("抽题") { roll() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Palette.accent)
+                    .disabled(drawCounts.total == 0 || isRolling)
+            } else {
+                Button("重抽一组") { roll() }
+                    .buttonStyle(.bordered)
+                    .disabled(isRolling)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// 抽的过程与结果。
+    ///
+    /// 滚动那 0.6 秒**不是装饰**：它是「正在替你抽」这件事的唯一表示。
+    /// 没有它的话，点一下按钮、结果直接换一批，用户分不清这次到底抽没抽
+    /// （尤其重抽时新旧两组长得差不多的情况）。
+    /// 它有明确的起止、不循环，系统开了「减弱动态效果」时整段跳过（`roll()`）。
+    @ViewBuilder
+    private var drawOutcome: some View {
+        if isRolling {
+            CoachCard {
+                HStack(spacing: Spacing.sm) {
+                    ProgressView().controlSize(.small)
+                    Text(rollingLabel)
+                        .font(Typography.body)
+                        .foregroundStyle(Palette.textSecondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: 0)
+                }
+            }
+        } else if let drawn {
+            VStack(alignment: .leading, spacing: Spacing.sm) {
+                subtleLine(RandomDrawViewModel.resultSummary(for: drawn))
+                // 抽不够时必须当场交代，而且两种原因说两句不同的话——
+                // 「没练过的不够了」那一种，把开关关掉就有了。
+                ForEach(RandomDrawViewModel.shortfallNotices(for: drawn), id: \.self) {
+                    warningLine($0)
+                }
+                if !drawn.questions.isEmpty { drawnQuestionList(drawn) }
+            }
+        }
+    }
+
+    /// 抽到的整组，按 Part 分栏列出来。
+    ///
+    /// **必须逐条列出，不能只报个数。** 这一场真正会被问到的就是这几道，
+    /// 只写「抽到 4 道」的话，用户要等考官开口才知道抽到了什么，
+    /// 而那时已经没法重抽了。
+    private func drawnQuestionList(_ result: RandomDraw.Result) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Spacing.sm) {
+                ForEach(QuestionPartSections.split(result.questions, part: { $0.part })) { section in
+                    VStack(alignment: .leading, spacing: Spacing.xs) {
+                        Text(section.title)
+                            .font(Typography.cardTitle)
+                            .monospacedDigit()
+                            .foregroundStyle(Palette.textPrimary)
+                        ForEach(Array(section.items.enumerated()), id: \.offset) { _, question in
+                            Text("· \(RandomDrawViewModel.label(for: question))")
+                                .font(Typography.body)
+                                .foregroundStyle(Palette.textPrimary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .frame(maxHeight: 220)
+    }
+
+    /// 抽一组。**结果在按下按钮那一刻就已经定了**，滚动只是把它慢慢揭开——
+    /// 让动画去决定抽到什么的话，中途关掉窗口或者动画被系统打断，
+    /// 这一场抽到的就成了一件谁也说不清的事。
+    private func roll() {
+        let result = RandomDraw.draw(from: candidates, counts: drawCounts,
+                                     excludingPracticed: excludePracticed)
+        guard !reduceMotion, !result.isEmpty else {
+            drawn = result
+            return
+        }
+        drawn = nil
+        isRolling = true
+        Task {
+            let pool = candidates.map(RandomDrawViewModel.label(for:))
+            for _ in 0..<8 {
+                rollingLabel = pool.randomElement() ?? ""
+                try? await Task.sleep(nanoseconds: 70_000_000)
+            }
+            isRolling = false
+            drawn = result
+        }
+    }
+
+    private func subtleLine(_ text: String) -> some View {
+        Text(text)
+            .font(Typography.label)
+            .monospacedDigit()
+            .foregroundStyle(Palette.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// 一条「发生了什么 + 下一步做什么」的提醒。用警告色而不是灰色：
+    /// 灰色那一行是说明，这一行是要他动手改的。
+    private func warningLine(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: Spacing.xs) {
+            Image(systemName: "exclamationmark.triangle")
+                .foregroundStyle(Palette.warning)
+            Text(text)
+                .font(Typography.label)
+                .foregroundStyle(Palette.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
         }
     }
 
@@ -366,6 +600,21 @@ struct PracticeSheet: View {
                         .font(Typography.body)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
+                    // 随机抽题那一场带的是一整套材料。**每一道都要列出来**：
+                    // 只显示开场那道的话，用户会以为这一场就练那一道，
+                    // 而考官手里其实还有另外几道（`SessionSetup.drawnQuestions`）。
+                    if setup.drawnQuestions.count > 1 {
+                        Text("这一场一共 \(setup.drawnQuestions.count) 道，按顺序练：")
+                            .font(Typography.label)
+                            .monospacedDigit()
+                            .foregroundStyle(Palette.textSecondary)
+                        ForEach(Array(setup.drawnQuestions.enumerated()), id: \.offset) { _, item in
+                            Text("· Part \(item.part) · \(RandomDrawViewModel.label(for: item))")
+                                .font(Typography.secondary)
+                                .foregroundStyle(Palette.textSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
                     if !setup.goal.isEmpty {
                         Text("本次目标：\(setup.goal)")
                             .font(Typography.secondary)
@@ -598,13 +847,10 @@ struct PracticeSheet: View {
                 Button("关掉") { onClose() }
                     .buttonStyle(.bordered)
                 if running == nil {
-                    // 灰着的条件是 `pickedQuestion == nil` 而不是 `picked == nil`：
-                    // 把挑好那道题所在的栏折起来之后，它就不在屏幕上了，
-                    // 这时按钮还亮着的话，按下去练的是一道看不见的题。
                     Button("开始练习") { startPicked() }
                         .buttonStyle(.borderedProminent)
                         .tint(Palette.accent)
-                        .disabled(pickedQuestion == nil)
+                        .disabled(!readyToStart)
                         .keyboardShortcut(.defaultAction)
                 }
 
@@ -641,7 +887,31 @@ struct PracticeSheet: View {
     /// 只认**此刻屏幕上真的看得见**的那道题（`pickedQuestion` → 展开的那几栏里的）。
     /// 用 `candidates` 全库去找的话，切档或者折起一栏之后残留的那个 id 仍然找得到题——
     /// 用户会练到一道屏幕上一道也看不见的题。
+    /// 「开始练习」现在能不能按。
+    ///
+    /// 两条路线两个判据，一条都不能含糊：
+    ///
+    /// - 挑题那几条看的是 `pickedQuestion` 而**不是** `picked`：把挑好那道题所在的栏
+    ///   折起来之后它就不在屏幕上了，这时按钮还亮着的话，按下去练的是一道看不见的题。
+    /// - 随机抽题看的是**这一组真的造得出一场练习**（`drawnSetup`），
+    ///   而不是「抽过了」：抽了个空时 `drawn` 非 nil 但里面一道题都没有，
+    ///   按下去会开一场什么都不考的练习。
+    private var readyToStart: Bool {
+        route == .randomDraw ? drawnSetup != nil : pickedQuestion != nil
+    }
+
+    /// 抽出来这一组对应的那一场。抽了个空、或者还没抽时是 nil。
+    private var drawnSetup: SessionSetup? {
+        guard let drawn, !isRolling else { return nil }
+        return makeDrawSetup(drawn)
+    }
+
     private func startPicked() {
+        if route == .randomDraw {
+            guard let setup = drawnSetup else { return }
+            Task { await begin(setup) }
+            return
+        }
         guard let question = pickedQuestion else { return }
         // 考法跟着屏幕上那三个勾选框走。翻译规则在 `PracticePicker.mode(forParts:)`，
         // 这里不另判一次——另判一份的话，勾选框显示的条件和它生效的条件迟早会分家。
@@ -714,6 +984,31 @@ private struct InertPasteboard: PasteboardAccess {
                 ?? FocusPart.inferred(fromQuestionPart: question.part)
             return SessionSetup(question: question, focusPart: focusPart,
                                 durationMinutes: focusPart.defaultDurationMinutes, goal: "")
+        },
+        onClose: {})
+}
+
+#Preview("随机抽题") {
+    let bank: [Question] =
+        (1...6).map { TopicQuestions.part1(topic: "Topic \($0)", prompts: ["Do you like it?"]) }
+        + (1...4).map {
+            Question(id: "p2-\($0)", part: 2, topic: "Place",
+                     prompt: "Describe place number \($0).", followups: ["where it is"])
+        }
+        + (1...4).map {
+            TopicQuestions.part3(cueCard: "Describe place number \($0).",
+                                 prompts: ["Why do people go there?"])
+        }
+    return PracticeSheet(
+        runner: PracticeRunner(bridge: InertBridge(), pasteboard: InertPasteboard()),
+        route: .randomDraw,
+        preselected: nil,
+        candidates: bank,
+        makeSetup: { question, _ in
+            SessionSetup(question: question, focusPart: .part1, durationMinutes: 6, goal: "")
+        },
+        makeDrawSetup: { draw in
+            PracticeRouteResolver.setup(forDraw: draw, defaults: RouteDefaults(), bank: bank)
         },
         onClose: {})
 }

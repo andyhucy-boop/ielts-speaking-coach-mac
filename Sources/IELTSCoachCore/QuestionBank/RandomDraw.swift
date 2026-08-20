@@ -136,11 +136,28 @@ public enum RandomDraw {
         /// 这一场大概练多久。**按真的抽到的份数算**：抽了 3 个 Part 1 话题却报 5 分钟的话，
         /// 考官会为了对上时间把话题砍掉两个（提示词里那句 `Target session length` 是硬约束）。
         public var estimatedMinutes: Int {
-            ExamPart.allCases.reduce(0) { total, part in
-                let n = count(inPart: part)
-                guard n > 0 else { return total }
-                return total + part.firstItemMinutes + (n - 1) * part.additionalItemMinutes
-            }
+            ExamPart.allCases.reduce(0) { $0 + $1.minutes(forItems: count(inPart: $1)) }
+        }
+    }
+
+    // MARK: - 现在有多少可抽
+
+    /// 这个 Part 现在有几道可抽。
+    ///
+    /// **界面上那句「共 99 道，没练过 96 道」和抽题时真正的候选池，用的必须是这一个函数。**
+    /// 界面另数一份的话，两个数字会在某次改动之后分家，而分家的表现是：
+    /// 屏幕上写着「没练过 96 道」，抽 5 道却只抽到 3 道，且没有任何解释。
+    public static func available(in bank: [Question], part: ExamPart,
+                                 excludingPracticed: Bool) -> Int {
+        eligible(in: bank, part: part, excludingPracticed: excludingPracticed).count
+    }
+
+    /// 这个 Part 现在的候选池。**`available` 与 `draw` 共用它**，
+    /// 各写各的话，「屏幕上说没练过 96 道」和「实际抽得到几道」迟早会分家。
+    private static func eligible(in bank: [Question], part: ExamPart,
+                                 excludingPracticed: Bool) -> [Question] {
+        bank.filter {
+            $0.part == part.rawValue && (!excludingPracticed || $0.status != "practiced")
         }
     }
 
@@ -159,9 +176,11 @@ public enum RandomDraw {
                                                       counts: Counts,
                                                       excludingPracticed: Bool,
                                                       using generator: inout G) -> Result {
-        func pool(_ part: ExamPart) -> [Question] { bank.filter { $0.part == part.rawValue } }
+        func pool(_ part: ExamPart) -> [Question] {
+            Self.eligible(in: bank, part: part, excludingPracticed: false)
+        }
         func eligible(_ part: ExamPart) -> [Question] {
-            excludingPracticed ? pool(part).filter { $0.status != "practiced" } : pool(part)
+            Self.eligible(in: bank, part: part, excludingPracticed: excludingPracticed)
         }
 
         let ones = Array(eligible(.one).shuffled(using: &generator).prefix(counts[.one]))

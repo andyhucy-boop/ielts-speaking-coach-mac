@@ -255,6 +255,44 @@ final class PracticeRunnerArchiveTests: XCTestCase {
 
     // MARK: - 测试装置
 
+    // MARK: - 随机抽题：一场抽到的整组题都要记下来
+
+    /// 一场抽了 3 道全练了，训练记录却只记开场那一道的话，另外两道会永远停在「新题」：
+    /// 「只抽没练过的」一遍遍把它们再抽出来，训练题库页那个「已练 N / 258」也永远偏小——
+    /// 两样都不报错。
+    func testADrawnSessionRecordsEveryQuestionItWasGiven() async throws {
+        let drawn = [Question(id: "p1-home-001", part: 1, topic: "Home",
+                              prompt: "Do you live in a house or a flat?"),
+                     Question(id: "p1-food-001", part: 1, topic: "Food",
+                              prompt: "How often do you cook?"),
+                     Question(id: "p2-shop-001", part: 2, topic: "Place",
+                              prompt: "Describe a shop you enjoy visiting.")]
+        try store.mutate { $0.questions = drawn }
+
+        let runner = self.runner()
+        try await runner.start(setup: SessionSetup(question: drawn[0], focusPart: .part1And2,
+                                                   durationMinutes: 11, goal: "",
+                                                   drawnQuestions: drawn))
+        try await runner.finishPractice()
+
+        let saved = try store.load()
+        let session = try XCTUnwrap(saved.sessions.first)
+        XCTAssertEqual(session.drawnQuestionIds, drawn.map(\.id))
+        // 读盘那一刻「已练」标记就该全部算回来（`CoachState.reconcilePracticedStatus`）。
+        XCTAssertEqual(saved.questions.filter { $0.status == "practiced" }.map(\.id),
+                       drawn.map(\.id),
+                       "抽到的题只有开场那一道被标成已练，另外两道会被当成新题一遍遍再抽出来")
+    }
+
+    /// 反过来：普通练习**不许**多写这个字段。写了的话，普通练习的 state.json
+    /// 形状就变了，而这个字段做 Optional 的全部意义就是不动它。
+    func testAnOrdinaryPracticeDoesNotRecordADraw() async throws {
+        let runner = self.runner()
+        try await runner.start(setup: Self.setup())
+        try await runner.finishPractice()
+        XCTAssertNil(try store.load().sessions.first?.drawnQuestionIds)
+    }
+
     private static func setup(goal: String = "") -> SessionSetup {
         SessionSetup(question: Question(id: "p1-home-001", part: 1, topic: "Home",
                                         prompt: "Do you live in a house or a flat?"),

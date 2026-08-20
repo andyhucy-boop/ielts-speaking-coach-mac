@@ -186,6 +186,7 @@ final class RandomDrawTests: XCTestCase {
 
     /// 各抽一道 == 勾满三个 Part。两条路给出两个时长的话，
     /// 用户没有任何办法知道哪个是真的。
+    /// （Part 1 抽两个话题也仍然是 14 分钟：一段 Part 1 本来就装 2–3 个话题。）
     func testOneOfEachRunsAsLongAsAFullMock() {
         let result = draw(bank(), RandomDraw.Counts(one: 1, two: 1, three: 1))
         XCTAssertEqual(result.estimatedMinutes, FocusPart.fullMock.defaultDurationMinutes)
@@ -194,7 +195,7 @@ final class RandomDrawTests: XCTestCase {
     func testEachExtraItemAddsTime() {
         let one = draw(bank(), RandomDraw.Counts(two: 1)).estimatedMinutes
         let two = draw(bank(), RandomDraw.Counts(two: 2)).estimatedMinutes
-        XCTAssertEqual(two - one, ExamPart.two.additionalItemMinutes,
+        XCTAssertEqual(two - one, 4,
                        "多一张卡就是再来一遍「准备 + 两分钟独白 + 收尾」，时长必须跟着涨")
     }
 

@@ -5,7 +5,13 @@ import IELTSCoachCore
 ///
 /// 每条都自带中文标题与副标题：卡片上只有一个动词的话，用户点之前不知道会发生什么。
 public enum PracticeRoute: String, CaseIterable, Identifiable, Sendable {
-    case planToday, freePick, continueLast, retrain
+    /// **`randomDraw` 排在 `freePick` 后面**：卡片顺序是用户看得见的，
+    /// 而这两条都是「自己决定练什么」，摆在一起才好比。
+    ///
+    /// raw value 会落进 `state.json`（`settings.defaultRoute`，见 `PracticeRoutePreference`），
+    /// 所以既有四条的字符串一个字都不能改；新加一条只影响「新版本写、旧版本读」，
+    /// 而那条路早就铺好了（认不出来就退回默认路线）。
+    case planToday, freePick, randomDraw, continueLast, retrain
 
     public var id: String { rawValue }
 
@@ -13,9 +19,23 @@ public enum PracticeRoute: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .planToday: return "按计划练今天"
         case .freePick: return "从题库自由选题"
+        case .randomDraw: return "随机抽题练一场"
         case .continueLast: return "继续上次练习"
         case .retrain: return "复训一个旧问题"
         }
+    }
+
+    /// 这条路线的题目**是在弹层里当场定下来的**，不是解析器能提前算出来的。
+    ///
+    /// 两条：「从题库自由选题」要用户点一道，「随机抽题」要用户先按抽题。
+    /// 所以它们不能用「解析器解得出来才显示」那条规矩去筛——照那条筛的话，
+    /// 这两张卡片永远不会出现在今日训练页上。
+    ///
+    /// **单独立一个属性而不是在两三处各写一遍 `route == .freePick || route == .randomDraw`**：
+    /// 那种写法漏掉一处的表现是「卡片显示了、点下去说还没选题」，
+    /// 而这正是 `PracticeRouteResolverTests.testEveryShownRouteCanActuallyStart` 要拦的东西。
+    public var picksMaterialInTheSheet: Bool {
+        self == .freePick || self == .randomDraw
     }
 
     public var subtitle: String {
@@ -33,6 +53,10 @@ public enum PracticeRoute: String, CaseIterable, Identifiable, Sendable {
         // 两个方向都由 `TodayViewModelTests.testTheFreePickSubtitleMatchesWhatTheSheetActuallyHas`
         // 钉着：说了两步却没有勾选框会红，做了勾选框却不说也会红。
         case .freePick: return "先勾这一场练哪几个 Part（可多选），再挑一道题"
+        // 这句话与弹层里真有的东西绑在一起（同 `freePick` 那条的教训）：
+        // 「每个 Part 抽几道」说的是那三个步进器，「练过的要不要」说的是那个勾选框，
+        // 两样都真的在 `PracticeSheet.randomDrawPicker` 上。
+        case .randomDraw: return "自己定每个 Part 抽几道、练过的要不要，剩下的交给运气"
         case .continueLast: return "接着上次那道题再练"
         case .retrain: return "带上一次复盘给出的目标"
         }
@@ -132,6 +156,8 @@ public struct TodayViewModel: Sendable {
         var routes: [PracticeRoute] = []
         if !todayQuestions.isEmpty { routes.append(.planToday) }
         if !state.questions.isEmpty { routes.append(.freePick) }
+        // 随机抽题的前提与自由选题完全一样：题库非空。抽出来是哪几道由弹层当场定。
+        if !state.questions.isEmpty { routes.append(.randomDraw) }
         if !state.sessions.isEmpty { routes.append(.continueLast) }
         // 已经退休的目标不算数：那是已经改掉的毛病，再拿它复训是白练一场。
         if state.targets.contains(where: { $0.status != "retired" }) { routes.append(.retrain) }
@@ -186,8 +212,9 @@ public struct TodayViewModel: Sendable {
         switch route {
         case .planToday:
             return todayQuestions.first
-        case .freePick:
-            // 自由选题的意思就是这道题由用户当场挑，这里定不下来是正常的。
+        case .freePick, .randomDraw:
+            // 这两条的题目由用户当场在弹层里定（挑一道 / 抽一组），
+            // 这里定不下来是正常的（见 `PracticeRoute.picksMaterialInTheSheet`）。
             return nil
         case .continueLast:
             guard let last = recentSessions.first else { return nil }
