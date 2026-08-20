@@ -84,6 +84,47 @@ final class DrawnQuestionIdsTests: XCTestCase {
                        "没被抽到的题一个字都不该动")
     }
 
+    // MARK: - 学习计划那一侧也要跟着结账
+
+    /// 只结开场那一道的话，训练题库页会把另外几道标成已练（读盘时算回来），
+    /// 而学习计划仍然显示没做完——同一道题，两页两个说法。
+    func testArchivingADrawnSessionTicksOffEveryQuestionInThePlan() throws {
+        let questions = ["q1", "q2", "q3"].map { question($0) }
+        var state = CoachState.empty()
+        state.questions = questions
+        // 手搭一份计划而不是走 `PlanBuilder`：那边只接 7 / 14 / 30 天，
+        // 三道题会被摊到七天上，而这条测试要的是「同一天里有这三道」。
+        state.plan = TrainingPlan(lengthDays: 7, createdAt: "2026-08-20T00:00:00Z",
+                                  days: [PlanDay(id: 1, questionIds: ["q1", "q2", "q3"],
+                                                 completedQuestionIds: [])])
+        state.sessions = [session(id: "s1", questionId: "q1", drawn: ["q1", "q2"])]
+
+        let report = try JSONValue.decode(from: #"{"summary":"ok","must_correct":[]}"#)
+        let outcome = ReviewArchiver.archive(report: report, into: state, sessionID: "s1",
+                                             questionID: "q1", at: "2026-08-20T10:00:00Z")
+
+        let done = Set(outcome.state.plan?.days.flatMap(\.completedQuestionIds) ?? [])
+        XCTAssertTrue(done.contains("q1"))
+        XCTAssertTrue(done.contains("q2"), "抽到并练过的第二道题在学习计划里还挂着没做完")
+        XCTAssertFalse(done.contains("q3"), "没抽到的题一个字都不该动")
+    }
+
+    /// 普通练习**只结那一道**，行为与从前逐字一致。
+    func testArchivingAnOrdinarySessionStillTicksOffOnlyItsOwnQuestion() throws {
+        let questions = ["q1", "q2"].map { question($0) }
+        var state = CoachState.empty()
+        state.questions = questions
+        state.plan = TrainingPlan(lengthDays: 7, createdAt: "2026-08-20T00:00:00Z",
+                                  days: [PlanDay(id: 1, questionIds: ["q1", "q2"],
+                                                 completedQuestionIds: [])])
+        state.sessions = [session(id: "s1", questionId: "q1")]
+
+        let report = try JSONValue.decode(from: #"{"summary":"ok","must_correct":[]}"#)
+        let outcome = ReviewArchiver.archive(report: report, into: state, sessionID: "s1",
+                                             questionID: "q1", at: "2026-08-20T10:00:00Z")
+        XCTAssertEqual(Set(outcome.state.plan?.days.flatMap(\.completedQuestionIds) ?? []), ["q1"])
+    }
+
     // MARK: - 换季重导之后还得认得出来
 
     /// 题库重建模会把 Part 1 / Part 3 每一道题的 id 都换掉（题号是内容哈希）。

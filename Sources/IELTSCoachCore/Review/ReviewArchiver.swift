@@ -41,8 +41,16 @@ public enum ReviewArchiver {
             skipped.append("priority_target")
         }
 
-        advancePlan(in: &updated, questionID: questionID)
-        markPracticed(in: &updated, questionID: questionID)
+        // **这一场练到的每一道题都要结账**，不只是开场那一道。
+        //
+        // 随机抽题一场会安排一整组（`PracticeSession.drawnQuestionIds`）。只结开场那一道的话，
+        // 训练题库页会把另外几道标成已练（读盘时 `CoachState.reconcilePracticedStatus`
+        // 会算回来），而学习计划那边仍然显示没做完——同一道题，两页两个说法，
+        // 用户没有任何办法知道哪个是真的。
+        for id in practicedQuestionIDs(in: state, sessionID: sessionID, questionID: questionID) {
+            advancePlan(in: &updated, questionID: id)
+            markPracticed(in: &updated, questionID: id)
+        }
         return ArchiveOutcome(state: updated, skipped: skipped)
     }
 
@@ -195,6 +203,23 @@ public enum ReviewArchiver {
     private static func advancePlan(in state: inout CoachState, questionID: String) {
         guard let plan = state.plan else { return }
         state.plan = PlanBuilder.markCompleted(plan: plan, questionID: questionID)
+    }
+
+    /// 这一场到底练了哪些题。
+    ///
+    /// **从训练记录里读，而不是加一个参数。** `archive` 有五个调用点
+    /// （App、命令行两处、MCP、待处理复盘收件箱），其中几处手里根本没有 `SessionSetup`，
+    /// 加参数的话它们只能传空——于是同一份复盘从不同入口归档，计划进度不一样。
+    /// 训练记录在归档之前就已经写好了（`PracticeRunner.upsertSession`），
+    /// 它才是「这一场练了什么」唯一的凭据。
+    ///
+    /// 记录还没写进去（命令行那条路上有可能）时退回开场那一道，与从前的行为一致。
+    private static func practicedQuestionIDs(in state: CoachState, sessionID: String,
+                                             questionID: String) -> [String] {
+        var ids = [questionID].filter { !$0.isEmpty }
+        let recorded = state.sessions.first { $0.id == sessionID }?.allQuestionIds ?? []
+        for id in recorded where !ids.contains(id) { ids.append(id) }
+        return ids
     }
 
     private static func markPracticed(in state: inout CoachState, questionID: String) {
