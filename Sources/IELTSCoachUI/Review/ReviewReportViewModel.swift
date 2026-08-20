@@ -95,6 +95,23 @@ public enum ReviewReportViewModel {
         Layout(title: "逐题逻辑反馈", key: "logic_feedback",
                fields: ("question", "improvement", "issue"),
                labels: ("题目", "改进方向", "当时的问题")),
+        // 用户原话（2026-08-20）：「最后的 feedback 我建议你让 AI 还要给我一些内容上的建议，
+        // 因为有些时候内容可能比较空洞。」
+        //
+        // 上面五节全在讲**怎么把同一句话说得更对、更地道、词用得更准**，没有一节回答
+        // 「这段话本身有没有东西可说」。而「空洞」正是这位考生自己点名的毛病：
+        // 话说得没错、也够长，内容却换一道题也照样能说一遍。
+        //
+        // **三格取满，一个字段都不多要。** `ReviewRow` 只有三格（`primary`/`secondary`/`note`），
+        // 所以提示词那边就只要这三个字段。多要一个 `question` 出来却没格子显示的话，
+        // ChatGPT 每次都白写、用户永远看不到，而且 `unreadableSections` 只盯「整节读不出来」、
+        // 盯不到「少显示了一格」——那是本项目最忌讳的那种静默丢弃。
+        //
+        // 第二格照 `logic_feedback` 的规矩留给「该怎么办」：三格里被标绿、最先被读到的那一格，
+        // 给「可以补什么」比给「你说得空」有用。
+        Layout(title: "内容建议", key: "content_feedback",
+               fields: ("thin_spot", "add_this", "example"),
+               labels: ("你当时说空了的那句", "可以补什么", "可以这样说")),
         Layout(title: "逐题高分版", key: "answer_upgrades",
                fields: ("question", "original_answer", "revised_answer"),
                labels: ("题目", "你当时的回答", "高分版"))

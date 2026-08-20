@@ -181,7 +181,8 @@ final class ExaminerPromptTests: XCTestCase {
     func testReviewRequestStillAsksForTheHabitsAndLogicFeedbackBlocks() {
         let text = ReviewRequestPrompt.build(requestID: "sync-1", focusPart: .part2)
         for key in ["summary", "must_correct", "natural_upgrades", "vocabulary",
-                    "habits", "logic_feedback", "answer_upgrades", "priority_target"] {
+                    "habits", "logic_feedback", "content_feedback",
+                    "answer_upgrades", "priority_target"] {
             XCTAssertTrue(text.contains(key), "复盘请求里不再要 \(key) 这一项了")
         }
         XCTAssertTrue(text.contains(#""fix": 下次怎么改"#),

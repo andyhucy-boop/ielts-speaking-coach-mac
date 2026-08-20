@@ -195,10 +195,11 @@ final class ReviewReportViewModelTests: XCTestCase {
                        ["必须纠正的表达", "词汇升级"])
     }
 
-    /// 六节的完整顺序，与 `ReviewRequestPrompt` 里那张键表一致。
-    func testAllSixSectionsComeOutInTheOrderTheSchemaLists() throws {
+    /// 七节的完整顺序，与 `ReviewRequestPrompt` 里那张键表一致。
+    func testAllSevenSectionsComeOutInTheOrderTheSchemaLists() throws {
         let value = try report(#"""
         {"answer_upgrades":[{"question":"a","original_answer":"b","revised_answer":"c"}],
+         "content_feedback":[{"thin_spot":"a","add_this":"b","example":"c"}],
          "logic_feedback":[{"question":"a","improvement":"b","issue":"c"}],
          "habits":[{"habit":"a","evidence":"c"}],
          "vocabulary":[{"basic":"a","better":"b","collocation":"c"}],
@@ -207,7 +208,7 @@ final class ReviewReportViewModelTests: XCTestCase {
         """#)
         XCTAssertEqual(ReviewReportViewModel.sections(from: value).map(\.title),
                        ["必须纠正的表达", "更自然的表达", "词汇升级",
-                        "口语习惯", "逐题逻辑反馈", "逐题高分版"])
+                        "口语习惯", "逐题逻辑反馈", "内容建议", "逐题高分版"])
     }
 
     // MARK: - 三格分别是什么意思，必须写出来
@@ -223,12 +224,13 @@ final class ReviewReportViewModelTests: XCTestCase {
          "vocabulary":[{"basic":"a","better":"b","collocation":"c","priority":"high"}],
          "habits":[{"habit":"a","fix":"b","evidence":"c"}],
          "logic_feedback":[{"question":"a","improvement":"b","issue":"c"}],
+         "content_feedback":[{"thin_spot":"a","add_this":"b","example":"c"}],
          "answer_upgrades":[{"question":"a","original_answer":"b","revised_answer":"c",
                              "changes":["补了原因"]}]}
         """#)
         let sections = ReviewReportViewModel.sections(from: value)
-        // 六节：提示词要的六个数组键，一个都不能少（少一个就是又一块「永远看不到」的内容）。
-        XCTAssertEqual(sections.count, 6, "实际拆出来的是：\(sections.map(\.title))")
+        // 七节：提示词要的七个数组键，一个都不能少（少一个就是又一块「永远看不到」的内容）。
+        XCTAssertEqual(sections.count, 7, "实际拆出来的是：\(sections.map(\.title))")
         for section in sections {
             XCTAssertFalse(section.primaryLabel.isEmpty, "\(section.title) 第一格没有标注")
             XCTAssertFalse(section.secondaryLabel.isEmpty, "\(section.title) 第二格没有标注")
@@ -236,7 +238,9 @@ final class ReviewReportViewModelTests: XCTestCase {
         }
         // 各分区的第二格含义完全不同，标注不能是同一句——
         // 全填一样等于没标，而上面那圈「非空」照样全绿。
-        XCTAssertEqual(Set(sections.map(\.secondaryLabel)).count, 6,
+        // 拿 `sections.count` 比而不是写死一个数字：写死的话，加一节就要改两处，
+        // 而漏改的那一次红的是「数量对不上」，读起来像是新加的那一节没出来。
+        XCTAssertEqual(Set(sections.map(\.secondaryLabel)).count, sections.count,
                        "分区的第二格标注撞了：\(sections.map(\.secondaryLabel))")
     }
 
@@ -432,6 +436,49 @@ final class ReviewReportViewModelTests: XCTestCase {
         // 走错目录的话这里读不到文件——而界面拿不到 directory（它是私有的，
         // App 与命令行必须写同一个目录），只能经 AppState 这一道。
         XCTAssertEqual(document.sections.map(\.title), ["必须纠正的表达"])
+    }
+
+    // MARK: - 内容建议（用户 2026-08-20 的要求）
+
+    /// 「内容建议」这一节读的三个字段，必须**正是复盘请求里要 ChatGPT 写的那三个**。
+    ///
+    /// 这条钉的是一种只会静默发生的错配：提示词那边把字段改名（或者当初就没对齐），
+    /// ChatGPT 每次都老老实实输出，`content_feedback` 这个键在复盘 JSON 里也确实非空，
+    /// 而界面这边三格全取不到值 → 整行被 `ReviewRow.isBlank` 滤掉 → 整节不画。
+    /// 用户看到的是「这次 ChatGPT 没给内容建议」，实际上给了，只是没人读得懂。
+    ///
+    /// 两个方向都盖住：改提示词的字段名会红，改 `layout` 里的 `fields` 也会红。
+    func testContentFeedbackReadsExactlyTheFieldsTheReviewRequestAsksFor() throws {
+        let prompt = ReviewRequestPrompt.build(requestID: "sync-1", focusPart: .part1)
+        for field in ["thin_spot", "add_this", "example"] {
+            XCTAssertTrue(prompt.contains("\"\(field)\""),
+                          "复盘请求里已经不要 \(field) 这个字段了，但界面还在读它")
+        }
+        let value = try report(#"""
+        {"content_feedback":[{"thin_spot":"It was good.",
+                              "add_this":"补一个具体场合",
+                              "example":"For instance, I go there every Friday after work."}]}
+        """#)
+        let section = try XCTUnwrap(ReviewReportViewModel.sections(from: value)
+            .first { $0.title == "内容建议" })
+        let row = try XCTUnwrap(section.rows.first)
+        XCTAssertEqual(row.primary, "It was good.")
+        XCTAssertEqual(row.secondary, "补一个具体场合")
+        XCTAssertEqual(row.note, "For instance, I go there every Friday after work.")
+    }
+
+    /// 提示词里那一节讲的必须是**内容**，而且不许替考生编个人经历。
+    ///
+    /// 后半句不是客套：这一节唯一的产出就是一句可以直接开口说的英文示范，
+    /// 而「把答案说得更充实」最省事的做法就是给他编一段没发生过的经历——
+    /// 考生照着背进考场，那是雅思考试里最贵的一种错。
+    /// 上游的 `AnswerUpgradePolicy` 早就有同一条禁令，这一节必须跟上。
+    func testContentFeedbackRuleForbidsInventingTheLearnersLife() {
+        let prompt = ReviewRequestPrompt.build(requestID: "sync-1", focusPart: .part1)
+        XCTAssertTrue(prompt.contains("不许替他编个人经历"),
+                      "内容建议那一节没有禁止编造个人经历")
+        XCTAssertTrue(prompt.contains("logic_feedback 管条理"),
+                      "没有把内容建议和逐题逻辑反馈的分工写清楚，两节会写出重复的话")
     }
 
     // MARK: - 小工具
