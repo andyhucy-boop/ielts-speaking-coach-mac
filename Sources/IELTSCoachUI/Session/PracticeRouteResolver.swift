@@ -70,6 +70,32 @@ public enum PracticeRouteResolver {
                      part3Reference: LinkedPart3.reference(for: question, in: bank))
     }
 
+    /// **一组抽出来的题 → 一场练习。** 抽了个空返回 nil（那时「开始练习」是灰的）。
+    ///
+    /// 三处刻意不走别的入口：
+    ///
+    /// - **考法取 `draw.focusPart`**，也就是**真的抽到的**那几段，不是他要了几道。
+    ///   要了 Part 3 却一道没抽到时，这一场就不含 Part 3——否则提示词会宣布有一段
+    ///   Part 3，而那一段一份材料都没有。
+    /// - **时长取 `draw.estimatedMinutes`**，按份数算。走 `focusPart.defaultDurationMinutes`
+    ///   的话，抽 4 张 cue card 的一场仍然报 4 分钟，而那句 `Target session length`
+    ///   是提示词里的硬约束——考官会为了对上时间把后三张卡砍掉。
+    /// - **`part3Reference` 照常配**：抽到的只有一道题时走的仍然是单题那条老路
+    ///   （`ExaminerPrompt.materialBlock`），那条路要靠它给 Part 3 找参考问句。
+    public static func setup(forDraw draw: RandomDraw.Result, goal: String = "",
+                             defaults: RouteDefaults,
+                             bank: [Question]) -> SessionSetup? {
+        guard let opening = draw.openingQuestion, let focusPart = draw.focusPart else { return nil }
+        return SessionSetup(question: opening,
+                            focusPart: focusPart,
+                            durationMinutes: draw.estimatedMinutes,
+                            goal: goal,
+                            feedbackTiming: defaults.feedbackTiming,
+                            part2PrepMode: defaults.part2PrepMode,
+                            part3Reference: LinkedPart3.reference(for: opening, in: bank),
+                            drawnQuestions: draw.questions)
+    }
+
     // MARK: - 解析
 
     public static func resolve(route: PracticeRoute, state: CoachState,
@@ -78,6 +104,7 @@ public enum PracticeRouteResolver {
         switch route {
         case .planToday:   return resolvePlanToday(state, selectedQuestionID, defaults)
         case .freePick:    return resolveFreePick(state, selectedQuestionID, defaults)
+        case .randomDraw:  return resolveRandomDraw(state)
         case .continueLast: return resolveContinueLast(state, defaults)
         case .retrain:     return resolveRetrain(state, defaults)
         }
@@ -124,6 +151,20 @@ public enum PracticeRouteResolver {
             return .unavailable("题库里没有 id 为「\(id)」的题目。下一步：回题目列表重新选一道。")
         }
         return .ready(setup(for: question, goal: "", defaults: defaults, bank: state.questions))
+    }
+
+    /// 「随机抽题」**永远解析不出一场练习**，这是它的正常状态而不是故障：
+    /// 抽哪几道要用户先定好数量、再按抽题，那两步都在弹层里
+    /// （`SessionSetup` 由 `PracticeSheet` 拿着 `RandomDraw.Result` 现造）。
+    ///
+    /// 所以这里只负责两件事：题库空了就说清楚；没空就把「下一步去哪儿按」说出来。
+    /// **返回 `.ready` 是错的**——那等于凭空替他抽一组题，而他还没说要几道。
+    private static func resolveRandomDraw(_ state: CoachState) -> RouteResolution {
+        guard !state.questions.isEmpty else {
+            return .unavailable("题库还是空的，一道题都抽不出来。"
+                + "下一步：到「训练题库」页导入你的题库文件。")
+        }
+        return .unavailable("还没抽题。下一步：先定好每个 Part 各抽几道，再点「抽题」。")
     }
 
     private static func resolveContinueLast(_ state: CoachState,
@@ -177,12 +218,14 @@ public enum PracticeRouteResolver {
 
     /// 只返回**真的能开练**的路线，默认路线排在最前面。
     ///
-    /// 「自由选题」是唯一的例外：它天生要先选题才能解析出题目，
-    /// 所以它的条件就是「题库非空」。
+    /// 「自由选题」和「随机抽题」是例外：它们天生要在弹层里先定材料
+    /// （挑一道 / 抽一组）才解析得出题目，所以它们的条件就是「题库非空」。
+    /// 这两条由 `PracticeRoute.picksMaterialInTheSheet` 认人，不在这里列名字——
+    /// 列名字的话，将来再加一条同类路线就会**默默地从今日训练页上消失**。
     public static func availableRoutes(state: CoachState, preferring preferred: PracticeRoute,
                                        defaults: RouteDefaults = RouteDefaults()) -> [PracticeRoute] {
         var usable = PracticeRoute.allCases.filter { route in
-            if route == .freePick { return !state.questions.isEmpty }
+            if route.picksMaterialInTheSheet { return !state.questions.isEmpty }
             if case .ready = resolve(route: route, state: state, defaults: defaults) { return true }
             return false
         }

@@ -108,7 +108,7 @@ final class TodayViewModelTests: XCTestCase {
                       sessions: [practiceSession("s1", startedAt: "2026-08-05T10:00:00Z")])
         s.targets = [retrainingTarget("t1", status: "new")]
         XCTAssertEqual(TodayViewModel(state: s).availableRoutes,
-                       [.planToday, .freePick, .continueLast, .retrain])
+                       [.planToday, .freePick, .randomDraw, .continueLast, .retrain])
     }
 
     /// 路线的文案是用户唯一能据以选择的东西。少一句副标题，那张卡片就只剩一个动词，

@@ -677,7 +677,8 @@ public final class PracticeRunner {
                                        focusPart: setup.focusPart,
                                        startedAt: formatter.string(from: self.startedAt ?? self.now()),
                                        endedAt: "", goal: setup.goal,
-                                       transcript: [], reportPath: "", recordingPath: "")
+                                       transcript: [], reportPath: "", recordingPath: "",
+                                       drawnQuestionIds: self.drawnQuestionIds(in: setup))
                 session.endedAt = formatter.string(from: self.now())
                 session.transcript = self.collector.turns
                 if let reportPath { session.reportPath = reportPath }
@@ -698,6 +699,16 @@ public final class PracticeRunner {
                 + "IELTS Speaking Coach」），然后重新练一场；"
                 + "复盘原文若已取回，仍然保存在 pending-reviews 目录里。"
         }
+    }
+
+    /// 随机抽题那一场安排到的整组题号；普通练习是 nil。
+    ///
+    /// **必须记下来**：这一组 id 是「这几道题练过了」唯一的凭据
+    /// （`CoachState.reconcilePracticedStatus`）。只记开场那一道的话，
+    /// 同一场里另外几道会永远停在「新题」，于是「只抽没练过的」一遍遍把它们再抽出来，
+    /// 训练题库页那个「已练 N / 258」也永远少数它们——两样都不报错。
+    private func drawnQuestionIds(in setup: SessionSetup) -> [String]? {
+        setup.drawnQuestions.isEmpty ? nil : setup.drawnQuestions.map(\.id)
     }
 
     // MARK: - 跑一步

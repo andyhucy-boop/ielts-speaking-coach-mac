@@ -39,4 +39,45 @@ public enum ExamPart: Int, Codable, Hashable, Sendable, CaseIterable, Comparable
     /// 都从这里出，两处各写各的话，禁令段的限定语（"Never do these in Part 1:"）
     /// 会和规则段的标题对不上。
     public var englishName: String { "Part \(rawValue)" }
+
+    // MARK: - 时长
+
+    /// 这一段**第一份材料**要多久（分钟）。取值对着真实考试：
+    /// Part 1 约 4–5 分钟，Part 2 一张卡约 4 分钟，Part 3 约 4–5 分钟。
+    ///
+    /// 从 `FocusPart` 搬过来的（那边原是个 private switch）。搬家的理由是随机抽题
+    /// 要按「这一段抽了几份材料」算时长，而那件事和「这一场跑哪几段」不是一回事——
+    /// 在两个地方各写一份数字，改的时候必然只改一处。
+    public var firstItemMinutes: Int {
+        switch self {
+        case .one: return 5
+        case .two: return 4
+        case .three: return 5
+        }
+    }
+
+    /// 这一段供了 `count` 份材料时大概要多久（分钟）。0 份是 0 分钟。
+    ///
+    /// **三段的算法不一样，而且不能统一**——因为「多一份材料」在三段里根本不是同一件事：
+    ///
+    /// - **Part 1 是按整段计时的。** 真实考试里这一段就是 4–5 分钟，里面装 2–3 个话题
+    ///   （`ExaminerPrompt.part1Rules` 里那句 "Cover 2–3 everyday topics" 是同一个出处）。
+    ///   多给一个话题只是把这 5 分钟填满，不是再来一段，所以 1 个和 2 个都是 5 分钟；
+    ///   超过 3 个才真的开始变长。
+    /// - **Part 2 是按张数计时的。** 每张卡都是完整的一轮「一分钟准备 + 两分钟独白 +
+    ///   收尾一问」，抽 3 张就是老老实实的 12 分钟。
+    /// - **Part 3 介于两者之间。** 第一组讨论就是那 4–5 分钟的一整段；再多一组是
+    ///   另起一个话题重来一轮 4–8 问，加 4 分钟。
+    ///
+    /// 一份材料时三段相加 = 5 + 4 + 5 = 14，正是 `FocusPart.fullMock` 冻住的那个数字，
+    /// 所以「随机抽 1/1/1」与「勾满三个 Part」得到的是同一个时长——
+    /// 两条路给出两个数字的话，用户没有任何办法知道哪个是真的。
+    public func minutes(forItems count: Int) -> Int {
+        guard count > 0 else { return 0 }
+        switch self {
+        case .one: return max(firstItemMinutes, 2 * count)
+        case .two: return firstItemMinutes * count
+        case .three: return firstItemMinutes + (count - 1) * 4
+        }
+    }
 }

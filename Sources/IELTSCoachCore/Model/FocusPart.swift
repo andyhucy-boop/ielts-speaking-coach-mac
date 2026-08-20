@@ -235,15 +235,10 @@ public struct FocusPart: RawRepresentable, Codable, Hashable, Sendable, CaseIter
         part2And3.rawValue: 9
     ]
 
-    /// 新增组合按各段时长相加。取值对着真实考试：Part 1 约 4–5 分钟，
-    /// Part 2 一张卡约 4 分钟，Part 3 约 4–5 分钟。
-    private static func minutes(for part: ExamPart) -> Int {
-        switch part {
-        case .one: return 5
-        case .two: return 4
-        case .three: return 5
-        }
-    }
+    /// 新增组合按各段时长相加。取值挂在 `ExamPart.firstItemMinutes` 上——
+    /// 随机抽题按「这一段抽了几份材料」算时长时用的是同一份数字，
+    /// 两处各写一份的话，勾三个 Part 和随机抽 1/1/1 会得到两个不同的时长。
+    private static func minutes(for part: ExamPart) -> Int { part.firstItemMinutes }
 
     /// 这一档默认练多久（分钟）。
     ///

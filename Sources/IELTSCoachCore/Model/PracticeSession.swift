@@ -16,20 +16,60 @@ public struct PracticeSession: Codable, Equatable, Sendable, Identifiable {
     /// 因此不带这个键的历史记录仍然能正常读出来——不要改成非 Optional。
     public var retraining: RetrainingLink?
 
+    /// 随机抽题抽出来的**整组**题目 id（含 `questionId` 那一道）。
+    /// 普通练习是 nil——那一场就练 `questionId` 一道。
+    ///
+    /// ## 为什么必须存下来
+    ///
+    /// 「这道题练没练过」全工程只认一个标记：`Question.status == "practiced"`，
+    /// 而它的唯一真凭实据是 `CoachState.reconcilePracticedStatus`——那段代码读的是
+    /// 练习记录里的题目 id。随机抽题一场抽 5 道全练了，只记下开场那一道的话：
+    ///
+    /// - 「只抽没练过的」会把另外 4 道当成新题，一遍遍再抽给他；
+    /// - 训练题库页那个「已练 N / 258」永远少数 4 道，而屏幕上没有任何异样。
+    ///
+    /// 两样都是本项目最忌讳的静默错账，所以这一组 id 必须落盘。
+    ///
+    /// **Optional 且带默认值**：Swift 合成的编码器对 Optional 走 `encodeIfPresent`，
+    /// 所以普通练习写出去的 state.json 一个字节都没变（与 `retraining` 同一套做法），
+    /// 旧版本 App 与上游 Windows 版照样读得出来。
+    ///
+    /// **口径是「这一场安排了哪几道」，不是「他真的答完了哪几道」**：练习记录在开练那一刻
+    /// 就建好了（`PracticeRunner.upsertSession`），中途放弃同样会留下这一组 id。
+    /// 这与开场那一道题的既有行为完全一致（它也是一开练就记），
+    /// 换成「答完才算」需要逐题回执，而语音会话里根本拿不到那种回执。
+    public var drawnQuestionIds: [String]?
+
     // 合成的 memberwise init 是 internal 的，App target 与 MCP target 构造不了。
+    //
+    // `drawnQuestionIds` **带默认值且排在最后**：这是随机抽题追加的字段，
+    // 前面所有阶段的调用点（复训、命令行、各处测试）一处都不用改。
     public init(id: String, questionId: String, focusPart: FocusPart, startedAt: String,
                 endedAt: String, goal: String, transcript: [TranscriptTurn],
                 reportPath: String, recordingPath: String,
-                retraining: RetrainingLink? = nil) {
+                retraining: RetrainingLink? = nil,
+                drawnQuestionIds: [String]? = nil) {
         self.id = id; self.questionId = questionId; self.focusPart = focusPart
         self.startedAt = startedAt; self.endedAt = endedAt; self.goal = goal
         self.transcript = transcript; self.reportPath = reportPath
         self.recordingPath = recordingPath; self.retraining = retraining
+        self.drawnQuestionIds = drawnQuestionIds
     }
 
     enum CodingKeys: String, CodingKey {
         case id, questionId, focusPart, startedAt, endedAt, goal
-        case transcript, reportPath, recordingPath, retraining
+        case transcript, reportPath, recordingPath, retraining, drawnQuestionIds
+    }
+
+    /// 这一场安排到的全部题目 id，开场那道排在最前面，去重、去空串。
+    ///
+    /// **凡是要问「这一场练了哪些题」的地方一律用它**，不要直接读 `questionId`：
+    /// 直接读的那几处会把随机抽题的一场当成只练了一道题（见 `drawnQuestionIds` 的说明）。
+    public var allQuestionIds: [String] {
+        var ids: [String] = []
+        for id in [questionId] + (drawnQuestionIds ?? [])
+        where !id.isEmpty && !ids.contains(id) { ids.append(id) }
+        return ids
     }
 
     /// 手写解码，只为一件事：**一条记录里的一个字段坏掉，不许把整份训练数据挡在门外。**
@@ -80,6 +120,10 @@ public struct PracticeSession: Codable, Equatable, Sendable, Identifiable {
         recordingPath = Self.tolerantString(c, .recordingPath)
         // 复训链接坏掉时退回「这不是一场复训」：复训进度不准，好过整份数据打不开。
         retraining = (try? c.decodeIfPresent(RetrainingLink.self, forKey: .retraining)) ?? nil
+        // 同一套容错：这一组 id 坏掉时退回「这不是随机抽题的一场」。
+        // 代价是那几道题的「已练」标记算不回来，换整份训练数据还能打开。
+        drawnQuestionIds = ((try? c.decodeIfPresent([String].self, forKey: .drawnQuestionIds)) ?? nil)
+            .map { $0.filter { !$0.isEmpty } }
     }
 
     /// 键不存在、值是 null、值的类型不对——三种都退回空串，不抛错。

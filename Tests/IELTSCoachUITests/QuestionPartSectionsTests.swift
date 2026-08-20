@@ -281,13 +281,21 @@ final class QuestionPartSectionsTests: XCTestCase {
 
     /// 「开始练习」按钮灰不灰，得看**屏幕上还看不看得见**那道题，而不是 `picked` 空不空。
     func testTheStartButtonGreysOutWhenThePickedQuestionIsNoLongerOnScreen() throws {
-        let sheetActions = try SourceGuard.memberBody(
-            of: "private var actions", in: try SourceGuard.code(Self.sheet))
-        XCTAssertTrue(sheetActions.contains("disabled(pickedQuestion == nil)"),
+        // 判据搬到了 `readyToStart`（随机抽题那条路线看的是另一样东西），
+        // 所以这里钉两段：按钮问的是 `readyToStart`，而 `readyToStart` 问的是
+        // `pickedQuestion` 而不是 `picked`。少钉后一段的话，把判据改回 `picked`
+        // 这条测试照样全绿。
+        let sheetCode = try SourceGuard.code(Self.sheet)
+        let sheetActions = try SourceGuard.memberBody(of: "private var actions", in: sheetCode)
+        XCTAssertTrue(sheetActions.contains("disabled(!readyToStart)"),
+                      "挑题弹层的「开始练习」不再问 `readyToStart` 了。"
+                          + "实际取到的是：\n\(sheetActions)")
+        let readyToStart = try SourceGuard.memberBody(of: "private var readyToStart", in: sheetCode)
+        XCTAssertTrue(readyToStart.contains("pickedQuestion"),
                       "挑题弹层的「开始练习」还在按 `picked == nil` 灰。"
                           + "把挑好那道题所在的栏折起来之后按钮仍然亮着，"
                           + "按下去什么都不会发生——铁律 5 说的静默失败。"
-                          + "实际取到的是：\n\(sheetActions)")
+                          + "实际取到的是：\n\(readyToStart)")
 
         let flowCode = try SourceGuard.code(Self.flow)
         XCTAssertTrue(flowCode.contains("disabled(question == nil && pickedQuestion == nil)"),

@@ -579,8 +579,11 @@ final class PracticeRouteResolverTests: XCTestCase {
     /// 「自由选题」除外——它天生要先选题才能解析出题目。
     func testEveryShownRouteCanActuallyStart() {
         for s in assortedStates() {
+            // 「在弹层里当场定材料」的那几条除外（自由选题、随机抽题）：
+            // 它们在这一步解析不出题目是设计，不是故障。判据走
+            // `PracticeRoute.picksMaterialInTheSheet`，与 `availableRoutes` 同一个。
             for route in PracticeRouteResolver.availableRoutes(state: s, preferring: .planToday)
-            where route != .freePick {
+            where !route.picksMaterialInTheSheet {
                 guard case .ready = PracticeRouteResolver.resolve(route: route, state: s) else {
                     return XCTFail("路线「\(route.title)」显示了却开不了练")
                 }
@@ -602,9 +605,9 @@ final class PracticeRouteResolverTests: XCTestCase {
         let s = state(questions: [q("a")],
                       sessions: [session("s1", question: "a", startedAt: "2026-08-01T10:00:00Z")])
         XCTAssertEqual(PracticeRouteResolver.availableRoutes(state: s, preferring: .continueLast),
-                       [.continueLast, .freePick])
+                       [.continueLast, .freePick, .randomDraw])
         XCTAssertEqual(PracticeRouteResolver.availableRoutes(state: s, preferring: .freePick),
-                       [.freePick, .continueLast])
+                       [.freePick, .randomDraw, .continueLast])
     }
 
     /// 默认路线是「按计划练今天」，但根本没有计划——
@@ -612,7 +615,8 @@ final class PracticeRouteResolverTests: XCTestCase {
     func testUnavailablePreferredRouteDoesNotSneakIn() {
         let routes = PracticeRouteResolver.availableRoutes(state: state(questions: [q("a")]),
                                                            preferring: .planToday)
-        XCTAssertEqual(routes, [.freePick])
+        // 「随机抽题」和「自由选题」的前提一样（题库非空），所以它俩总是同进同出。
+        XCTAssertEqual(routes, [.freePick, .randomDraw])
     }
 
     func testNoRoutesAtAllWhenThereIsNothingToPractice() {

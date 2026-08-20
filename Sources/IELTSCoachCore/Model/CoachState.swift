@@ -174,7 +174,11 @@ public struct CoachState: Codable, Equatable, Sendable {
     /// 只认 `sessions`，不认 `currentSession`：正在练、还没归档的那一场随时可能被放弃。
     public static func reconcilePracticedStatus(questions: [Question],
                                                 sessions: [PracticeSession]) -> [Question] {
-        let practiced = Set(sessions.map(\.questionId))
+        // **走 `allQuestionIds` 而不是 `questionId`。** 随机抽题一场会安排一整组题
+        // （`PracticeSession.drawnQuestionIds`），只认开场那一道的话，同一场里另外几道
+        // 会永远停在「新题」，于是「只抽没练过的」一遍遍把它们再抽出来，
+        // 而训练题库页那个「已练 N / 258」也永远少数它们——两样都不会报错。
+        let practiced = Set(sessions.flatMap(\.allQuestionIds))
         guard !practiced.isEmpty else { return questions }
         return questions.map { question in
             guard question.status != "practiced", practiced.contains(question.id) else { return question }
