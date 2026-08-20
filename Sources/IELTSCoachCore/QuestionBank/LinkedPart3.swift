@@ -46,4 +46,22 @@ public enum LinkedPart3 {
                 && !$0.followups.isEmpty
         }
     }
+
+    /// 反过来问：**这条 Part 3 题属于下面哪一张卡？** 配不上返回 nil。
+    ///
+    /// 随机抽题一场里可能有好几张卡、好几组讨论题，提示词得说清「第 2 组讨论是接着第 1 张卡的」——
+    /// 说不清的话，考官只能自己猜配对，而它猜错时屏幕上一切正常。
+    ///
+    /// **判据与 `reference` 是同一条**（Part 3 的 `topic` == cue card 的 `prompt`），
+    /// 刻意不在这里另写一份：两份判据迟早会对同一对题给出不同的答案。
+    /// 这里不要求 `followups` 非空——那个条件是 `reference` 为了「配上了却没有问句
+    /// 等于没配上」加的，而这里问的只是归属。
+    public static func cueCard(for part3: Question, among cards: [Question]) -> Question? {
+        guard part3.part == 3 else { return nil }
+        let key = part3.topic.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return nil }
+        return cards.first {
+            $0.part == 2 && $0.prompt.trimmingCharacters(in: .whitespacesAndNewlines) == key
+        }
+    }
 }

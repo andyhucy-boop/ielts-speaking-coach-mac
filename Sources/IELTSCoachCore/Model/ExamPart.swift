@@ -39,4 +39,39 @@ public enum ExamPart: Int, Codable, Hashable, Sendable, CaseIterable, Comparable
     /// 都从这里出，两处各写各的话，禁令段的限定语（"Never do these in Part 1:"）
     /// 会和规则段的标题对不上。
     public var englishName: String { "Part \(rawValue)" }
+
+    // MARK: - 时长
+
+    /// 这一段**第一份材料**要多久（分钟）。取值对着真实考试：
+    /// Part 1 约 4–5 分钟，Part 2 一张卡约 4 分钟，Part 3 约 4–5 分钟。
+    ///
+    /// 从 `FocusPart` 搬过来的（那边原是个 private switch）。搬家的理由是随机抽题
+    /// 要按「这一段抽了几份材料」算时长，而那件事和「这一场跑哪几段」不是一回事——
+    /// 在两个地方各写一份数字，改的时候必然只改一处。
+    public var firstItemMinutes: Int {
+        switch self {
+        case .one: return 5
+        case .two: return 4
+        case .three: return 5
+        }
+    }
+
+    /// 这一段**每多一份材料**再加多久（分钟）。
+    ///
+    /// 三个数字各有各的来源，不能统一成一个：
+    ///
+    /// - Part 1 多一个话题只是多问 3–4 个短问题，加 2 分钟；
+    /// - Part 2 多一张卡是**再来一遍**「一分钟准备 + 两分钟独白 + 收尾一问」，加满 4 分钟；
+    /// - Part 3 多一个讨论主题是再来一轮 4–8 问的讨论，加 4 分钟。
+    ///
+    /// 一份材料时 `firstItemMinutes` 与 `FocusPart` 那三档冻住的历史时长完全对得上
+    /// （5 + 4 + 5 = 14，正是全真模考的 14 分钟），所以随机抽 1/1/1 与勾三个 Part
+    /// 得到的是同一个数字——两条路给出两个时长的话，用户没有任何办法知道哪个是真的。
+    public var additionalItemMinutes: Int {
+        switch self {
+        case .one: return 2
+        case .two: return 4
+        case .three: return 4
+        }
+    }
 }

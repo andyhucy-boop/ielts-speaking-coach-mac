@@ -15,12 +15,35 @@ public struct SessionSetup: Equatable, Sendable {
     /// 或者这一场根本没有 Part 3。
     public let part3Reference: Question?
 
-    /// `part3Reference` **带默认值且排在最后**：这是 Phase 追加的字段，
-    /// 前面阶段的调用点（复训、命令行、今日训练页、各处测试）一处都不用改。
+    /// 随机抽题抽出来的**整套材料**（`RandomDraw.Result.questions`），按 Part 升序。
+    ///
+    /// 空数组 = 这一场不是抽出来的，材料就是 `question` 那一道——**其余所有路线都走这一支**，
+    /// 提示词里那部分一个字都没变。
+    ///
+    /// ## 为什么不是把 `question` 换成一个数组
+    ///
+    /// `question` 是这一场的**开场题**，而它同时还是别的东西的锚：训练记录按它存
+    /// （`PracticeSession.questionId`）、复训按它找回原题、学习计划按它推进度。
+    /// 换成数组的话，上面每一处都要当场决定「拿哪一道」，而那正是会各自决定错的地方。
+    ///
+    /// ## 不变量：非空时一定含开场题
+    ///
+    /// 由 `init` 保证（不含就补到最前面）。少了这条，`questionBlock` 会把开场题漏出材料清单，
+    /// 于是训练记录上写着练了这道题、考官手里却根本没有它——静默、且事后无从发现。
+    public let drawnQuestions: [Question]
+
+    /// 这一场发给考官的全部材料。**提示词一律读它，不要直接读 `question`。**
+    public var materialQuestions: [Question] {
+        drawnQuestions.isEmpty ? [question] : drawnQuestions
+    }
+
+    /// `part3Reference` 与 `drawnQuestions` **都带默认值且排在最后**：它们是后面阶段
+    /// 追加的字段，前面阶段的调用点（复训、命令行、今日训练页、各处测试）一处都不用改。
     public init(question: Question, focusPart: FocusPart, durationMinutes: Int, goal: String,
                 feedbackTiming: FeedbackTiming = .deferred,
                 part2PrepMode: Part2PrepMode = .countdown,
-                part3Reference: Question? = nil) {
+                part3Reference: Question? = nil,
+                drawnQuestions: [Question] = []) {
         self.question = question
         self.focusPart = focusPart
         self.durationMinutes = durationMinutes
@@ -28,6 +51,13 @@ public struct SessionSetup: Equatable, Sendable {
         self.feedbackTiming = feedbackTiming
         self.part2PrepMode = part2PrepMode
         self.part3Reference = part3Reference
+        // 开场题不在抽出来的那一组里时补到最前面（不变量见 `drawnQuestions` 的说明）。
+        // 正常路径上不会发生——`RandomDraw.Result.openingQuestion` 取的就是这一组的第一道。
+        if drawnQuestions.isEmpty || drawnQuestions.contains(where: { $0.id == question.id }) {
+            self.drawnQuestions = drawnQuestions
+        } else {
+            self.drawnQuestions = [question] + drawnQuestions
+        }
     }
 }
 
@@ -341,31 +371,70 @@ public enum ExaminerPrompt {
     /// 各 Part 的规则单独拆出来，是因为**全真模考与「Part 2 + Part 3」要把它们原样装进去**。
     /// 原先 full mock 只写了一句 "Apply each part's own timing and questioning rules."——
     /// 而那三套规则的正文根本没进提示词，ChatGPT 无从「apply」起。
-    private static let part1Rules = """
-    \(part1Primer)
+    /// - Parameter suppliedTopics: 题库这次一共供了几个 Part 1 话题。
+    ///
+    /// **两支的区别不是措辞，是这一段考什么。** 供一个话题时，剩下的 1–2 个话题由考官
+    /// 自己挑（真实考试就是这样，而题库一场只给一道题）；随机抽题供了 3 个话题时，
+    /// 考官还去「自己再挑几个」的话，用户抽到的那几道有一半根本不会被问到——
+    /// 屏幕上抽签结果明明白白列着，考场上却对不上（铁律 7）。
+    private static func part1Rules(suppliedTopics: Int) -> String {
+        // 一份材料（也就是随机抽题之外的每一场）逐字保留原文。
+        let coverage = suppliedTopics > 1
+            ? """
+              - Cover the \(suppliedTopics) supplied topics, in the order they are given, and ask \
+              only 3–4 questions on each topic — about \(suppliedTopics * 3)–\(suppliedTopics * 4) \
+              questions in total.
+              - Do not add topics of your own: the supplied ones are this session's Part 1.
+              """
+            : """
+              - Cover 2–3 everyday topics, and ask only 3–4 questions on each topic — about 9–12 \
+              questions in total.
+              - Start with the supplied topic, then move on to other everyday topics of your choice.
+              """
+        // 时长跟着话题数走。写死「4–5 分钟」而下面列着 4 个话题的话，
+        // 考官为了对上时间会把话题砍掉一半。
+        let length = suppliedTopics > 1
+            ? "- This section runs about \(max(4, suppliedTopics * 2)) minutes."
+            : "- This section runs about 4–5 minutes."
+        return """
+        \(part1Primer)
 
-    Section rules (Part 1):
-    - This section runs about 4–5 minutes.
-    - Cover 2–3 everyday topics, and ask only 3–4 questions on each topic — about 9–12 questions in total.
-    - Start with the supplied topic, then move on to other everyday topics of your choice.
-    \(improvisationRules)
-    - Never work through a whole list of questions.
-    - Keep the section conversational but neutral.
+        Section rules (Part 1):
+        \(length)
+        \(coverage)
+        \(improvisationRules)
+        - Never work through a whole list of questions.
+        - Keep the section conversational but neutral.
 
-    \(part1Nevers)
+        \(part1Nevers)
 
-    \(part1SelfCheck)
-    """
-
-    private static func part2Rules(part2PrepMode: Part2PrepMode) -> String {
+        \(part1SelfCheck)
         """
+    }
+
+    /// - Parameter suppliedCards: 题库这次一共供了几张 cue card。
+    ///
+    /// 供了 3 张而规则仍写着 "Present one cue card." 时，考官读到的是一句和材料清单
+    /// 直接矛盾的指令——它多半只做第一张，而另外两张在界面上是抽到了的。
+    private static func part2Rules(part2PrepMode: Part2PrepMode, suppliedCards: Int) -> String {
+        // 四条的**顺序原样不动**，只有第一条和第四条按张数换文本：
+        // 这一段是实测调出来的，一份材料的每一场（也就是随机抽题之外的全部练习）
+        // 读到的必须和从前逐字一致。
+        let presenting = suppliedCards > 1
+            ? "Present the \(suppliedCards) supplied cue cards one at a time, in the order they "
+                + "are given. Finish one card completely before you read out the next."
+            : "Present one cue card."
+        let roundingOff = suppliedCards > 1
+            ? "Ask one brief rounding-off question after each long turn, then move on to the next card."
+            : "Ask one brief rounding-off question after the long turn."
+        return """
         \(part2Primer)
 
         Section rules (Part 2):
-        - Present one cue card.
+        - \(presenting)
         - \(part2PrepRule(for: part2PrepMode))
         - Do not supply content during preparation unless the learner requests practice support.
-        - Ask one brief rounding-off question after the long turn.
+        - \(roundingOff)
 
         \(part2Nevers)
 
@@ -398,7 +467,11 @@ public enum ExaminerPrompt {
     ///
     /// 三支都要求「第一问已经是抽象讨论」：`.afterPart2` 那句「先从刚才的话题起手」
     /// 很容易被做成「再追问一遍他刚才讲的那件事」，那还是 Part 2 的尾巴。
-    private static func part3Rules(opening: Part3Opening) -> String {
+    ///
+    /// - Parameter discussions: 题库这次一共供了几组 Part 3 讨论题。
+    ///   **它决定问句数量那一条怎么写**：写死「全场 4–8 问」而下面列着 3 个讨论主题的话，
+    ///   每个主题分到 1–2 问，那不是 Part 3 讨论，是三次蜻蜓点水。
+    private static func part3Rules(opening: Part3Opening, discussions: Int) -> String {
         let openingRule: String
         switch opening {
         case .afterPart2:
@@ -408,8 +481,11 @@ public enum ExaminerPrompt {
                 + "society, about causes or consequences — not one more question about what the "
                 + "learner personally did or likes."
         case .themeSupplied:
-            openingRule = "- The discussion theme has already been chosen for you and is supplied "
-                + "below. Your very first question must already be an abstract, general, "
+            openingRule = (discussions > 1
+                ? "- The \(discussions) discussion themes have already been chosen for you and are "
+                    + "supplied below; take them one at a time. "
+                : "- The discussion theme has already been chosen for you and is supplied below. ")
+                + "Your very first question must already be an abstract, general, "
                 + "society-level question about that theme — about people in general, groups, "
                 + "trends, causes, consequences, comparisons, advantages and disadvantages. "
                 + "Do NOT warm up with a personal question about the learner's own experience of "
@@ -427,7 +503,10 @@ public enum ExaminerPrompt {
         \(part3Primer)
 
         Section rules (Part 3):
-        - Ask 4–8 questions in total.
+        - \(discussions > 1
+            ? "Ask 4–6 questions in each of the \(discussions) supplied discussions, and finish "
+                + "one discussion before you start the next."
+            : "Ask 4–8 questions in total.")
         \(openingRule)
         \(improvisationRules)
         - Some of your questions must be improvised on the spot from the learner's previous answer, \
@@ -451,20 +530,40 @@ public enum ExaminerPrompt {
     private static func sectionRules(for part: ExamPart, setup: SessionSetup) -> String {
         switch part {
         case .one:
-            return part1Rules
+            return part1Rules(suppliedTopics: materialCount(setup, .one))
         case .two:
-            return part2Rules(part2PrepMode: setup.part2PrepMode)
+            return part2Rules(part2PrepMode: setup.part2PrepMode,
+                              suppliedCards: materialCount(setup, .two))
         case .three:
-            return part3Rules(opening: part3Opening(for: setup))
+            return part3Rules(opening: part3Opening(for: setup),
+                              discussions: materialCount(setup, .three))
         }
+    }
+
+    /// 这一段一共供了几份材料。单题那一场只会是 0 或 1，所以那些场次的规则正文
+    /// 与从前逐字一致；随机抽题才可能大于 1。
+    private static func materialCount(_ setup: SessionSetup, _ part: ExamPart) -> Int {
+        setup.materialQuestions.filter { $0.part == part.rawValue }.count
     }
 
     /// 这一场的 Part 3 该从哪儿起手，由**事实**决定，不由考法的名字决定：
     /// 前面有没有真的跑过一段 Part 2、题目那一段里到底有没有给出 Part 3 的主题。
     private static func part3Opening(for setup: SessionSetup) -> Part3Opening {
         if setup.focusPart.includes(.two) { return .afterPart2 }
-        // 题目本身是一道 Part 3 题时，题目块给的就是讨论主题（`questionBlock`）。
-        return setup.question.part == 3 ? .themeSupplied : .noThemeSupplied
+        // 材料里有 Part 3 的题时，题目块给的就是讨论主题（`materialBlock`）。
+        //
+        // 判据从「那一道题是不是 Part 3 的」放宽成「材料里有没有 Part 3 的」：
+        // 随机抽题一场会带一整套材料，其中可能有好几道 Part 3 题。
+        // 单题那一场两者完全等价（材料就是那一道），所以这一行没有改变任何既有行为。
+        return partsWithMaterial(setup).contains(.three) ? .themeSupplied : .noThemeSupplied
+    }
+
+    /// 这一场**哪几段有题库供的材料**。
+    ///
+    /// 单题那一场就是那道题自己的 Part；随机抽题那一场是抽到的那几段。
+    /// Part 落在 1–3 之外的脏数据不算任何一段（它会在材料清单末尾被单独点名，见 `strayMaterialNote`）。
+    private static func partsWithMaterial(_ setup: SessionSetup) -> Set<ExamPart> {
+        Set(setup.materialQuestions.compactMap { ExamPart(questionPart: $0.part) })
     }
 
     /// 一场练习按顺序跑哪几段规则。
@@ -480,19 +579,40 @@ public enum ExaminerPrompt {
     /// 规则正文**之前**那一段：这一场到底是什么形状。单 Part 1 / 单 Part 2 不需要
     /// （它们的 section rules 本身已经说清了），其余三种都需要。
     private static func sessionFraming(for setup: SessionSetup) -> String? {
-        if setup.focusPart == .part3 { return part3OnlyFraming }
+        if setup.focusPart == .part3 {
+            let discussions = materialCount(setup, .three)
+            guard discussions > 1 else { return part3OnlyFraming }
+            // 冻住的正文一个字不动，只在后面补一句说清「下面有好几个主题」。
+            // 不补的话，那段话说的是「下面那个主题」，而清单里列着三个。
+            return part3OnlyFraming + "\n\nThis session runs \(discussions) separate discussions, "
+                + "one after another. Each theme listed below is the background of its own "
+                + "discussion; finish one before you start the next."
+        }
         if setup.focusPart == .fullMock {
             return """
             Section rules (full mock):
             - Run Part 1, Part 2, and Part 3 in order. Do not deliver a review, summary, or score between parts.
               This does NOT cancel the per-answer correction rule stated above, if one is in effect.
-            - The question supplied below belongs to one of the three parts. Choose your own material \
-            for the other two, staying on a related theme.
+            - \(fullMockMaterialRule(for: setup))
             - Each part keeps its own pacing and questioning rules, spelled out here:
             """
         }
         guard setup.focusPart.isCombined else { return nil }
         return combinedFraming(for: setup)
+    }
+
+    /// 全真模考那一段里「下面给的料算哪一段的」。
+    ///
+    /// **一份材料时那句话逐字冻住**（"…belongs to one of the three parts…"）：
+    /// 它是随机抽题之前每一场全真模考读到的原文，而这次改的是别的事。
+    /// 供了不止一份时才换成通用那句——它会点名哪几段有料、哪几段要自己挑，
+    /// 而这正是抽了一整套材料时非说清不可的。
+    private static func fullMockMaterialRule(for setup: SessionSetup) -> String {
+        guard setup.materialQuestions.count > 1 else {
+            return "The question supplied below belongs to one of the three parts. Choose your "
+                + "own material for the other two, staying on a related theme."
+        }
+        return suppliedMaterialRule(for: setup)
     }
 
     /// 组合档（1+2、1+3、2+3）那一段开场白。**一份模板，按 `parts` 生成**——
@@ -548,21 +668,32 @@ public enum ExaminerPrompt {
     /// **必须说死。** 一场里有两三段，而题目只有一道；不交代清楚的话，考官要么把这道题
     /// 在每一段里各问一遍，要么干脆整场只考它所属的那一段。
     private static func suppliedMaterialRule(for setup: SessionSetup) -> String {
-        guard let anchor = ExamPart(questionPart: setup.question.part),
-              setup.focusPart.includes(anchor) else {
+        let supplied = setup.focusPart.parts.filter { partsWithMaterial(setup).contains($0) }
+        guard !supplied.isEmpty else {
             // 走不到这里（`FocusPart.forExplicitSelection` 已经挡掉了题目不属于任何一段的组合），
             // 但真走到了也不许沉默：说清没有材料，让考官三段全部自选。
             return "No question material was supplied for any part of this session: choose your "
                 + "own material for every part, keeping all of them on one related theme."
         }
-        if anchor == .two && setup.focusPart.includes(.three) {
+        // 只有 Part 2 有材料、而这一场还要做 Part 3 时那一句。**措辞逐字保留**：
+        // 它是实测调出来的，「Part 3 必须留在这张卡的主题上」这件事全靠它。
+        if supplied == [.two] && setup.focusPart.includes(.three) {
             return "The question supplied below is the Part 2 cue card. The Part 3 discussion "
                 + "must stay on that same theme."
         }
-        let others = setup.focusPart.parts.filter { $0 != anchor }
-            .map(\.englishName).joined(separator: " and ")
-        return "The question supplied below is the material for \(anchor.englishName). "
-            + "Choose your own material for \(others), staying on a related theme."
+        let missing = setup.focusPart.parts.filter { !supplied.contains($0) }
+        // 一段有材料时那句话逐字保留（单题的每一场都走这一支）；
+        // 好几段都有材料是随机抽题才会出现的新情况，换一句主语才对得上。
+        let head = supplied.count == 1
+            ? "The question supplied below is the material for \(supplied[0].englishName)."
+            : "The material supplied below covers "
+                + supplied.map(\.englishName).joined(separator: " and ") + "."
+        guard !missing.isEmpty else {
+            return head + " Everything you need for this session is supplied; "
+                + "do not invent replacements for any of it."
+        }
+        return head + " Choose your own material for "
+            + missing.map(\.englishName).joined(separator: " and ") + ", staying on a related theme."
     }
 
     private static let ending = """
@@ -697,10 +828,24 @@ public enum ExaminerPrompt {
             + "topic they would like to discuss, then run a normal Part 3 discussion on it)"
     }
 
-    public static func build(setup: SessionSetup) -> String {
-        var blocks: [String] = [contract(for: setup.feedbackTiming)]
-        blocks.append(partRules(for: setup))
+    // MARK: - 材料清单
 
+    /// 这一场发给考官的材料。**一份材料与一整套材料分两条路走。**
+    ///
+    /// 分两条不是图省事：单题那条路上每一句话都是实测调出来的（见 `questionBlock`
+    /// 那一大段说明——`Describe` 的诱导、Part 3 主题改写、配不上时的明说）。
+    /// 把它改写成「一套材料里恰好只有一道」的通用形式，等于让**除随机抽题以外的每一场**
+    /// 都跟着一次重写走一遍，而那些措辞正是上一轮翻车之后才修回来的。
+    ///
+    /// 两条路共用同一批零件（`part3Theme`、`followupHeading`），所以措辞仍然只有一处定义。
+    private static func materialBlock(for setup: SessionSetup) -> String {
+        setup.materialQuestions.count > 1
+            ? multiMaterialBlock(for: setup)
+            : singleMaterialBlock(for: setup)
+    }
+
+    /// 一道题那一场的材料块。**与从前逐字一致。**
+    private static func singleMaterialBlock(for setup: SessionSetup) -> String {
         var block = questionBlock(for: setup)
         if !setup.question.followups.isEmpty {
             block += "\n\n\(followupHeading(forPart: setup.question.part))\n"
@@ -709,7 +854,125 @@ public enum ExaminerPrompt {
         if let part3Block = part3ReferenceBlock(for: setup) {
             block += "\n\n\(part3Block)"
         }
-        blocks.append(block)
+        return block
+    }
+
+    /// 随机抽题那一场的材料清单：每一段有几份、每一份是什么、参考问句挂在哪一份下面。
+    ///
+    /// ## 它补掉的洞
+    ///
+    /// 组合档从前只供一段的料，其余几段考官自己编（`suppliedMaterialRule` 里那句
+    /// "Choose your own material for …"）——题库里 258 道真题在那几段上白放着。
+    /// 随机抽题一次供全，所以提示词必须说得出「这一段有三份材料，按顺序来」。
+    ///
+    /// ## 编号是给配对用的
+    ///
+    /// 「第 2 组讨论接的是第 1 张卡」这件事必须写出来。不写的话考官只能自己猜配对，
+    /// 而它猜错时屏幕上一切正常：考生做完一张卡的独白，接着被问一段不相干的讨论。
+    private static func multiMaterialBlock(for setup: SessionSetup) -> String {
+        let material = setup.materialQuestions
+        var sections: [String] = [multiMaterialHeader]
+        for part in ExamPart.allCases {
+            let items = material.filter { $0.part == part.rawValue }
+            guard !items.isEmpty else { continue }
+            var lines = [materialHeading(part: part, count: items.count)]
+            for (offset, item) in items.enumerated() {
+                lines.append(materialItem(part: part, number: offset + 1,
+                                          item: item, material: material))
+            }
+            sections.append(lines.joined(separator: "\n\n"))
+        }
+        if let stray = strayMaterialNote(in: material) { sections.append(stray) }
+        return sections.joined(separator: "\n\n")
+    }
+
+    private static let multiMaterialHeader = """
+    Session material — everything below comes from the learner's own question bank, and it is \
+    listed in the order you will use it. Work through all of it: do not skip an item, do not \
+    reorder the parts, and do not invent a replacement for anything listed here.
+    """
+
+    /// 只有一份材料时**不写那句「按这个顺序、一次一个」**：一张卡谈不上顺序，
+    /// 一句多余的话读起来像是漏了点什么。
+    private static func materialHeading(part: ExamPart, count: Int) -> String {
+        switch part {
+        case .one:
+            guard count > 1 else { return "PART 1 material — 1 topic:" }
+            return "PART 1 material — \(count) topics, to be covered in this order:"
+        case .two:
+            guard count > 1 else { return "PART 2 material — 1 cue card:" }
+            return "PART 2 material — \(count) cue cards, to be presented one at a time "
+                + "in this order:"
+        case .three:
+            guard count > 1 else { return "PART 3 material — 1 discussion:" }
+            return "PART 3 material — \(count) discussions, to be held one at a time in this order:"
+        }
+    }
+
+    /// 清单里的一份材料。
+    ///
+    /// Part 1 与 Part 3 的题干**恒等于 topic**（`TopicQuestions`：一话题一题），
+    /// 所以那两段只印一行；两者不等（用户自己用 CSV 加的题）时把话题名一并印出来，
+    /// 不然那个字段就凭空消失了。
+    private static func materialItem(part: ExamPart, number: Int, item: Question,
+                                     material: [Question]) -> String {
+        var text: String
+        switch part {
+        case .one:
+            let label = item.topic.isEmpty || item.topic == item.prompt
+                ? "Topic \(number):" : "Topic \(number) (topic: \(item.topic)):"
+            text = "\(label) \(item.prompt)"
+        case .two:
+            text = "Card \(number) (topic: \(item.topic)):\n\(item.prompt)"
+        case .three:
+            // 主题一律走 `part3Theme` 改写。题库里 Part 3 的题干就是它所属 cue card 的原文，
+            // 原样印出去的话，那句 `Describe …` 会把考官引去出一张卡——
+            // 这正是用户 2026-08-08 实测踩到的那一次。
+            text = "Discussion \(number) — \(part3Pairing(for: item, in: material))"
+                + "\nTheme: \(part3Theme(for: item))"
+        }
+        if !item.followups.isEmpty {
+            text += "\n\(followupHeading(forPart: item.part))\n"
+                + item.followups.map { "- \($0)" }.joined(separator: "\n")
+        }
+        return text
+    }
+
+    /// 这一组讨论题接的是第几张卡。**配不上时必须明说**（铁律 5）：
+    /// 不说的话，考官会自己把它接到手边最近的那张卡后面，而那两者讲的不是一件事。
+    private static func part3Pairing(for part3: Question, in material: [Question]) -> String {
+        let cards = material.filter { $0.part == 2 }
+        guard !cards.isEmpty else {
+            return "there is no Part 2 in this session, so it stands on its own."
+        }
+        guard let card = LinkedPart3.cueCard(for: part3, among: cards),
+              let position = cards.firstIndex(where: { $0.id == card.id }) else {
+            return "none of the cue cards above belongs to it; treat it as a discussion topic "
+                + "of its own, and do not tie it back to a card."
+        }
+        return "this is the discussion that belongs to Card \(position + 1) above. "
+            + "Hold it immediately after that long turn."
+    }
+
+    /// 材料里混进了 Part 落在 1–3 之外的题（手改坏的题库、别处塞进来的 `SessionSetup`）。
+    ///
+    /// **不许当没看见。** 静静滤掉的话，用户在抽签结果里数到的份数和考场上被问到的对不上，
+    /// 而屏幕上没有任何异样。正常路径走不到这里（`RandomDraw` 按 Part 取题）。
+    private static func strayMaterialNote(in material: [Question]) -> String? {
+        let strays = material.filter { ExamPart(questionPart: $0.part) == nil }
+        guard !strays.isEmpty else { return nil }
+        return """
+        Unclassified material — \(strays.count) item(s) in the learner's question bank carry a \
+        part number outside 1–3, so they are not listed under any part above. Use one only if it \
+        genuinely fits the part you are on; otherwise leave it unasked:
+        \(strays.map { "- (part \($0.part)) \($0.prompt)" }.joined(separator: "\n"))
+        """
+    }
+
+    public static func build(setup: SessionSetup) -> String {
+        var blocks: [String] = [contract(for: setup.feedbackTiming)]
+        blocks.append(partRules(for: setup))
+        blocks.append(materialBlock(for: setup))
 
         blocks.append("Target session length: about \(setup.durationMinutes) minutes.")
 

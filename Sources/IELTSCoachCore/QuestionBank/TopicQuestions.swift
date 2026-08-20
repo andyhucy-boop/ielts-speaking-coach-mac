@@ -122,6 +122,15 @@ public enum QuestionBankMigration {
                 remap(&link.originalQuestionId)
                 session.retraining = link
             }
+            // 随机抽题那一场安排到的整组题号同样要搬。不搬的话，那几道题的「已练」标记
+            // 在换季重导之后再也算不回来（`CoachState.reconcilePracticedStatus` 按 id 找题），
+            // 于是「只抽没练过的」会把它们当新题一遍遍再抽出来——不报错，只是账错了。
+            //
+            // **搬完要去重**，理由和下面计划那处一样：一场里的两道旧碎片会搬到同一道话题题上。
+            if var drawn = session.drawnQuestionIds {
+                for slot in drawn.indices { remap(&drawn[slot]) }
+                session.drawnQuestionIds = deduplicated(drawn)
+            }
         }
 
         for index in state.sessions.indices { remap(&state.sessions[index]) }
