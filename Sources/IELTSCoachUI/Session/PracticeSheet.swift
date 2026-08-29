@@ -33,13 +33,13 @@ struct PracticeSheet: View {
     /// **第二个参数不能省。** 省掉的话，用户在这张弹层上勾的 Part 不会有任何去处：
     /// 勾选框点得动、`SessionSetup` 照样是那道题自己的 Part，
     /// 而屏幕上一个字都不会提——本项目最忌讳的那种失败。
-    let makeSetup: (Question, FocusPart?) -> SessionSetup
+    let makeSetup: (Question, FocusPart?, String) -> SessionSetup
     /// 把**抽出来的一整组题**变成一场练习（`PracticeRouteResolver.setup(forDraw:…)`）。
     /// 抽了个空时返回 nil，那时「开始练习」是灰的。
     ///
     /// 与 `makeSetup` 分成两个闭包而不是合成一个：一场随机抽题带的是一整套材料、
     /// 时长按份数算、考法按**真的抽到的**那几段算——三件事没有一件和挑一道题相同。
-    let makeDrawSetup: (RandomDraw.Result) -> SessionSetup?
+    let makeDrawSetup: (RandomDraw.Result, String) -> SessionSetup?
     let onClose: () -> Void
 
     /// 这一场最终定下来的设置。nil 时显示挑题列表。
@@ -78,8 +78,8 @@ struct PracticeSheet: View {
     init(runner: PracticeRunner, route: PracticeRoute, preselected: SessionSetup?,
          candidates: [Question], defaultParts: Set<Int> = PracticePicker.unspecified,
          planFocusPart: FocusPart? = nil,
-         makeSetup: @escaping (Question, FocusPart?) -> SessionSetup,
-         makeDrawSetup: @escaping (RandomDraw.Result) -> SessionSetup? = { _ in nil },
+         makeSetup: @escaping (Question, FocusPart?, String) -> SessionSetup,
+         makeDrawSetup: @escaping (RandomDraw.Result, String) -> SessionSetup? = { _, _ in nil },
          onClose: @escaping () -> Void) {
         self.runner = runner
         self.route = route
@@ -96,6 +96,24 @@ struct PracticeSheet: View {
     }
 
     private var drawModel: RandomDrawViewModel { RandomDrawViewModel(questions: candidates) }
+
+    /// **这一场只盯什么**（用户自己写的一句话）。空串 = 没定，与从前完全一样。
+    ///
+    /// ## 为什么这个框以前没有
+    ///
+    /// 整条管道**早就修好了、也在跑**：`SessionSetup.goal` 会进考官提示词里
+    /// 「本次唯一目标」那一段，也会随这一场存进训练记录、进复盘请求；
+    /// 复训路线和「继续上次」都能带目标进去，命令行 `coach practice --goal` 也支持。
+    /// 缺的只是一个能让人打字的地方——在这之前**整个 App 一个文本输入框都没有**。
+    /// 于是他绝大多数练习都是没有焦点的泛泛一场。
+    ///
+    /// ## 为什么只有这两条路线有这个框
+    ///
+    /// 「按计划练今天」「继续上次练习」点下去就直接开练（`preselected` 非 nil，
+    /// `body` 里那个 `.task` 立刻 `begin`）——那是刻意的，成品标准第 1 条数的就是点击次数。
+    /// 要给它们加这个框，就得在中间插一屏「确认」，等于给每天用得最多的两条路各加一次点击。
+    /// 这两条本来也各有出处：复训带的是复盘给的目标，「继续上次」带的是上一场那个。
+    @State private var goal = ""
 
     private var partPicker: PracticePicker { PracticePicker(questions: candidates) }
 
@@ -228,6 +246,7 @@ struct PracticeSheet: View {
                     .foregroundStyle(Palette.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
                 partSection
+                goalField
                 if let notice = partPicker.emptyNotice(forParts: partSelection) {
                     emptyPartNotice(notice)
                 } else {
@@ -270,6 +289,7 @@ struct PracticeSheet: View {
                     warningLine($0)
                 }
             }
+            goalField
             drawButton
             drawOutcome
         }
@@ -439,6 +459,31 @@ struct PracticeSheet: View {
                 .foregroundStyle(Palette.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
+        }
+    }
+
+    /// **「这一场只盯什么」。** 用户自己写一句话，它会进考官提示词里
+    /// 「本次唯一目标」那一段，也会随这一场存进训练记录、进复盘请求。
+    ///
+    /// 整条管道早就修好了，缺的只是这个能打字的地方（见 `goal`）。
+    ///
+    /// **占位符里给的是一句真的能照着写的话**，不是「请输入目标」：
+    /// 一个刚打开它的人多半不知道这里该写什么，而写不出来就会跳过它，
+    /// 这个框也就白加了。
+    private var goalField: some View {
+        VStack(alignment: .leading, spacing: Spacing.xs) {
+            Text("这一场只盯什么？（可以不填）")
+                .font(Typography.label)
+                .foregroundStyle(Palette.textSecondary)
+            TextField("例如：每个回答后面补一个原因和例子",
+                      text: $goal)
+                .textFieldStyle(.roundedBorder)
+                .font(Typography.body)
+            Text("填了的话，考官在考试过程中不会提它，只有最后的复盘会针对它给反馈——"
+                 + "所以不会影响你正常发挥。")
+                .font(Typography.label)
+                .foregroundStyle(Palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -903,7 +948,15 @@ struct PracticeSheet: View {
     /// 抽出来这一组对应的那一场。抽了个空、或者还没抽时是 nil。
     private var drawnSetup: SessionSetup? {
         guard let drawn, !isRolling else { return nil }
-        return makeDrawSetup(drawn)
+        return makeDrawSetup(drawn, trimmedGoal)
+    }
+
+    /// 去掉首尾空白的那句目标。**必须在这里去一次**：只打了几个空格的话，
+    /// `ExaminerPrompt` 那边判的是 `goal.trimmingCharacters(...).isEmpty`，
+    /// 提示词会正确地跳过整段，而训练记录里却存着一句看不见的空白——
+    /// 复盘报告页那行「本次目标：」就会显示成一片空白。
+    private var trimmedGoal: String {
+        goal.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func startPicked() {
@@ -916,7 +969,7 @@ struct PracticeSheet: View {
         // 考法跟着屏幕上那三个勾选框走。翻译规则在 `PracticePicker.mode(forParts:)`，
         // 这里不另判一次——另判一份的话，勾选框显示的条件和它生效的条件迟早会分家。
         let mode = PracticePicker.mode(forParts: partSelection)
-        Task { await begin(makeSetup(question, mode)) }
+        Task { await begin(makeSetup(question, mode, trimmedGoal)) }
     }
 
     /// 「放弃这一场」/「取消」。
@@ -981,11 +1034,11 @@ private struct InertPasteboard: PasteboardAccess {
         ],
         defaultParts: PracticePicker.unspecified,
         planFocusPart: nil,
-        makeSetup: { question, mode in
+        makeSetup: { question, mode, goal in
             let focusPart = mode.map { FocusPart.forExplicitSelection($0, questionPart: question.part) }
                 ?? FocusPart.inferred(fromQuestionPart: question.part)
             return SessionSetup(question: question, focusPart: focusPart,
-                                durationMinutes: focusPart.defaultDurationMinutes, goal: "")
+                                durationMinutes: focusPart.defaultDurationMinutes, goal: goal)
         },
         onClose: {})
 }
@@ -1006,11 +1059,12 @@ private struct InertPasteboard: PasteboardAccess {
         route: .randomDraw,
         preselected: nil,
         candidates: bank,
-        makeSetup: { question, _ in
-            SessionSetup(question: question, focusPart: .part1, durationMinutes: 6, goal: "")
+        makeSetup: { question, _, goal in
+            SessionSetup(question: question, focusPart: .part1, durationMinutes: 6, goal: goal)
         },
-        makeDrawSetup: { draw in
-            PracticeRouteResolver.setup(forDraw: draw, defaults: RouteDefaults(), bank: bank)
+        makeDrawSetup: { draw, goal in
+            PracticeRouteResolver.setup(forDraw: draw, goal: goal,
+                                        defaults: RouteDefaults(), bank: bank)
         },
         onClose: {})
 }

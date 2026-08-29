@@ -370,13 +370,13 @@ final class PracticePickerTests: XCTestCase {
         XCTAssertTrue(start.contains("PracticePicker.mode(forParts: partSelection)"),
                       "「开始练习」没有把那几个勾带进这一场。勾点得动、"
                           + "练的却仍是那道题自己的 Part，而界面上看不出任何异样。"
-                          + "下一步：`makeSetup(question, PracticePicker.mode(forParts: partSelection))`。"
+                          + "下一步：`makeSetup(question, PracticePicker.mode(forParts: partSelection), trimmedGoal)`。"
                           + "实际取到的是：\n\(start)")
 
         // 今日训练页得把这个参数继续往解析器传，而且必须走 `chosen:` 那个入口：
         // 走 `mode:` 的话，三个全勾会被 `FocusPart.forSession` 静默降级成单 Part。
         let today = try SourceGuard.code("Today/TodayView.swift")
-        XCTAssertTrue(today.contains("makeSetup: { question, mode in"),
+        XCTAssertTrue(today.contains("makeSetup: { question, mode, goal in"),
                       "今日训练页的 `makeSetup` 没有接收用户当场勾的那几个 Part。")
         XCTAssertTrue(today.contains("chosen: mode"),
                       "今日训练页把勾选当成了学习计划的重点 Part（`mode:`）往下传，"

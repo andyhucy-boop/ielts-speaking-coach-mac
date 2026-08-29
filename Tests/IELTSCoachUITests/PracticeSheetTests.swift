@@ -125,7 +125,7 @@ final class PracticeSheetTests: XCTestCase {
         // `makeSetup` 现在收两个参数（题目 + 用户当场选的考法），所以这里钉的是
         // `makeSetup(question, mode)`——只钉 `makeSetup(question` 的话，把 `mode` 换成
         // 写死的 `nil` 照样能溜过去，而那正好就是「那颗开关拨了不算数」的形态。
-        for (needle, what) in [("makeSetup(question, mode)", "把选中的题变成这一场的设置"),
+        for (needle, what) in [("makeSetup(question, mode, trimmedGoal)", "把选中的题变成这一场的设置"),
                                ("begin(", "开练")] {
             SourceGuard.assertRenders(
                 needle, inBodyOf: "private func startPicked", of: Self.sheet,
@@ -406,6 +406,52 @@ final class PracticeSheetTests: XCTestCase {
             "record.circle", inBodyOf: "private var recordingBlock", of: Self.sheet,
             because: "录音指示没有那个 SF Symbol。下一步：用 `Image(systemName: \"record.circle\")`，"
                 + "**不要用 emoji**——emoji 在不同系统版本渲染不一致，也跟不了语义颜色。")
+    }
+
+    // MARK: - 「这一场只盯什么」（2026-08-20：整条管道早就在跑，缺的只是一个能打字的地方）
+
+    /// `SessionSetup.goal` 会进考官提示词的「本次唯一目标」、进训练记录、进复盘请求。
+    /// 在这之前**整个 App 一个文本输入框都没有**，所以除了复训和「继续上次」，
+    /// 每一场的目标都是空的——他绝大多数练习都是没有焦点的泛泛一场。
+    func testThePracticeSheetHasAPlaceToTypeThisSessionsGoal() throws {
+        let code = try SourceGuard.code(Self.sheet)
+        let field = try SourceGuard.memberBody(of: "private var goalField", in: code)
+        XCTAssertTrue(field.contains("TextField"), "没有真的输入框：\n\(field)")
+        XCTAssertTrue(field.contains("text: $goal"), "输入框没绑到 `goal` 上：\n\(field)")
+        // 占位符要给一句真能照着写的话。写「请输入目标」的话，一个不知道该写什么的人
+        // 会直接跳过它，这个框就白加了。
+        XCTAssertTrue(field.contains("例如："), "占位符没给例子：\n\(field)")
+    }
+
+    /// **两条「自己挑材料」的路线上都得有这个框。** 只挂一条的话，
+    /// 另一条上的用户永远没机会定这一场的焦点，而两条路看起来一模一样。
+    func testBothPickerRoutesShowTheGoalField() throws {
+        let code = try SourceGuard.code(Self.sheet)
+        for member in ["private var picker", "private var randomDrawPicker"] {
+            let body = try SourceGuard.memberBody(of: member, in: code)
+            XCTAssertTrue(body.contains("goalField"),
+                          "\(member) 里没有那个目标输入框。实际取到的是：\n\(body)")
+        }
+    }
+
+    /// 随机抽题那条路同样要把目标带进这一场——只接一条的话，
+    /// 输入框在另一条路上打得进字、却什么都不改（本项目最忌讳的静默失败）。
+    func testTheDrawnSessionCarriesTheGoalToo() throws {
+        let drawn = try SourceGuard.memberBody(of: "private var drawnSetup",
+                                               in: try SourceGuard.code(Self.sheet))
+        XCTAssertTrue(drawn.contains("makeDrawSetup(drawn, trimmedGoal)"),
+                      "随机抽题那一场没有带上目标。实际取到的是：\n\(drawn)")
+    }
+
+    /// 只打了几个空格时要当成「没填」。
+    ///
+    /// 不去空白的话：`ExaminerPrompt` 那边判的是 trim 之后空不空，会正确地跳过整段；
+    /// 而训练记录里却存着一句看不见的空白，复盘报告页那行「本次目标：」
+    /// 就会显示成一片空白——同一件事，两处两个答案。
+    func testAGoalOfOnlySpacesCountsAsNoGoal() throws {
+        let trimmed = try SourceGuard.memberBody(of: "private var trimmedGoal",
+                                                 in: try SourceGuard.code(Self.sheet))
+        XCTAssertTrue(trimmed.contains("trimmingCharacters"), trimmed)
     }
 
     /// 录音指示**必须是静止的**。

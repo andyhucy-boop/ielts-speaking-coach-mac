@@ -133,21 +133,27 @@ struct TodayView: View {
                           //
                           // `bank:` 是给「这张 cue card 自己那组 Part 3 追问」配对用的
                           //（`LinkedPart3`）；不传的话连着练那一场会白白扔掉题库里的真题。
-                          makeSetup: { question, mode in
+                          //
+                          // 第三个参数是他在弹层里写的那句「这一场只盯什么」。
+                          // 丢掉它的话，那个输入框就成了打得进字、却什么都不改的装饰品——
+                          // 而整条管道（考官提示词的「本次唯一目标」、训练记录、复盘请求）
+                          // 早就修好了在等它。
+                          makeSetup: { question, mode, goal in
                               guard let mode else {
                                   return PracticeRouteResolver.setup(
-                                      for: question, goal: "", defaults: defaults,
+                                      for: question, goal: goal, defaults: defaults,
                                       bank: app.state.questions)
                               }
                               return PracticeRouteResolver.setup(
-                                  for: question, goal: "", defaults: defaults,
+                                  for: question, goal: goal, defaults: defaults,
                                   chosen: mode, bank: app.state.questions)
                           },
                           // 抽出来的一整组同样走解析器取值，不在这里另拼一份：
                           // 另拼的那份一定会漏掉 feedbackTiming / part2PrepMode，
                           // 而且时长与考法要按**真的抽到的**那几段算（见那个方法的说明）。
-                          makeDrawSetup: { draw in
-                              PracticeRouteResolver.setup(forDraw: draw, defaults: defaults,
+                          makeDrawSetup: { draw, goal in
+                              PracticeRouteResolver.setup(forDraw: draw, goal: goal,
+                                                          defaults: defaults,
                                                           bank: app.state.questions)
                           },
                           onClose: { self.launch = nil })
