@@ -96,6 +96,10 @@ struct TodayView: View {
                     // 会把没改的那一次拦下来。
                     statsRow
                     recordingNotice
+                    // 摆在路线**上面**：这是一条要他当场决定的事，
+                    // 排到下面去的话，他会先开始新的一场，然后那条旧记录
+                    // 会一直挂在那儿每天问他一遍。
+                    unfinishedSessionCard
                     routes
                     recentPractice
                     issueTrends
@@ -431,6 +435,50 @@ struct TodayView: View {
                 }
             }
         }
+    }
+
+    /// **上一场练习没有正常结束**（崩溃、误关窗口、Mac 重启）时那张卡片。
+    ///
+    /// 在这之前，一场练习在按下「我练完了」之前磁盘上一个字都没有，
+    /// 中途崩掉就等于没发生过。现在开练那一刻就占好位置、逐字稿边采边存
+    /// （`PracticeRunner.beginSessionRecord`），这张卡片是它的出口。
+    ///
+    /// **两颗按钮都要有，一颗都不能省**：自动收下会让「本周训练」凭空多一次
+    /// （他可能只是开了个头就去干别的了），自动丢掉丢的是他半小时的东西。
+    /// 这两种情况在数据上分不开，分得开的唯一办法是问他（见 `UnfinishedSession`）。
+    @ViewBuilder
+    private var unfinishedSessionCard: some View {
+        if let session = UnfinishedSession.pending(in: app.state) {
+            CoachCard {
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    HStack(alignment: .top, spacing: Spacing.sm) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .foregroundStyle(Palette.warning)
+                        Text(UnfinishedSession.notice(for: session, in: app.state))
+                            .font(Typography.body)
+                            .foregroundStyle(Palette.textPrimary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
+                    }
+                    HStack(spacing: Spacing.sm) {
+                        Button("存进训练记录") { keepUnfinished(session) }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Palette.accent)
+                        Button("丢掉这一场") { discardUnfinished() }
+                            .buttonStyle(.bordered)
+                        Spacer(minLength: 0)
+                    }
+                }
+            }
+        }
+    }
+
+    private func keepUnfinished(_ session: PracticeSession) {
+        app.mutate { UnfinishedSession.keep(session, in: &$0) }
+    }
+
+    private func discardUnfinished() {
+        app.mutate { UnfinishedSession.discard(in: &$0) }
     }
 
     /// 每条路线卡片里那几行「具体是什么」。

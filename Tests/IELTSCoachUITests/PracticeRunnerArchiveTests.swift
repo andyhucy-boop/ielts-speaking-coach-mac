@@ -262,6 +262,62 @@ final class PracticeRunnerArchiveTests: XCTestCase {
 
     // MARK: - 测试装置
 
+    // MARK: - 开练那一刻就在盘上占好位置（2026-08-20）
+
+    /// 在这之前，一场练习在按下「我练完了」之前**磁盘上一个字都没有**：
+    /// 练到一半崩了、Mac 重启、误按退出，这半小时就等于没发生过。
+    func testStartingAPracticeImmediatelyWritesAPlaceholderToDisk() async throws {
+        let runner = self.runner()
+        try await runner.start(setup: Self.setup(goal: "补一个原因和例子"))
+
+        let saved = try store.load()
+        let placeholder = try XCTUnwrap(saved.currentSession,
+                                        "开练之后盘上一条记录都没有——中途崩了这一场就没了")
+        XCTAssertEqual(placeholder.questionId, "p1-home-001")
+        XCTAssertEqual(placeholder.goal, "补一个原因和例子")
+        XCTAssertFalse(placeholder.startedAt.isEmpty)
+        XCTAssertTrue(placeholder.endedAt.isEmpty, "还没练完，不该有结束时间")
+        // **不许混进正式记录**：那会让「本周练了几次」把一场没练完的也算进去。
+        XCTAssertTrue(saved.sessions.isEmpty, "还没练完就进了训练记录")
+    }
+
+    /// 采到的逐字稿要**边采边存**。不存的话，崩溃之后捡起来的是一条什么都没有的记录，
+    /// 比没有更让人困惑（`UnfinishedSession.pending` 也正是靠它判断值不值得问）。
+    func testTheTranscriptIsCheckpointedWhileThePracticeIsStillRunning() async throws {
+        let runner = self.runner(sampler: Self.scriptedSampler(), samplingInterval: 0.01)
+        try await runner.start(setup: Self.setup())
+
+        let sawTurns = await Self.waitUntil(seconds: 2) {
+            ((try? self.store.load())?.currentSession?.transcript.count ?? 0) > 0
+        }
+        XCTAssertTrue(sawTurns, "练习进行中，盘上那条记录的逐字稿一直是空的")
+    }
+
+    /// 一场练习自始至终只有一个编号：开练时分配、收尾时沿用。
+    /// 各分一个的话，同一场会在训练记录里留下两条。
+    func testTheSessionKeepsTheSameIDFromStartToFinish() async throws {
+        let runner = self.runner()
+        try await runner.start(setup: Self.setup())
+        let startedID = try XCTUnwrap(try store.load().currentSession?.id)
+        try await runner.finishPractice()
+
+        XCTAssertEqual(runner.finishedSessionID, startedID)
+        let saved = try store.load()
+        XCTAssertEqual(saved.sessions.map(\.id), [startedID])
+        XCTAssertNil(saved.currentSession, "练完了那个占位没清掉，下次开 App 会问「上一场没结束」")
+    }
+
+    /// **明确按了「放弃这一场」时那个占位要清掉。** 不清的话，下次开 App 会问他
+    /// 「上一场没正常结束，要不要留着」——把他刚刚做过的决定再问一遍。
+    func testAbandoningClearsThePlaceholderInsteadOfAskingAgainLater() async throws {
+        let runner = self.runner()
+        try await runner.start(setup: Self.setup())
+        XCTAssertNotNil(try store.load().currentSession)
+
+        runner.cancel()
+        XCTAssertNil(try store.load().currentSession)
+    }
+
     // MARK: - 随机抽题：一场抽到的整组题都要记下来
 
     /// 一场抽了 3 道全练了，训练记录却只记开场那一道的话，另外两道会永远停在「新题」：

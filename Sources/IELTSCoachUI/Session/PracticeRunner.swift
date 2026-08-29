@@ -222,6 +222,19 @@ public final class PracticeRunner {
                 _ = try $0.waitForVoiceComposer(timeout: timeout)
             }
             try await run(.sendingPrompt, ticket: ticket) { try $0.sendText(prompt, into: .voice) }
+            // **开练这一刻就在盘上占好位置。**
+            //
+            // 在这之前，一场练习在用户按下「我练完了」之前**磁盘上一个字都没有**：
+            // 练到一半 App 崩了、Mac 重启、误按退出，这半小时就等于没发生过——
+            // 不进「本周 N/5」、学习计划不前进、题目不打「已练」，
+            // 那段录音变成一个没人认领的孤儿文件。
+            //
+            // 上游文档里那句话很直白：不要等复盘生成完才保存训练记录。
+            //
+            // 写的是 `state.currentSession` 而不是 `sessions`：这一场还没结束，
+            // 混进正式记录里会让「本周练了几次」把一场没练完的也算进去。
+            // 下次开 App 时由「今日训练」页把它捡起来（`UnfinishedSession`）。
+            beginSessionRecord(setup: setup)
             beginCollectingTranscript()
             beginRecording()
             stage = .practicing
@@ -297,6 +310,54 @@ public final class PracticeRunner {
     ///
     /// 早一步的话，那条两千字符的考官提示词就不会被当成背景板，而是被当成对话内容
     /// 采进逐字稿里——而它恰恰是屏幕上最长的一段文字。
+    /// 开练这一刻在 `state.currentSession` 上占好位置。
+    ///
+    /// 编号在这里就分配好，`finishPractice` 会沿用它（那边本来就是
+    /// `currentSessionID ?? SessionID.next(...)`）——所以一场练习自始至终只有一个编号。
+    ///
+    /// **写不进去不算失败，但要说出来。** 这是一道保险，不是练习本身：
+    /// 因为它开不了练是本末倒置。但一声不响地不保险，就等于用户以为有保险而其实没有。
+    private func beginSessionRecord(setup: SessionSetup) {
+        let formatter = ISO8601DateFormatter()
+        do {
+            let sessionID = try store.mutate { state -> String in
+                let id = SessionID.next(existing: state.sessions, now: self.now(),
+                                        timeZone: .current)
+                state.currentSession = PracticeSession(
+                    id: id, questionId: setup.question.id, focusPart: setup.focusPart,
+                    startedAt: formatter.string(from: self.startedAt ?? self.now()),
+                    endedAt: "", goal: setup.goal, transcript: [],
+                    reportPath: "", recordingPath: "",
+                    drawnQuestionIds: self.drawnQuestionIds(in: setup))
+                return id
+            }
+            currentSessionID = sessionID
+        } catch {
+            transcriptNotice = "这一场没能在开练时先记下来：\(error.localizedDescription) "
+                + "练习本身不受影响，照常练；只是万一中途崩溃或误关窗口，这一场救不回来。"
+                + "下一步：确认数据目录可写（默认在「资源库 › Application Support › "
+                + "IELTS Speaking Coach」）。"
+        }
+    }
+
+    /// 把已经采到的逐字稿存进 `state.currentSession`。
+    ///
+    /// **每采一次存一次。** 上游是「逐字稿一变就在 450 毫秒后存一次」，本工具的采样
+    /// 本来就是定时的（默认 2.5 秒一次），跟着它走即可，不必再加一层节流。
+    ///
+    /// 写盘失败**一个字都不说**：这一路每 2.5 秒跑一次，说了会刷屏，
+    /// 而真正要紧的那次失败（开练时占不上位置）在 `beginSessionRecord` 里已经说过了。
+    private func checkpointTranscript() {
+        guard let sessionID = currentSessionID else { return }
+        let turns = collector.turns
+        guard !turns.isEmpty else { return }
+        try? store.mutate { state in
+            guard var session = state.currentSession, session.id == sessionID else { return }
+            session.transcript = turns
+            state.currentSession = session
+        }
+    }
+
     private func beginCollectingTranscript() {
         collector.begin()
         samplingTask = Task { [weak self, samplingInterval] in
@@ -304,6 +365,9 @@ public final class PracticeRunner {
                 try? await Task.sleep(for: .seconds(samplingInterval))
                 if Task.isCancelled { return }
                 self?.collector.tick()
+                // 采完就存。不存的话，`currentSession` 里永远是一份空逐字稿，
+                // 崩溃之后捡起来的是一条什么都没有的记录——比没有更让人困惑。
+                self?.checkpointTranscript()
             }
         }
     }
@@ -524,6 +588,12 @@ public final class PracticeRunner {
         // 所以界面绝不许在同一帧把窗口关掉——那句话会一帧都没画出来就没了。
         finalizeRecording()
         collector.abandon(reason: "你中途取消了这次练习。")
+        // **把盘上那个占位清掉。** 他是明确按了「放弃这一场」的，
+        // 下次开 App 再问他一次「上一场没正常结束，要不要留着」是把已经做过的决定
+        // 再问一遍；而那条记录里的逐字稿去哪儿了，下面那段交代已经说过了。
+        try? store.mutate { state in
+            if state.currentSession?.id == self.currentSessionID { state.currentSession = nil }
+        }
         // **这一句此前整条取消路径上都没有。** 收集器把「这一场没有正常走完、
         // 中间有几次没读到界面」那段说明生成出来了，却没有任何人把它交给界面，
         // 于是采样失败连同「已经记下几条」一起悄悄没了——正是本项目最忌讳的失败形态。
