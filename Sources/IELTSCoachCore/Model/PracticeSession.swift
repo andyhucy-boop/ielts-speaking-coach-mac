@@ -34,10 +34,16 @@ public struct PracticeSession: Codable, Equatable, Sendable, Identifiable {
     /// 所以普通练习写出去的 state.json 一个字节都没变（与 `retraining` 同一套做法），
     /// 旧版本 App 与上游 Windows 版照样读得出来。
     ///
-    /// **口径是「这一场安排了哪几道」，不是「他真的答完了哪几道」**：练习记录在开练那一刻
-    /// 就建好了（`PracticeRunner.upsertSession`），中途放弃同样会留下这一组 id。
-    /// 这与开场那一道题的既有行为完全一致（它也是一开练就记），
+    /// **口径是「这一场安排了哪几道」，不是「他真的答完了哪几道」**：这一组 id 在
+    /// **点「我练完了」那一刻**随整条记录一起落盘（`PracticeRunner.finishPractice`
+    /// → `upsertSession`），与开场那一道题的既有口径完全一致。
     /// 换成「答完才算」需要逐题回执，而语音会话里根本拿不到那种回执。
+    ///
+    /// > **更正（2026-08-20 晚）**：这段话原先写的是「练习记录在开练那一刻就建好了，
+    /// > 中途放弃同样会留下这一组 id」。**两句都是反的。**
+    /// > `upsertSession` 全工程只有两个调用点，都在收尾链路上（`finishPractice`
+    /// > 与 `archive`）；而 `cancel()` 一个字都不写盘——放弃那一场既不进训练记录，
+    /// > 也不会把任何题标成已练。行为本身没问题，写错的是这段说明。
     public var drawnQuestionIds: [String]?
 
     // 合成的 memberwise init 是 internal 的，App target 与 MCP target 构造不了。
