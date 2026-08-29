@@ -34,6 +34,31 @@ public struct TrainingStats: Equatable, Sendable {
 
     /// 本周有记录、但算不出时长的场次（缺 endedAt，或 endedAt 不晚于 startedAt）。
     public let sessionsMissingDuration: Int
+    /// **一场练了多久（分钟）。** 读不出起止时间、或者结束早于开始时返回 nil。
+    ///
+    /// 单独拎出来是因为界面也要显示它（训练记录每一行、复盘报告页顶上那一行），
+    /// 而**那两处必须和本周时长用的是同一套算法**：各算各的话，
+    /// 「本周开口时长 38 分钟」和逐行加起来的数会对不上，而用户没办法知道哪个是真的。
+    ///
+    /// **这里不截断。** 截断（超过 2 小时按 2 小时计）是**汇总**那一侧的事——
+    /// 逐行显示时该如实说「3 小时 12 分」，那正是他要据以认出「哪几场忘了点结束」的东西。
+    /// 首页那句「有 N 场超过 2 小时…下一步：到训练记录页核对这几场」
+    /// 在这之前是一张空头支票：那一页每行只有日期，既没时刻也没时长，没有任何字段能用来认。
+    public static func minutes(of session: PracticeSession) -> Int? {
+        guard let started = CoachTime.parse(session.startedAt),
+              let ended = CoachTime.parse(session.endedAt),
+              ended > started else { return nil }
+        return Int((ended.timeIntervalSince(started) / 60).rounded())
+    }
+
+    /// 一场时长写成给人看的那句话。读不出来时说清读不出来，不要显示成「0 分钟」——
+    /// 练了 40 分钟却看到 0 分钟，他会以为工具坏了。
+    public static func durationText(of session: PracticeSession) -> String {
+        guard let minutes = minutes(of: session) else { return "时长未知" }
+        guard minutes >= 60 else { return "\(minutes) 分钟" }
+        return "\(minutes / 60) 小时 \(minutes % 60) 分钟"
+    }
+
     /// 本周超过 maxCountedMinutesPerSession 被截断的场次。
     public let cappedSessionCount: Int
     /// startedAt 与 id 都解析不出时间、因此进不了任何一周的场次。
@@ -82,14 +107,16 @@ public struct TrainingStats: Equatable, Sendable {
             guard let week, week.contains(started) else { continue }
             weeklyDone += 1
 
-            guard let ended = CoachTime.parse(session.endedAt), ended > started else {
-                // 缺结束时间、或结束时间早于开始时间。按 0 计入，但必须报出来——
-                // 用户练了 40 分钟却看到 0 分钟，会以为工具坏了。
+            // 缺结束时间、或结束时间早于开始时间。按 0 计入，但必须报出来——
+            // 用户练了 40 分钟却看到 0 分钟，会以为工具坏了。
+            //
+            // **走 `minutes(of:)` 那一份，不在这里另算一遍**：界面上逐行显示的时长
+            // 用的也是它，两处各算各的话，「本周开口时长」和逐行加起来的数会对不上。
+            // `Self.` 不能省：这个作用域里有个叫 `minutes` 的累加变量，会把静态方法遮住。
+            guard let raw = Self.minutes(of: session) else {
                 missingDuration += 1
                 continue
             }
-
-            let raw = Int((ended.timeIntervalSince(started) / 60).rounded())
             if raw > maxCountedMinutesPerSession {
                 capped += 1
                 minutes += maxCountedMinutesPerSession

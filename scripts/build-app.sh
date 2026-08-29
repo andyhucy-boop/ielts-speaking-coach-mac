@@ -52,6 +52,30 @@ fi
 BUILD_COMMIT="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
+# ── 先跑测试，再打包 ────────────────────────────────────────────────
+#
+# **这一步以前没有。** 而这个脚本会「先删掉再拷贝」——打一次包就把每天在用的那份
+# App 顶掉（见文件末尾的安装那一段）。改坏了也照样装上，要等到某天练到一半才发现。
+#
+# 还有一条更隐蔽的：「版本号必须和更新日志对得上」那道守卫
+# （`PackagingContractTests`）只在跑测试时生效，而打包这一刻它本来是关着的。
+#
+# 留一个逃生口：某天一条不相干的红测试不该把人彻底挡在「拿不到任何新包」的门外。
+# 用的时候屏幕上会明说这一次没验过。
+if [ "${SKIP_TESTS:-0}" = "1" ]; then
+    echo "⚠️  跳过了测试（SKIP_TESTS=1）。这次打出来的包没有经过验证。"
+else
+    echo "▶︎ 跑测试…（两千多条，二十秒出头；急着出包可以用 SKIP_TESTS=1 跳过）"
+    if ! swift test; then
+        echo ""
+        echo "❌ 测试没过，**不打包**。"
+        echo "   现在装着的那份 App 一个字节都没动，你可以照常用它。"
+        echo "   下一步：把上面第一条红色的失败修掉再跑一次；"
+        echo "   确实要带着这条失败出包的话：SKIP_TESTS=1 ./scripts/build-app.sh"
+        exit 1
+    fi
+fi
+
 echo "▶︎ 编译…"
 swift build -c release --product IELTSCoachApp
 

@@ -132,8 +132,9 @@ public enum QuestionBankFile {
                 throw CoachError.questionBankInvalid(
                     "「\(fileName)」里没有可提取的文字，它多半是扫描件（整页都是图片）。"
                         + "下一步：换一份文字版 PDF；"
-                        + "或者用系统「预览」打开它，看看能不能选中并复制其中的文字——"
-                        + "选不中就说明确实是扫描件，需要先做一次文字识别，"
+                        + "或者用系统「预览」打开它，全选（⌘A）之后看看能不能复制出文字："
+                        + "复制出来是乱码或者一个字都粘不出来，就说明确实是扫描件，"
+                        + "需要先做一次文字识别，"
                         + "再把题目整理成 CSV（第一行 id,part,topic,prompt,followups）导入。")
             }
             return text

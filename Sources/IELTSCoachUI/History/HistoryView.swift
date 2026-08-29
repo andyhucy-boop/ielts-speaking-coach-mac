@@ -165,6 +165,12 @@ struct HistoryView: View {
                                     .foregroundStyle(Palette.textSecondary)
                                 Spacer(minLength: Spacing.sm)
                                 recordingBadge(row)
+                                // 时长排在条数前面：它是首页那句「有 N 场超过 2 小时…
+                                // 到训练记录页核对这几场」唯一能兑现的字段。
+                                Text(row.durationText)
+                                    .font(Typography.label)
+                                    .monospacedDigit()
+                                    .foregroundStyle(Palette.textSecondary)
                                 // 等宽数字：条数从 9 跳到 12 时整行不该跟着抖。
                                 Text(row.turnCountText)
                                     .font(Typography.label)

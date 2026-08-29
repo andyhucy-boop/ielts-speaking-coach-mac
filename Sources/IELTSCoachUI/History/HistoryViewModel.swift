@@ -11,6 +11,15 @@ public struct HistoryRow: Equatable, Identifiable, Sendable {
     /// **但绝不能因此把这条记录藏起来**——凭空消失会让用户以为练习记录丢了。
     public let questionIsMissing: Bool
     public let turnCountText: String
+    /// 这一场练了多久（「12 分钟」/「3 小时 12 分钟」/「时长未知」）。
+    ///
+    /// **它是首页那句「下一步：到训练记录页核对这几场」唯一能兑现的方式。**
+    /// 那句话说的是「有 N 场超过 2 小时，已按 2 小时计入（多半是忘了点结束）」，
+    /// 而在这之前这一页每行只有日期，既没时刻也没时长——照着来的人
+    /// **没有任何字段可以用来认出是哪几场**（铁律 4）。
+    ///
+    /// 顺带也是他判断一场练得实不实的直接依据：说了 12 分钟还是 3 分钟。
+    public let durationText: String
     public let reviewStatusText: String
     public let hasReport: Bool
     /// Phase 5 会在这一行下面挂回听播放器。
@@ -145,6 +154,9 @@ public struct HistoryViewModel: Sendable {
             questionIsMissing: question == nil,
             // 「0 条对话」看起来像出了什么问题；「没有逐字稿」是在陈述事实。
             turnCountText: turnCount > 0 ? "\(turnCount) 条对话" : "没有逐字稿",
+            // 走 `TrainingStats` 那一份算法，不在这里另算：另算的话，
+            // 首页「本周开口时长」和这一页逐行加起来的数会对不上。
+            durationText: TrainingStats.durationText(of: session),
             reviewStatusText: session.reportPath.isEmpty ? "没有复盘" : "复盘已存档",
             hasReport: !session.reportPath.isEmpty,
             hasRecording: !session.recordingPath.isEmpty)

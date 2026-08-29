@@ -264,3 +264,60 @@ final class TrainingStatsTests: XCTestCase {
         XCTAssertEqual(stats.weeklyGoal, 5)
     }
 }
+
+/// 「一场练了多久」这件事全工程只有一份算法（2026-08-20）。
+///
+/// 首页那句「有 N 场超过 2 小时，已按 2 小时计入（多半是忘了点结束）。
+/// 下一步：到训练记录页核对这几场」在这之前是一张空头支票——
+/// 那一页每行只有日期，既没时刻也没时长，**没有任何字段能用来认出是哪几场**。
+final class SessionDurationTests: XCTestCase {
+
+    private func session(from start: String, to end: String) -> PracticeSession {
+        PracticeSession(id: "s1", questionId: "q1", focusPart: .part1,
+                        startedAt: start, endedAt: end, goal: "",
+                        transcript: [], reportPath: "", recordingPath: "")
+    }
+
+    func testAnOrdinarySessionReadsInMinutes() {
+        let value = session(from: "2026-08-20T10:00:00Z", to: "2026-08-20T10:12:00Z")
+        XCTAssertEqual(TrainingStats.minutes(of: value), 12)
+        XCTAssertEqual(TrainingStats.durationText(of: value), "12 分钟")
+    }
+
+    /// **逐行显示不截断。** 截断（超过 2 小时按 2 小时计）是汇总那一侧的事；
+    /// 这一行要如实说「3 小时 12 分钟」，那正是他要据以认出「哪几场忘了点结束」的东西。
+    func testALongSessionIsShownInFullSoItCanBeRecognised() {
+        let value = session(from: "2026-08-20T10:00:00Z", to: "2026-08-20T13:12:00Z")
+        XCTAssertEqual(TrainingStats.minutes(of: value), 192)
+        XCTAssertEqual(TrainingStats.durationText(of: value), "3 小时 12 分钟")
+        XCTAssertGreaterThan(192, TrainingStats.maxCountedMinutesPerSession,
+                             "这条测试要的就是一场超过截断线的练习")
+    }
+
+    /// 读不出来时说「时长未知」，**不是「0 分钟」**——
+    /// 练了 40 分钟却看到 0 分钟，他会以为工具坏了。
+    func testAnUnfinishedSessionSaysUnknownInsteadOfZero() {
+        XCTAssertNil(TrainingStats.minutes(of: session(from: "2026-08-20T10:00:00Z", to: "")))
+        XCTAssertEqual(TrainingStats.durationText(of: session(from: "2026-08-20T10:00:00Z", to: "")),
+                       "时长未知")
+        // 结束早于开始（手改过的 state.json）同样算读不出来。
+        XCTAssertNil(TrainingStats.minutes(
+            of: session(from: "2026-08-20T10:00:00Z", to: "2026-08-20T09:00:00Z")))
+    }
+
+    /// **汇总和逐行必须是同一套算法。** 各算各的话，「本周开口时长 38 分钟」
+    /// 和逐行加起来的数会对不上，而用户没办法知道哪个是真的。
+    func testTheWeeklyTotalAgreesWithTheSumOfTheRows() {
+        var state = CoachState.empty()
+        state.sessions = [session(from: "2026-08-19T10:00:00Z", to: "2026-08-19T10:12:00Z"),
+                          session(from: "2026-08-20T10:00:00Z", to: "2026-08-20T10:08:00Z")]
+        for index in state.sessions.indices { state.sessions[index].id = "s\(index)" }
+
+        let now = ISO8601DateFormatter().date(from: "2026-08-21T10:00:00Z")!
+        let stats = TrainingStats.compute(state: state, now: now,
+                                          calendar: Calendar(identifier: .iso8601))
+        let rowsTotal = state.sessions.compactMap(TrainingStats.minutes(of:)).reduce(0, +)
+        XCTAssertEqual(stats.weeklySpokenMinutes, rowsTotal)
+        XCTAssertEqual(rowsTotal, 20)
+    }
+}
