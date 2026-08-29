@@ -232,6 +232,10 @@ struct ReviewReportView: View {
                     failureCard(failure)
                 } else if let document {
                     if let notice = recoveryNotice { recoveryNoticeCard(notice) }
+                    // 回听摆在复盘正文**上面**：复盘里「你当时的回答 vs 高分版」是文字，
+                    // 而发音、停顿、语调只有听才听得出来。此前播放器全项目只有一处
+                    // （训练记录页），要先记住日期、切页、再翻到那一场。
+                    recordingPlayer
                     if let target = document.priorityTarget { priorityCard(target) }
                     // 摆在总结**上面**：它说的正是那段总结被动过什么，
                     // 摆到下面去的话，用户已经把改过的总结当成原文读完了。
@@ -340,6 +344,21 @@ struct ReviewReportView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
             }
+        }
+    }
+
+    /// 这一场的录音回放。**没开录音、或这一场没录到时整段不渲染**
+    /// （`RecordingPlayerView` 自己会返回 `EmptyView`）。
+    ///
+    /// `.id(...)` 不能省：换一场时视图在同一个位置上，不换 id 的话 SwiftUI 会复用
+    /// 同一个 `RecordingPlayerView`，里面那台 `AVAudioPlayer` 还是上一场的——
+    /// 用户点播放，听到的是别的那一场（训练记录页那边写过同一条）。
+    @ViewBuilder
+    private var recordingPlayer: some View {
+        if let selected {
+            let playback = app.makeRecordingPlaybackViewModel(for: selected)
+            RecordingPlayerView(viewModel: playback, onRecordingRemoved: { app.reload() })
+                .id(selected.id)
         }
     }
 

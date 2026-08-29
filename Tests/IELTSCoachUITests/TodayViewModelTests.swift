@@ -463,3 +463,65 @@ final class TodayViewModelTests: XCTestCase {
             .contains { code.contains($0) }
     }
 }
+
+/// 首页那七根柱子：本周哪几天练的。
+///
+/// 四格上面那个「3/5」只说了总数，这一排说的是**节奏**——
+/// 是三天各练一次，还是周日一口气补了三次。
+@MainActor
+final class WeekBarsTests: XCTestCase {
+
+    private func session(_ id: String, at started: String) -> PracticeSession {
+        PracticeSession(id: id, questionId: "q1", focusPart: .part1, startedAt: started,
+                        endedAt: started, goal: "", transcript: [],
+                        reportPath: "", recordingPath: "")
+    }
+
+    private func model(_ sessions: [PracticeSession], today: String) -> TodayViewModel {
+        var state = CoachState.empty()
+        state.sessions = sessions
+        return TodayViewModel(state: state,
+                              today: ISO8601DateFormatter().date(from: today)!,
+                              calendar: {
+                                  var calendar = Calendar(identifier: .iso8601)
+                                  calendar.timeZone = TimeZone(identifier: "UTC")!
+                                  return calendar
+                              }())
+    }
+
+    /// 2026-08-20 是周四。周一到周日七根，一根不多一根不少。
+    func testThereAreSevenBarsMondayThroughSunday() {
+        let bars = model([], today: "2026-08-20T12:00:00Z").weekBars
+        XCTAssertEqual(bars.map(\.label), ["一", "二", "三", "四", "五", "六", "日"])
+    }
+
+    /// 练在哪一天就落在哪一根上。落错一格的话，界面上完全看不出异样。
+    func testASessionLandsOnTheDayItWasPractised() {
+        // 2026-08-18 是周二，2026-08-20 是周四。
+        let bars = model([session("s1", at: "2026-08-18T10:00:00Z"),
+                          session("s2", at: "2026-08-20T10:00:00Z"),
+                          session("s3", at: "2026-08-20T20:00:00Z")],
+                         today: "2026-08-20T12:00:00Z").weekBars
+        XCTAssertEqual(bars.map(\.count), [0, 1, 0, 2, 0, 0, 0])
+    }
+
+    func testTodayIsMarked() {
+        let bars = model([], today: "2026-08-20T12:00:00Z").weekBars
+        XCTAssertEqual(bars.filter(\.isToday).map(\.label), ["四"])
+    }
+
+    /// 上周的那几场不算进这一周。
+    func testLastWeekDoesNotLeakIn() {
+        let bars = model([session("s1", at: "2026-08-13T10:00:00Z")],
+                         today: "2026-08-20T12:00:00Z").weekBars
+        XCTAssertEqual(bars.map(\.count).reduce(0, +), 0)
+    }
+
+    /// 读不出时间的那几场**不进这一排**（也不能让它崩）——
+    /// 它们由「本周训练」那一格的脚注单独交代。
+    func testSessionsWithNoReadableTimeAreLeftOutWithoutCrashing() {
+        let bars = model([session("s1", at: ""), session("s2", at: "坏掉的时间")],
+                         today: "2026-08-20T12:00:00Z").weekBars
+        XCTAssertEqual(bars.map(\.count).reduce(0, +), 0)
+    }
+}

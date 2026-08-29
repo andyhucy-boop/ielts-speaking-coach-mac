@@ -259,6 +259,47 @@ public struct TodayViewModel: Sendable {
             .map(\.element)
     }
 
+    /// 本周七天各练了几次，周一到周日。
+    public struct WeekBar: Equatable, Identifiable, Sendable {
+        /// 周几（1 = 周一 … 7 = 周日）。
+        public let id: Int
+        public let label: String
+        public let count: Int
+        public let isToday: Bool
+    }
+
+    /// 首页那七根柱子。
+    ///
+    /// **它买到的是「一眼看出本周节奏」，不是一块缺失的数据**——
+    /// 哪几天练的在训练记录页本来就数得出来（每行都写着日期）。
+    /// 老实说这是这一轮里最弱的一条改动，做它只因为它很便宜。
+    ///
+    /// **读不出时间的那几场不在里面**，而那件事由「本周训练」那一格的脚注说
+    /// （`weekTile` 里那句「另有 N 场练习读不出时间，没能算进本周」）——
+    /// 两处各说一遍是骚扰，一处都不说才是静默。
+    public var weekBars: [WeekBar] {
+        let names = ["一", "二", "三", "四", "五", "六", "日"]
+        guard let week = calendar.dateInterval(of: .weekOfYear, for: today) else { return [] }
+        var counts = [Int](repeating: 0, count: 7)
+        for session in state.sessions {
+            guard let started = CoachTime.parse(session.startedAt), week.contains(started) else {
+                continue
+            }
+            // ISO 8601 周历：weekday 1 = 周一。
+            let weekday = calendar.component(.weekday, from: started)
+            // `Calendar.component(.weekday:)` 恒定 1 = 周日（与历法无关），
+            // 换算成「周一为 0」才对得上上面那排名字。
+            let index = (weekday + 5) % 7
+            counts[index] += 1
+        }
+        let todayWeekday = calendar.component(.weekday, from: today)
+        let todayIndex = (todayWeekday + 5) % 7
+        return (0..<7).map { index in
+            WeekBar(id: index + 1, label: names[index], count: counts[index],
+                    isToday: index == todayIndex)
+        }
+    }
+
     /// 本周练了几次 / 目标几次。
     ///
     /// 目标次数来自 `settings.weeklyGoal`（ROADMAP 第 5 节：用户可配置，默认 5）。

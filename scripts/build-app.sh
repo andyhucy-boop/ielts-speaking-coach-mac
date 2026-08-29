@@ -22,7 +22,7 @@ set -euo pipefail
 
 APP_NAME="IELTS Speaking Coach"
 BUNDLE_ID="com.ielts.speakingcoach"
-APP_VERSION="1.1.0"
+APP_VERSION="1.2.0"
 
 # 可被环境变量覆盖，供 notarize.sh 用 Developer ID 重签时复用同一套组装逻辑。
 SIGN_IDENTITY="${IELTS_SIGN_IDENTITY:-IELTS Coach Dev}"

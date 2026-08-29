@@ -95,6 +95,7 @@ struct TodayView: View {
                     // `TodayViewTests.testTileFootnotesPointTowardWhereTheStartButtonActuallyIs`
                     // 会把没改的那一次拦下来。
                     statsRow
+                    weekBars
                     recordingNotice
                     // 摆在路线**上面**：这是一条要他当场决定的事，
                     // 排到下面去的话，他会先开始新的一场，然后那条旧记录
@@ -434,6 +435,37 @@ struct TodayView: View {
                         .foregroundStyle(Palette.warning)
                 }
             }
+        }
+    }
+
+    /// 本周七天各练了几次。四格上面那个「3/5」只说了总数，
+    /// 这一排说的是**节奏**：是三天各练一次，还是周日一口气补了三次。
+    ///
+    /// **读不出时间的那几场不在这里**，那件事由「本周训练」那一格的脚注说
+    ///（两处各说一遍是骚扰，一处都不说才是静默）。
+    private var weekBars: some View {
+        let bars = model.weekBars
+        let peak = max(bars.map(\.count).max() ?? 0, 1)
+        return HStack(alignment: .bottom, spacing: Spacing.sm) {
+            ForEach(bars) { bar in
+                VStack(spacing: Spacing.xs) {
+                    // 等宽数字：某一天从 1 跳到 2 时这一列不该横向抖。
+                    Text(bar.count > 0 ? "\(bar.count)" : " ")
+                        .font(Typography.label)
+                        .monospacedDigit()
+                        .foregroundStyle(Palette.textSecondary)
+                    RoundedRectangle(cornerRadius: Radius.control)
+                        .fill(bar.count > 0 ? Palette.accent : Palette.cardBorder)
+                        .frame(width: 18,
+                               height: max(4, CGFloat(bar.count) / CGFloat(peak) * 36))
+                    Text(bar.isToday ? "今" : bar.label)
+                        .font(Typography.label)
+                        .foregroundStyle(bar.isToday ? Palette.textPrimary : Palette.textSecondary)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("周\(bar.label)练了 \(bar.count) 次")
+            }
+            Spacer(minLength: 0)
         }
     }
 
