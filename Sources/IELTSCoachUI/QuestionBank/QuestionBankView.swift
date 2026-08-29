@@ -188,14 +188,44 @@ struct QuestionBankView: View {
         }
     }
 
+    /// 把一道题标回「没练过」。
+    ///
+    /// **练习记录一个字都不动**（那一场确实发生过），改的只是这道题还参不参与
+    /// 随机抽题与排计划。判据与写法都在 `CoachState.markUnpracticed`，
+    /// 这里不另写一份——另写的话，下一次读盘 `reconcilePracticedStatus`
+    /// 会把它又算成已练，而按钮点得动、屏幕上什么都不变。
+    private func markUnpracticed(_ question: Question) {
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        app.mutate { CoachState.markUnpracticed(questionID: question.id, in: &$0, at: timestamp) }
+    }
+
     /// 状态只用 SF Symbols，不用 emoji（规范第 4 节）——emoji 跨系统版本渲染不一致，
     /// 也无法跟随语义颜色。
     @ViewBuilder
     private func statusBadge(for question: Question) -> some View {
         if question.status == "practiced" {
-            Label("已练", systemImage: "checkmark.circle")
-                .font(Typography.label)
-                .foregroundStyle(Palette.success)
+            HStack(spacing: Spacing.xs) {
+                Label("已练", systemImage: "checkmark.circle")
+                    .font(Typography.label)
+                    .foregroundStyle(Palette.success)
+                // **「已练」此前是永久不可逆的。**
+                //
+                // 随机抽了 5 道题、只认真答了 2 道就点了「我练完了」，5 道全部打勾，
+                // 以后「只抽没练过的」再也抽不到它们——而他明明知道那 3 道没答好。
+                //
+                // 按钮做成图标 + 说明（`help`）而不是一行字：这一列每一道题都有它，
+                // 写成一行字会把题干挤到看不见。
+                Button {
+                    markUnpracticed(question)
+                } label: {
+                    Image(systemName: "arrow.uturn.backward.circle")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Palette.textSecondary)
+                .help("标回「没练过」，让它重新参与随机抽题与排计划。"
+                      + "这一场的练习记录不会被删。")
+                .accessibilityLabel("把这道题标回没练过")
+            }
         } else {
             Label("没练过", systemImage: "circle")
                 .font(Typography.label)

@@ -158,6 +158,7 @@ struct RetrainingFlowView: View {
             if step.showsGoal { goalLine }
             if step.showsEvidence { evidenceBody }
             if step.showsModelAnswer { modelAnswerCard }
+            if step.showsAnswerFrame { answerFrameCard }
             if step.showsEvidence { transcriptBody }
             if step == .rehearsal { rehearsalBody }
             if step == .speaking { speakingBody }
@@ -197,6 +198,35 @@ struct RetrainingFlowView: View {
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+    }
+
+    /// 第二步那个**看得见的答题骨架**。
+    ///
+    /// 它是上游复训四级阶梯的第 2 级（Scaffold）——本项目此前只有它的后两级，
+    /// 「重答原题」那一屏上只有题目和目标，没有任何可以往里填的结构。
+    ///
+    /// **和「照着高分版念一遍不叫复训」不冲突**：高分版是这道题的答案，
+    /// 而这四个词里没有一个字属于这道题。用户自己点名的毛病正是「内容比较空洞」，
+    /// 而空洞的回答几乎总是停在第一格上（给了观点就没了）。
+    private var answerFrameCard: some View {
+        CoachCard {
+            VStack(alignment: .leading, spacing: Spacing.xs) {
+                Text("按这个形状说")
+                    .font(Typography.label)
+                    .foregroundStyle(Palette.textSecondary)
+                Text(RetrainingStep.answerFrame)
+                    .font(Typography.cardTitle)
+                    .foregroundStyle(Palette.textPrimary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("四格里没有一个字属于这道题，填什么全靠你自己。"
+                     + "答完之后自己对一遍：四格是不是都说到了。")
+                    .font(Typography.label)
+                    .foregroundStyle(Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 

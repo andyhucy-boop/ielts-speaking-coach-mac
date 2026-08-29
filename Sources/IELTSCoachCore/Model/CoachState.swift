@@ -178,14 +178,46 @@ public struct CoachState: Codable, Equatable, Sendable {
         // （`PracticeSession.drawnQuestionIds`），只认开场那一道的话，同一场里另外几道
         // 会永远停在「新题」，于是「只抽没练过的」一遍遍把它们再抽出来，
         // 而训练题库页那个「已练 N / 258」也永远少数它们——两样都不会报错。
-        let practiced = Set(sessions.flatMap(\.allQuestionIds))
-        guard !practiced.isEmpty else { return questions }
+        // **每道题记「最近一次被练到是什么时候」**，而不只是「练没练过」。
+        //
+        // 只记一个 id 集合的话，用户手动把一道题标回「没练过」之后，
+        // 下一次读盘就会照着旧的练习记录把它又算成已练——
+        // 那颗按钮点得动、却什么都改不了（本项目最忌讳的静默失败）。
+        var lastPracticed: [String: String] = [:]
+        for session in sessions {
+            for id in session.allQuestionIds
+            where session.startedAt > (lastPracticed[id] ?? "") {
+                lastPracticed[id] = session.startedAt
+            }
+        }
+        guard !lastPracticed.isEmpty else { return questions }
         return questions.map { question in
-            guard question.status != "practiced", practiced.contains(question.id) else { return question }
+            guard question.status != "practiced",
+                  let practicedAt = lastPracticed[question.id] else { return question }
+            // **他说过不算数之后又练了一次的，照常升回来。**
+            // 时间戳都是本工具写的 ISO8601（统一格式、全是 Z 时区），字典序即时间序。
+            guard practicedAt > question.practiceResetAt else { return question }
             var upgraded = question
             upgraded.status = "practiced"
             return upgraded
         }
+    }
+
+    /// 把一道题**标回「没练过」**，让它重新参与随机抽题与计划排题。
+    ///
+    /// 记下这一刻（`Question.practiceResetAt`）而不只是改 `status`：
+    /// 只改状态的话，下一次读盘 `reconcilePracticedStatus` 会照着旧的练习记录
+    /// 把它又算成已练。**练习记录一个字都不动**——那一场确实发生过。
+    ///
+    /// - Returns: 真的改了返回 true；这道题本来就不是「已练」时返回 false（调用方据此说话）。
+    @discardableResult
+    public static func markUnpracticed(questionID: String, in state: inout CoachState,
+                                       at timestamp: String) -> Bool {
+        guard let index = state.questions.firstIndex(where: { $0.id == questionID }),
+              state.questions[index].status == "practiced" else { return false }
+        state.questions[index].status = "new"
+        state.questions[index].practiceResetAt = timestamp
+        return true
     }
 
     /// 容忍缺字段的解码，等价于上游 ensureWorkspace 的补齐逻辑。

@@ -203,3 +203,83 @@ final class QuestionStatusAcrossImportsTests: XCTestCase {
                            + "训练记录允许单条删除，删掉记录不该连带把题库的进度也删了")
     }
 }
+
+/// **把一道题标回「没练过」**（2026-08-20）。
+///
+/// 在这之前「已练」是只升不降、永久不可逆的：随机抽了 5 道题、只认真答了 2 道
+/// 就点了「我练完了」，5 道全部永久打勾，以后「只抽没练过的」再也抽不到它们。
+final class MarkUnpracticedTests: XCTestCase {
+
+    private func question(_ id: String, status: String = "practiced",
+                          resetAt: String = "") -> Question {
+        Question(id: id, part: 1, topic: id, prompt: id, status: status,
+                 practiceResetAt: resetAt)
+    }
+
+    private func session(_ id: String, question: String, at started: String) -> PracticeSession {
+        PracticeSession(id: id, questionId: question, focusPart: .part1, startedAt: started,
+                        endedAt: started, goal: "", transcript: [],
+                        reportPath: "", recordingPath: "")
+    }
+
+    func testMarkingAQuestionUnpracticedFlipsItBack() {
+        var state = CoachState.empty()
+        state.questions = [question("q1")]
+        XCTAssertTrue(CoachState.markUnpracticed(questionID: "q1", in: &state,
+                                                 at: "2026-08-20T12:00:00Z"))
+        XCTAssertEqual(state.questions.first?.status, "new")
+        XCTAssertEqual(state.questions.first?.practiceResetAt, "2026-08-20T12:00:00Z")
+    }
+
+    /// **这是这个文件的关键一条。** 只把 `status` 改回 `"new"` 是没用的：
+    /// 下一次读盘 `reconcilePracticedStatus` 会照着旧的练习记录把它又算成已练——
+    /// 那颗按钮点得动、屏幕上什么都不变，而且没有任何报错。
+    func testTheResetSurvivesTheNextTimeTheFileIsRead() {
+        var state = CoachState.empty()
+        state.questions = [question("q1")]
+        state.sessions = [session("s1", question: "q1", at: "2026-08-19T10:00:00Z")]
+        CoachState.markUnpracticed(questionID: "q1", in: &state, at: "2026-08-20T12:00:00Z")
+
+        let reconciled = CoachState.reconcilePracticedStatus(questions: state.questions,
+                                                             sessions: state.sessions)
+        XCTAssertEqual(reconciled.first?.status, "new",
+                       "标回「没练过」之后，读一次盘就又被算成已练了")
+    }
+
+    /// **说过不算数之后又练了一次的，照常升回来。** 记的是「他在哪一刻说过不算数」，
+    /// 不是「这道题永远不算已练」。
+    func testPracticingItAgainAfterTheResetMarksItPracticedOnceMore() {
+        let questions = [question("q1", status: "new", resetAt: "2026-08-20T12:00:00Z")]
+        let later = [session("s2", question: "q1", at: "2026-08-21T10:00:00Z")]
+        XCTAssertEqual(
+            CoachState.reconcilePracticedStatus(questions: questions, sessions: later).first?.status,
+            "practiced")
+    }
+
+    /// 换季重导那道自愈保护**不能因此失效**：没标过重置的题照常算回来。
+    func testTheAutomaticRepairStillWorksForQuestionsNeverReset() {
+        let questions = [question("q1", status: "new")]
+        let sessions = [session("s1", question: "q1", at: "2026-08-19T10:00:00Z")]
+        XCTAssertEqual(
+            CoachState.reconcilePracticedStatus(questions: questions,
+                                                sessions: sessions).first?.status,
+            "practiced")
+    }
+
+    /// 本来就不是「已练」时什么都不做，并如实返回 false——
+    /// 调用方据此决定要不要跟用户说话。
+    func testMarkingAnUnpracticedQuestionIsANoOp() {
+        var state = CoachState.empty()
+        state.questions = [question("q1", status: "new")]
+        XCTAssertFalse(CoachState.markUnpracticed(questionID: "q1", in: &state, at: "t"))
+        XCTAssertEqual(state.questions.first?.practiceResetAt, "")
+    }
+
+    /// 这个字段上线之前存的题库仍然要读得出来。
+    func testQuestionsWrittenBeforeThisFieldExistedStillLoad() throws {
+        let old = #"{"id":"q1","part":1,"topic":"Home","prompt":"p","status":"practiced"}"#
+        let decoded = try JSONDecoder().decode(Question.self, from: Data(old.utf8))
+        XCTAssertEqual(decoded.practiceResetAt, "")
+        XCTAssertEqual(decoded.status, "practiced")
+    }
+}
