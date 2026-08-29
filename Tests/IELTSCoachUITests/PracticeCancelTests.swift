@@ -226,7 +226,7 @@ final class PracticeCancelTests: XCTestCase {
         _ = await first.value
         _ = await second.value
 
-        XCTAssertEqual(bridge.calls, ["endVoice", "sendText", "waitReply", "copy"],
+        XCTAssertEqual(bridge.calls, ["endVoice", "replyCount", "sendText", "waitReply", "copy"],
                        "收尾链路跑了不止一遍：\(bridge.calls)。"
                            + "用户回到 ChatGPT 会看到同一段一千多字的复盘请求贴了两次、"
                            + "它也答了两次；两条链路同时驱动同一台 AX 驱动器还会段错误。")

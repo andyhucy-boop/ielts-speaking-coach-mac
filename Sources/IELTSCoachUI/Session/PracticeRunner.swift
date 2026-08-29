@@ -381,18 +381,43 @@ public final class PracticeRunner {
             currentRequestID = requestID
             let marker = ReviewRequestPrompt.marker(requestID: requestID)
             let request = ReviewRequestPrompt.build(requestID: requestID, focusPart: setup.focusPart)
+            // **发之前先数一次已经写完的助手回复。** 这就是等回复的基线。
+            //
+            // 没有它的时候，「等 ChatGPT 写完复盘」的判据只有「屏幕上最长那段文字不再变长」——
+            // 而此刻屏幕上摆着整场语音的逐字稿，加上下一行刚发出去的那条一千多字的请求本身，
+            // 两样都在、都不动，于是判据在 ChatGPT 一个字都没答之前就成立，
+            // 约一秒半后就往下走去按复制按钮，复制到的是**考官最后一句话**。
+            // （那句话短于 200 字符时会被 `ClipboardFallback` 拦下、落到手动 ⌘C；
+            // 长于 200 字符时就真的被当成复盘归档了。两条都是坏结果。）
+            let repliesBefore = await offMain { $0.assistantReplyCount() }
+            try ensureStillRunning(ticket)
             // 复盘请求发在 endVoice 之后，那时语音框已经不在了，用 .any。
             try await run(.requestingReview, ticket: ticket) { try $0.sendText(request, into: .any) }
             let replyTimeout = replyTimeout
             try await run(.requestingReview, ticket: ticket) {
-                try $0.waitForAssistantReply(timeout: replyTimeout, minimumLength: 60)
+                try $0.waitForAssistantReply(timeout: replyTimeout, minimumLength: 60,
+                                             afterReplyCount: repliesBefore)
             }
 
             guard let raw = try await captureReview(marker: marker.open, ticket: ticket) else {
                 return   // 已经转到 .needsManualCopy，等用户手动 ⌘C
             }
             try ensureStillRunning(ticket)
-            try archive(raw: raw, setup: setup, sessionID: sessionID, retryOnFailure: .wrapUp)
+            do {
+                try archive(raw: raw, setup: setup, sessionID: sessionID, retryOnFailure: .wrapUp)
+            } catch let error as CoachError where error.isReviewFormatProblem {
+                // **格式不对就自动再问一次，并告诉它上次错在哪。**
+                //
+                // 此前这里直接失败，屏幕上摆出一颗「重新取复盘」等用户去点——而点下去
+                // 发的是**一模一样**的提示词，ChatGPT 手上没有任何新信息，
+                // 多半再给一份同样形状的输出，等于白点一次。
+                //
+                // 只重问一次。第二次还不行说明不是一次偶然的截断，接着自动重发只会
+                // 一遍遍往那条对话里贴一千多字，而用户在旁边干等。
+                try await reaskForReview(setup: setup, sessionID: sessionID,
+                                         requestID: requestID, focusPart: setup.focusPart,
+                                         problem: Self.diagnosisOnly(error), ticket: ticket)
+            }
         } catch {
             // 代次对不上 = 用户在等复盘那一分钟里按了「放弃这一场」（「取消」按钮
             // 在这一步上挂得最久）。**什么都不做就是全部要做的事**：不发复盘请求、
@@ -402,6 +427,39 @@ public final class PracticeRunner {
             fail(error, retry: .wrapUp)
             throw error
         }
+    }
+
+    /// 第一份复盘格式不对时，**告诉 ChatGPT 哪里不对，让它重出一份**。
+    ///
+    /// 三件事和第一次问不一样，一件都不能省：
+    ///
+    /// 1. 发的是 `ReviewRequestPrompt.retry(...)`，开头写明上次错在哪、并明令
+    ///    「不要重复上一条回复」——原样再发一遍同一份提示词是白发一次。
+    /// 2. 阶段是 `.reaskingReview` 而不是 `.requestingReview`：用户得知道刚才那次
+    ///    失败了、而工具正在替他救这一场，不然他看到的是同一句话又转了一遍圈。
+    /// 3. 基线重新取一次。上一条（格式不对的那份）此刻已经写完并计进条数里了，
+    ///    拿第一次那个旧基线的话，判据一进来就成立，又会去复制那份坏的。
+    ///
+    /// 这一次再失败就**照常抛出去**，由外层 `catch` 摆出「重新取复盘」那颗按钮。
+    /// 那时那句提示说的是实话：两次自动尝试都没成，确实该由人来看一眼了。
+    private func reaskForReview(setup: SessionSetup, sessionID: String, requestID: String,
+                                focusPart: FocusPart, problem: String, ticket: Int) async throws {
+        let retryPrompt = ReviewRequestPrompt.retry(requestID: requestID,
+                                                    focusPart: focusPart, problem: problem)
+        let repliesBefore = await offMain { $0.assistantReplyCount() }
+        try ensureStillRunning(ticket)
+        try await run(.reaskingReview, ticket: ticket) { try $0.sendText(retryPrompt, into: .any) }
+        let replyTimeout = replyTimeout
+        try await run(.reaskingReview, ticket: ticket) {
+            try $0.waitForAssistantReply(timeout: replyTimeout, minimumLength: 60,
+                                         afterReplyCount: repliesBefore)
+        }
+        let marker = ReviewRequestPrompt.marker(requestID: requestID)
+        guard let raw = try await captureReview(marker: marker.open, ticket: ticket) else {
+            return   // 已经转到 .needsManualCopy，等用户手动 ⌘C
+        }
+        try ensureStillRunning(ticket)
+        try archive(raw: raw, setup: setup, sessionID: sessionID, retryOnFailure: .wrapUp)
     }
 
     /// 两条自动路都断了之后，用户照提示按了 ⌘C，再点一下按钮走这里。

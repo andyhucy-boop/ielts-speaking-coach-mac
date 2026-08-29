@@ -602,6 +602,64 @@ final class AXDriverTests: XCTestCase {
                           + "说明实现里的间隔是写死的，测试没法把它调快")
     }
 
+    // MARK: - 等回复要有基线（2026-08-20，对照上游查出来的）
+
+    /// **收尾链路上「文本不再变长」是个假判据。**
+    ///
+    /// 点「我练完了」那一刻，屏幕上摆着整场语音的逐字稿，加上刚发出去的那条
+    /// 一千多字的复盘请求本身——两样都在、都不再变化，于是判据在 ChatGPT
+    /// 一个字都没答之前就成立，约一秒半后就去按复制按钮，复制到的是考官最后一句话。
+    ///
+    /// 传入发送之前的助手回复条数之后，必须**等到真的多出一条**才算数。
+    func testWaitForAssistantReplyWaitsForANewReplyWhenGivenABaseline() throws {
+        let access = FakeAXAccess()
+        // 一开始屏幕上就有一段够长的文字（= 逐字稿 + 刚发出去的请求）和一条已完成的回复。
+        let longText = AXNodeSnapshot(element: AXElementRef(rawID: 1, epoch: 0),
+                                      role: "AXStaticText",
+                                      value: String(repeating: "考官反馈内容", count: 10))
+        access.nodes = [longText, control(2, "Copy")]
+        // 第 6 次采样时 ChatGPT 才真的答完（复制按钮多出一颗）。
+        access.onSnapshot = { index, nodes in
+            if index == 6 { nodes.append(self.control(3, "Copy")) }
+        }
+
+        try driver(access, replySampleInterval: 0.001)
+            .waitForAssistantReply(timeout: 5, afterReplyCount: 1)
+
+        XCTAssertGreaterThanOrEqual(access.snapshotCount, 8,
+                                    "在新回复出现之前就返回了：只采了 \(access.snapshotCount) 次树。"
+                                        + "真机上这意味着去复制的是考官最后一句话。")
+    }
+
+    /// 反面：一条新回复都没出现时要**超时报错**，而且那句话得说清是哪一种超时——
+    /// 「一直在写」和「一个字都没答」的下一步完全不同。
+    func testWaitForAssistantReplySaysSoWhenNoNewReplyEverArrives() {
+        let access = FakeAXAccess()
+        access.nodes = [
+            AXNodeSnapshot(element: AXElementRef(rawID: 1, epoch: 0), role: "AXStaticText",
+                           value: String(repeating: "考官反馈内容", count: 10)),
+            control(2, "Copy")
+        ]
+        XCTAssertThrowsError(try driver(access, replySampleInterval: 0.001)
+            .waitForAssistantReply(timeout: 0.05, afterReplyCount: 1)) { error in
+            XCTAssertTrue("\(error)".contains("一条新回复都没有出现"),
+                          "超时原因说错了：\(error)")
+        }
+    }
+
+    /// **不传基线时行为逐字不变。** 新建会话之后那一次仍然走老路——
+    /// 那时屏幕上本来没东西，「文本不再变长」是成立的判据。
+    func testWithoutABaselineTheOldFastPathIsUnchanged() throws {
+        let access = FakeAXAccess()
+        access.nodes = [
+            AXNodeSnapshot(element: AXElementRef(rawID: 1, epoch: 0), role: "AXStaticText",
+                           value: String(repeating: "考官反馈内容", count: 10))
+        ]
+        try driver(access, replySampleInterval: 0.001).waitForAssistantReply(timeout: 5)
+        XCTAssertLessThanOrEqual(access.snapshotCount, 4,
+                                 "没有基线时应当三次采样就返回，实际采了 \(access.snapshotCount) 次")
+    }
+
     func testWaitForAssistantReplyThrowsActionableErrorWhenTextNeverLongEnough() {
         let access = FakeAXAccess()
         access.nodes = []   // 没有任何文本，也就永远达不到 minimumLength

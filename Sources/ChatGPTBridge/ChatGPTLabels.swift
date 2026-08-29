@@ -75,6 +75,22 @@ public enum ChatGPTLabels {
         return nil
     }
 
+    /// **界面上现在有几条已经写完的助手回复。**
+    ///
+    /// 数的是助手消息下方那颗复制按钮，而不是文本节点——因为**那颗按钮要等这条消息
+    /// 输出完之后才渲染出来**（`AXTranscriptSampler` 里记着这件事）。
+    /// 所以「它变多了」恰好等价于「新的这条已经写完了」，这正是等回复要的信号。
+    ///
+    /// 上游用的是「助手回合数变多 + Stop 按钮消失」两个条件；本工具的 AX 树上没有
+    /// 「停止生成」这个可靠标签（真查过，只有挂断语音那颗 `stopVoice`），
+    /// 而复制按钮的渲染时机把两件事合成了一件，够用且更稳。
+    public static func assistantReplyCount(among nodes: [AXNodeSnapshot]) -> Int {
+        nodes.filter {
+            controlRoles.contains($0.role) && $0.isIconOnlyControl
+                && copyAssistantMessage.contains($0.label)
+        }.count
+    }
+
     /// 判据必须与 `matchControl` **对称**（role + label + 结构三重）。只查 label 和结构的话，
     /// 会漏报「label 命中、role 不符、但恰好只有一个 AXImage 子节点」的元素，
     /// 让诊断看起来比实际情况更干净——排查时反而误导人。

@@ -247,20 +247,44 @@ public final class AXDriver: CoachBridge, Sendable {
 
     public func isVoiceActive() -> Bool { ChatGPTLabels.isVoiceActive(access.snapshotTree()) }
 
+    public func assistantReplyCount() -> Int {
+        ChatGPTLabels.assistantReplyCount(among: access.snapshotTree())
+    }
+
     /// 等 ChatGPT 把上一条消息回复完。
     ///
-    /// 判据：界面上出现了一段足够长的新文本，且在连续两次采样间**不再增长**
+    /// 判据：界面上出现了一段足够长的新文本，且在连续几次采样间**不再增长**
     /// （流式输出结束）。用户实测确认必须等它回复完再进语音，否则语音会话
     /// 可能不带考官设定就开始了 —— 这一点从 AX 树上看不出来。
-    public func waitForAssistantReply(timeout: TimeInterval, minimumLength: Int = 60) throws {
+    ///
+    /// ## `afterReplyCount`：屏幕上原本就有东西时，光看「不再变长」是假的
+    ///
+    /// 这个判据只在**新建会话之后**成立，因为那时屏幕上本来就没东西。
+    /// 收尾链路上完全不是这样：整场语音的逐字稿都还在屏幕上，加上刚发出去的那条
+    /// 一千多字的复盘请求本身——两样都在、都不再变化，于是判据在 ChatGPT
+    /// **一个字都没答之前**就满足了，约 1.5 秒后就返回，接着去按复制按钮，
+    /// 复制到的是考官最后一句话。
+    ///
+    /// 传入发送**之前**的助手回复条数（`assistantReplyCount()`），就要求「先真的多出一条」。
+    /// 复制按钮要等消息输出完才渲染，所以「条数变多」本身就已经含着「那条写完了」。
+    /// 传 nil 时行为与从前逐字一致（新建会话之后那一次仍然走老路）。
+    public func waitForAssistantReply(timeout: TimeInterval, minimumLength: Int = 60,
+                                      afterReplyCount baseline: Int? = nil) throws {
         var previousLongest = 0
         var stableTicks = 0
+        var sawNewReply = baseline == nil
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            let longest = access.snapshotTree()
+            // **一次快照同时算两件事。** 分两次抓树的话，两个判据看的是不同时刻的界面，
+            // 而这一步正处在流式输出中途，两帧之间差别很大。
+            let nodes = access.snapshotTree()
+            if let baseline, ChatGPTLabels.assistantReplyCount(among: nodes) > baseline {
+                sawNewReply = true
+            }
+            let longest = nodes
                 .filter { $0.role == "AXStaticText" }
                 .map(\.value.count).max() ?? 0
-            if longest >= minimumLength && longest == previousLongest {
+            if sawNewReply && longest >= minimumLength && longest == previousLongest {
                 stableTicks += 1
                 if stableTicks >= 3 { return }
             } else {
@@ -269,8 +293,13 @@ public final class AXDriver: CoachBridge, Sendable {
             previousLongest = longest
             Thread.sleep(forTimeInterval: replySampleInterval)
         }
+        // **两种超时说的是两件事**，下一步也不一样：一条新回复都没出现，多半是那条消息
+        // 根本没发出去或者发去了别的会话；出现了但一直在长，那是它还在写。
+        let reason = sawNewReply
+            ? "ChatGPT 还在输出，一直没停下来。"
+            : "ChatGPT 一条新回复都没有出现——那条消息可能根本没发出去，或者发进了别的会话。"
         throw BridgeError.stateNotReached(
-            "等了 \(Int(timeout)) 秒，ChatGPT 还没把考官指令回复完。"
+            "等了 \(Int(timeout)) 秒，\(reason)"
             + "下一步：切到 ChatGPT 窗口看看它是不是还在输出；"
             + "如果它已经回复完了，说明本工具的判断有误，请把这条错误告诉开发者。")
     }

@@ -107,7 +107,8 @@ extension PracticeStage {
         case .idle: return .startingPractice
         case .newChat, .startingVoice, .waitingComposer, .sendingPrompt, .practicing,
              .endingVoice: return .drivingChatGPT
-        case .requestingReview, .capturingReview, .needsManualCopy: return .fetchingReview
+        case .requestingReview, .reaskingReview, .capturingReview,
+             .needsManualCopy: return .fetchingReview
         // 归档这一步里既写 `pending-reviews/`、又解析复盘、又写 `state.json`，
         // 三样都归「归档复盘」。到底是哪一样由错误代号说清
         // （`review-invalid-text` / `state-unreadable`），不必再切一次阶段。

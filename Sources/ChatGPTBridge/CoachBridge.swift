@@ -49,8 +49,16 @@ public protocol CoachBridge {
     func isVoiceActive() -> Bool
     func endVoice() throws
     func captureLatestAssistantMessage(expectedMarker: String?) throws -> String
+    /// 界面上现在有几条**已经写完**的助手回复，见 `ChatGPTLabels.assistantReplyCount`。
+    /// 发消息之前先取一次，就成了「等回复」的基线。
+    func assistantReplyCount() -> Int
     /// 等 ChatGPT 把上一条消息回复完，见 `AXDriver.waitForAssistantReply`。
-    func waitForAssistantReply(timeout: TimeInterval, minimumLength: Int) throws
+    ///
+    /// `afterReplyCount` 传发送**之前**的条数。**收尾链路上必须传**：
+    /// 那时屏幕上本来就有一整场的逐字稿和刚发出去的复盘请求，
+    /// 光看「文本不再变长」会在 ChatGPT 一个字都没答之前就成立。
+    func waitForAssistantReply(timeout: TimeInterval, minimumLength: Int,
+                               afterReplyCount: Int?) throws
     /// 按 ChatGPT 自己的复制按钮取回最新一条回复，见 `AXDriver.copyLatestAssistantMessage`。
     func copyLatestAssistantMessage(pasteboard: any PasteboardAccess, timeout: TimeInterval) throws -> String
 }
@@ -63,7 +71,15 @@ extension CoachBridge {
     }
 
     /// 同理：省略 `minimumLength` 的重载，默认 60 字符，与 `AXDriver` 的默认值保持一致。
+    ///
+    /// **这两个重载都不带基线**（等价于 `afterReplyCount: nil`）。它们只该用在
+    /// 新建会话之后那一次——那时屏幕上本来没东西，「文本不再变长」是成立的判据。
     public func waitForAssistantReply(timeout: TimeInterval) throws {
-        try waitForAssistantReply(timeout: timeout, minimumLength: 60)
+        try waitForAssistantReply(timeout: timeout, minimumLength: 60, afterReplyCount: nil)
+    }
+
+    public func waitForAssistantReply(timeout: TimeInterval, minimumLength: Int) throws {
+        try waitForAssistantReply(timeout: timeout, minimumLength: minimumLength,
+                                  afterReplyCount: nil)
     }
 }

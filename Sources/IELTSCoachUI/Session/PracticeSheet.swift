@@ -955,7 +955,9 @@ private struct InertBridge: CoachBridge, Sendable {
     func isVoiceActive() -> Bool { false }
     func endVoice() throws { throw refuse }
     func captureLatestAssistantMessage(expectedMarker: String?) throws -> String { throw refuse }
-    func waitForAssistantReply(timeout: TimeInterval, minimumLength: Int) throws { throw refuse }
+    func assistantReplyCount() -> Int { 0 }
+    func waitForAssistantReply(timeout: TimeInterval, minimumLength: Int,
+                               afterReplyCount: Int?) throws { throw refuse }
     func copyLatestAssistantMessage(pasteboard: any PasteboardAccess,
                                     timeout: TimeInterval) throws -> String { throw refuse }
 }

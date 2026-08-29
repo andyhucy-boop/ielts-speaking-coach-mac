@@ -6,6 +6,31 @@ public enum ReviewRequestPrompt {
         ("<<<IELTS_REVIEW_JSON:\(requestID)>>>", "<<<END_IELTS_REVIEW_JSON:\(requestID)>>>")
     }
 
+    /// **上一份复盘格式不对时再问一次**，并且告诉它上次错在哪。
+    ///
+    /// 原样再发一遍同一份提示词是白发一次：ChatGPT 手上没有任何新信息，
+    /// 多半会给出同样形状的输出。上游在同一处的做法是把校验器的具体报错回喂给模型，
+    /// 让它自己修——这里照做。
+    ///
+    /// **那句话必须排在最前面。** 排在一千多字的格式要求后面的话，它会被淹掉；
+    /// 而「不要重复上一条回复」正是这一次要它做的唯一一件不同的事。
+    ///
+    /// - Parameter problem: 解析器给出的诊断（例如「没有返回可识别的标准复盘 JSON」）。
+    ///   **原样转给 ChatGPT**，不要翻译成别的说法——它是唯一的新信息。
+    public static func retry(requestID: String, focusPart: FocusPart, problem: String) -> String {
+        """
+        你上一条回复的格式不对：\(problem)
+
+        不要重复上一条回复，也不要为此道歉或解释。现在重新输出一次，
+        **只输出被下面两行标记严格包裹的那一个 JSON 对象**，标记前后不要有任何其他文字。
+        内容仍然基于刚才那一整场对话，要求与下面完全一致。
+
+        ---
+
+        \(build(requestID: requestID, focusPart: focusPart))
+        """
+    }
+
     public static func build(requestID: String, focusPart: FocusPart) -> String {
         let (open, close) = marker(requestID: requestID)
         return """

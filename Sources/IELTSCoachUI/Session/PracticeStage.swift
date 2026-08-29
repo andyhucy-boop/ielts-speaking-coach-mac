@@ -19,6 +19,12 @@ public enum PracticeStage: Equatable, Sendable {
     case practicing
     case endingVoice
     case requestingReview
+    /// 第一份复盘格式不对，正在**告诉 ChatGPT 上次错在哪并让它重出一份**。
+    ///
+    /// **必须单独是一步。** 复用 `.requestingReview` 的话，用户看到的是
+    /// 「正在请 ChatGPT 写复盘」又转了一遍圈——他不知道刚才那次失败了、
+    /// 也不知道工具正在替他救这一场，只会以为程序卡住了。
+    case reaskingReview
     case capturingReview
     /// 两条自动取复盘的路都没走通，等用户在 ChatGPT 里手动 ⌘C。
     ///
@@ -52,7 +58,9 @@ public enum PracticeStage: Equatable, Sendable {
         case .sendingPrompt: return 4
         case .practicing: return 5
         case .endingVoice: return 6
-        case .requestingReview: return 7
+        // 重问和第一次问同格：它是同一步的第二次尝试，
+        // 给个更大的数会让进度条往前跳一格，看着像又完成了一步。
+        case .requestingReview, .reaskingReview: return 7
         case .capturingReview, .needsManualCopy: return 8
         case .archiving: return 9
         case .done: return 10
@@ -81,6 +89,9 @@ public enum PracticeStage: Equatable, Sendable {
             return "正在结束语音通话…"
         case .requestingReview:
             return "正在请 ChatGPT 写复盘，并等它写完…这一步可能要一分钟左右。"
+        case .reaskingReview:
+            return "ChatGPT 这次的复盘格式不对，正在把哪里不对告诉它、让它重新输出一次…"
+                + "这一步再等一分钟左右。你不用做任何事；两次都不行时会停下来问你。"
         case .capturingReview:
             return "正在把复盘取回来…"
         case .needsManualCopy(let message):
@@ -122,6 +133,7 @@ public enum PracticeStage: Equatable, Sendable {
         case .practicing: return "练习中"
         case .endingVoice: return "结束语音"
         case .requestingReview: return "请 ChatGPT 写复盘"
+        case .reaskingReview: return "让 ChatGPT 重出一份复盘"
         case .capturingReview, .needsManualCopy: return "取回复盘"
         case .archiving: return "存档复盘"
         case .done: return "完成"

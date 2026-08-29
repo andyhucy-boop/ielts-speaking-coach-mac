@@ -105,9 +105,28 @@ final class FakeBridge: CoachBridge, @unchecked Sendable {
 
     func endVoice() throws { try step("endVoice", .endingVoice) }
 
-    func waitForAssistantReply(timeout: TimeInterval, minimumLength: Int) throws {
+    /// 屏幕上已经写完的助手回复条数。**每问一次就 +1**，模拟「ChatGPT 又答了一条」。
+    ///
+    /// 这样运行器取到的基线和它之后等到的条数就一定不同，
+    /// 「必须先真的多出一条」那条判据在假 Bridge 上也是活的。
+    private var replyCount = 0
+    func assistantReplyCount() -> Int {
+        lock.withLock {
+            recordedCalls.append("replyCount")
+            replyCount += 1
+            return replyCount - 1
+        }
+    }
+
+    func waitForAssistantReply(timeout: TimeInterval, minimumLength: Int,
+                               afterReplyCount: Int?) throws {
+        lock.withLock { recordedBaselines.append(afterReplyCount) }
         try step("waitReply", .requestingReview)
     }
+
+    /// 每次 `waitForAssistantReply` 收到的基线。**收尾那一次必须非 nil**——
+    /// 传 nil 的话，等回复会在 ChatGPT 一个字都没答之前就返回。
+    private(set) var recordedBaselines: [Int?] = []
 
     func captureLatestAssistantMessage(expectedMarker: String?) throws -> String {
         lock.withLock { recordedCalls.append("captureAX"); recordedMarkers.append(expectedMarker) }
@@ -127,8 +146,17 @@ final class FakeBridge: CoachBridge, @unchecked Sendable {
             copyStarted.signal()
             copyGate.wait()
         }
-        return try copyResult.get()
+        return try lock.withLock {
+            // 队列非空时按次序取，取完之后回到那个固定值。
+            // **有了它才测得了「第一次格式不对、重问一次就好了」**——
+            // 只有一个固定返回值的话，重问拿到的还是同一份坏东西。
+            guard !queuedCopyResults.isEmpty else { return copyResult }
+            return queuedCopyResults.removeFirst()
+        }.get()
     }
+
+    /// 逐次返回的取复盘结果。空数组时用 `copyResult` 那个固定值。
+    var queuedCopyResults: [Result<String, BridgeError>] = []
 }
 
 /// 剪贴板的假实现。`Tests/ChatGPTBridgeTests/` 里有一个同名的，但那是另一个测试 target 的
@@ -287,8 +315,15 @@ final class PracticeRunnerTests: XCTestCase {
         bridge.clearCalls()
         try await runner.finishPractice()
 
-        XCTAssertEqual(bridge.calls, ["endVoice", "sendText", "waitReply", "copy"],
+        // **`replyCount` 必须排在 `sendText` 前面。** 它是「等回复」的基线：
+        // 发完再数就已经晚了（那时新回复可能已经出现，基线跟着变大，判据永远不成立），
+        // 而不数的话，等回复会在 ChatGPT 一个字都没答之前就返回——
+        // 那时屏幕上摆着整场逐字稿和刚发出去的请求本身，两样都不再变化。
+        XCTAssertEqual(bridge.calls, ["endVoice", "replyCount", "sendText", "waitReply", "copy"],
                        "必须先结束语音再请复盘——语音还开着时发文字，ChatGPT 未必收得到")
+        // 基线真的被传下去了。只钉调用顺序的话，运行器把它取出来又丢掉，这条照样全绿。
+        XCTAssertEqual(bridge.recordedBaselines, [0],
+                       "等回复时没有带上基线，判据会在 ChatGPT 一个字都没答之前就成立")
         XCTAssertEqual(runner.stage, .done)
 
         let state = try StateStore(directory: directory).load()
@@ -349,6 +384,95 @@ final class PracticeRunnerTests: XCTestCase {
 
         XCTAssertFalse(bridge.calls.contains("endVoice"))
         XCTAssertEqual(runner.stage, .done)
+    }
+
+    // MARK: - 格式不对时自动重问一次（2026-08-20，对照上游补的）
+
+    /// 此前这里直接失败，屏幕上摆一颗「重新取复盘」等用户去点——而点下去发的是
+    /// **一模一样**的提示词，ChatGPT 手上没有任何新信息，多半再给一份同样形状的输出。
+    func testAMalformedReviewIsAutomaticallyAskedForAgainAndRecovers() async throws {
+        let directory = try Self.temporaryDirectory()
+        let bridge = FakeBridge()
+        bridge.voiceActive = true
+        bridge.queuedCopyResults = [
+            .success("这一段根本不是 JSON，解析一定失败。" + String(repeating: "凑长度", count: 80)),
+            .success(Self.rawReview)
+        ]
+        let runner = Self.runner(bridge: bridge, directory: directory)
+
+        try await runner.start(setup: Self.setup())
+        bridge.clearCalls()
+        try await runner.finishPractice()
+
+        guard case .done = runner.stage else {
+            return XCTFail("重问一次就该救回来了，实际停在：\(runner.stage.userFacingText)")
+        }
+        // 真的又发了一次、又等了一次、又取了一次。
+        XCTAssertEqual(bridge.calls.filter { $0 == "sendText" }.count, 2, bridge.calls.description)
+        XCTAssertEqual(bridge.calls.filter { $0 == "copy" }.count, 2, bridge.calls.description)
+        let saved = try StateStore(directory: directory).load()
+        XCTAssertEqual(saved.sessions.first?.reportPath,
+                       "reports/\(runner.finishedSessionID ?? "").json",
+                       "救回来的这一份没有归档")
+    }
+
+    /// **重问那一次必须告诉 ChatGPT 上次错在哪，并明令不要重复上一条。**
+    /// 原样再发一遍同一份提示词是白发一次——这条钉的就是「发的不是同一份」。
+    func testTheSecondAskTellsChatGPTWhatWasWrongWithTheFirstOne() async throws {
+        let directory = try Self.temporaryDirectory()
+        let bridge = FakeBridge()
+        bridge.voiceActive = true
+        bridge.queuedCopyResults = [
+            .success("这一段根本不是 JSON，解析一定失败。" + String(repeating: "凑长度", count: 80)),
+            .success(Self.rawReview)
+        ]
+        let runner = Self.runner(bridge: bridge, directory: directory)
+        try await runner.start(setup: Self.setup())
+        bridge.clearCalls()
+        try await runner.finishPractice()
+
+        // `sentTexts` 不受 `clearCalls()` 影响，所以第一条是开练时那份考官提示词。
+        // 要看的是后两条：复盘请求，和重问。
+        let sent = bridge.sentTexts
+        XCTAssertEqual(sent.count, 3, "发出去的不是「考官提示词 + 复盘请求 + 重问」三条：\(sent.count) 条")
+        let first = sent[1], second = sent[2]
+        XCTAssertNotEqual(first, second, "重问发的是一模一样的提示词，等于白发一次")
+        XCTAssertTrue(second.contains("你上一条回复的格式不对"), second.prefix(200).description)
+        XCTAssertTrue(second.contains("不要重复上一条回复"))
+        // **两次用的必须是同一个 requestID**，否则第二次取回来的复盘对不上这一场的标记，
+        // 取复盘那一步会认不出它、退到手动 ⌘C——重问等于白重问一次。
+        let marker = try XCTUnwrap(first.firstMatch(of: /<<<IELTS_REVIEW_JSON:([a-z0-9-]+)>>>/))
+        XCTAssertTrue(second.contains(String(marker.1)),
+                      "重问换了一个 requestID，取回来的复盘会认不出属于这一场")
+    }
+
+    /// **只重问一次。** 第二次还不行说明不是一次偶然的截断，接着自动重发只会
+    /// 一遍遍往那条对话里贴一千多字，而用户在旁边干等。
+    func testItOnlyRetriesOnceAndThenAsksTheUser() async throws {
+        let directory = try Self.temporaryDirectory()
+        let bridge = FakeBridge()
+        bridge.voiceActive = true
+        bridge.copyResult = .success("两次都不是 JSON。" + String(repeating: "凑长度", count: 80))
+        let runner = Self.runner(bridge: bridge, directory: directory)
+
+        try await runner.start(setup: Self.setup())
+        bridge.clearCalls()
+        try? await runner.finishPractice()
+
+        XCTAssertEqual(bridge.calls.filter { $0 == "sendText" }.count, 2,
+                       "重问了不止一次：\(bridge.calls)")
+        guard case .failed = runner.stage else {
+            return XCTFail("两次都失败之后该停下来问用户，实际：\(runner.stage.userFacingText)")
+        }
+    }
+
+    /// **磁盘写不下去时不许重问。** 那是磁盘的问题，再问 ChatGPT 一百遍也没用，
+    /// 而重问会让用户白等一分钟。
+    func testAStorageFailureIsNotRetriedAgainstChatGPT() {
+        XCTAssertFalse(CoachError.stateUnreadable("盘满了").isReviewFormatProblem)
+        XCTAssertTrue(CoachError.invalidReviewText("读不出来").isReviewFormatProblem)
+        XCTAssertTrue(CoachError.reviewNotFound("没找到").isReviewFormatProblem)
+        XCTAssertTrue(CoachError.reviewIncomplete("缺回答建议").isReviewFormatProblem)
     }
 
     /// **先落盘再解析。** 练了半小时换来的复盘，不能因为解析出错就没了（成品标准第 7 条）。
