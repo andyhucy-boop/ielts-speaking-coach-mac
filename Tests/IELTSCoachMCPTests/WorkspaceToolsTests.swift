@@ -112,13 +112,15 @@ final class WorkspaceToolsTests: XCTestCase {
 
     // MARK: - 目录
 
-    func testCatalogOnlyContainsNamesFromSpec() {
-        // spec 4.4 钉死了 7 个名字。这条先兜住「不许自己发明工具名」，
-        // Task 9 再收紧成「恰好这 7 个、顺序也一致」。
+    func testCatalogOnlyContainsNamesFromSpecOrUpstream() {
+        // spec 4.4 钉死了 7 个名字，兜住「不许自己发明工具名」。
+        // `list_question_bank` 是后来从上游 `mcp/server.mjs` 补回来的
+        //（理由见 `ToolCatalogTests.testAnyToolBeyondTheSpecIsOneWeDeliberatelyAdded`），
+        // 同样不是自己发明的。
         let specNames: Set<String> = [
             "initialize_ielts_workspace", "open_dashboard", "set_training_selection",
             "get_training_context", "save_session_review", "list_practice_history",
-            "get_dashboard_data"
+            "get_dashboard_data", "list_question_bank"
         ]
         let names = ToolCatalog.tools(environment:
             makeEnvironment(directory: directory, opener: opener)).map(\.name)

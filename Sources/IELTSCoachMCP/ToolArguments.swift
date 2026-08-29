@@ -48,6 +48,19 @@ public struct ToolArguments {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    /// 布尔参数。**类型不对时报错，不当成 false。**
+    ///
+    /// 传了 `"true"`（字符串）却被静静当成 false 的话，调用方以为自己开了那个开关、
+    /// 拿到的却是关着的行为，而且没有任何提示——本项目反复消灭的正是这类静默失败。
+    public func optionalBool(_ key: String, default fallback: Bool = false) throws -> Bool {
+        guard let raw = value[key], raw != .null else { return fallback }
+        guard let flag = raw.boolValue else {
+            throw ToolInputError(message: "参数「\(key)」必须是 true 或 false（布尔值，不是字符串）。"
+                + "下一步：改成 true / false 再传一次；本来就不想传的话，整个省掉即可。")
+        }
+        return flag
+    }
+
     /// **越界报错，不夹紧。** 夹紧等于「调用方以为自己传的是 0，拿到的却是 1 的行为，
     /// 而且没有任何提示」——本项目反复消灭的正是这类静默失败。
     public func optionalInt(_ key: String, in range: ClosedRange<Int>,

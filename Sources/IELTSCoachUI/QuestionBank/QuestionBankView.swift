@@ -26,10 +26,18 @@ struct QuestionBankView: View {
     /// `QuestionBankViewTests` 扫源码守着这一条。
     @State private var feedback: QuestionBankImportFeedback?
 
+    /// 搜索关键词。**这一页此前一个输入框都没有**，想找「上次那道讲书的题」
+    /// 只能在 258 条里一条条滑（见 `QuestionSearch`）。
+    @State private var keyword = ""
+
     private var partFilter: Int? { partSelection == QuestionPartFilter.allParts ? nil : partSelection }
 
+    /// 关键词筛过之后的题库。**筛在 Part 之前**：两者是与的关系，
+    /// 顺序不影响结果，但先筛关键词能让下面那个「这一档一道题都没有」的空状态
+    /// 说的是「搜不到」而不是「这个 Part 没题」——后者会让他去导题库，白跑一趟。
     private var model: QuestionBankViewModel {
-        QuestionBankViewModel(questions: app.state.questions)
+        QuestionBankViewModel(questions: QuestionSearch.filter(app.state.questions,
+                                                               keyword: keyword))
     }
 
     var body: some View {
@@ -124,9 +132,21 @@ struct QuestionBankView: View {
             .fixedSize()
             .accessibilityLabel("按 Part 筛选题目")
 
+            TextField(QuestionSearch.placeholder, text: $keyword)
+                .textFieldStyle(.roundedBorder)
+                .font(Typography.body)
+                .accessibilityLabel("按关键词搜题")
+
             let groups = model.groupedByTopic(part: partFilter)
             if groups.isEmpty {
-                noQuestionsInThisPart
+                // **搜不到和「这个 Part 没题」是两件事。** 都说成后者的话，
+                // 他会去导一份题库，而问题只是关键词打长了。
+                if let notice = QuestionSearch.emptyNotice(
+                    keyword: keyword, searchedCount: app.state.questions.count) {
+                    searchFoundNothing(notice)
+                } else {
+                    noQuestionsInThisPart
+                }
             } else {
                 ForEach(groups, id: \.topic) { group in
                     topicCard(topic: group.topic, questions: group.questions)
@@ -185,6 +205,24 @@ struct QuestionBankView: View {
 
             Spacer(minLength: Spacing.sm)
             statusBadge(for: question)
+        }
+    }
+
+    /// 关键词搜不到东西时那块空状态。
+    ///
+    /// **和「这个 Part 下没有题」分开**：都说成后者的话，用户会去导一份新题库，
+    /// 而问题只是关键词打长了。那颗按钮清的是关键词，不是 Part 档位。
+    private func searchFoundNothing(_ notice: String) -> some View {
+        CoachCard {
+            VStack(alignment: .leading, spacing: Spacing.sm) {
+                Text(notice)
+                    .font(Typography.body)
+                    .foregroundStyle(Palette.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Button("清空搜索") { keyword = "" }
+                    .buttonStyle(.bordered)
+            }
         }
     }
 

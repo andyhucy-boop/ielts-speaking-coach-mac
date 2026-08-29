@@ -50,7 +50,11 @@ enum SetTrainingSelectionTool {
                 guard let question = state.questions.first(where: { $0.id == questionID }) else {
                     throw ToolInputError(message:
                         "题库里没有题号「\(questionID)」（当前共 \(state.questions.count) 题）。"
-                        + "下一步：调用 get_dashboard_data 看看现在有哪些题，"
+                        // **指的是 `list_question_bank`，不是 `get_dashboard_data`。**
+                        // 后者只返回「学习计划里今天那几道」，没有计划时是空数组——
+                        // 而没有计划恰恰是最可能撞到这条报错的那一格：
+                        // 照着它去调，一道题也看不到，两句「下一步」互相指着对方。
+                        + "下一步：调用 list_question_bank 看看有哪些题（可按 Part 筛、按关键词搜），"
                         + "或先在 App 的「训练题库」页导入题库。")
                 }
                 let inferred = FocusPart.inferred(fromQuestionPart: question.part)

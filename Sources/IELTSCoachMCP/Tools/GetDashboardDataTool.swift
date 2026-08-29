@@ -92,7 +92,8 @@ enum GetDashboardDataTool {
                 note = "题库还是空的，现在还没法开练。下一步：在 App 的「训练题库」页导入题库文件，"
                     + "或在终端运行 coach questions import <文件>。"
             } else if summary.plan == nil {
-                note = "还没有学习计划。下一步：可以直接用 set_training_selection 挑一道题开练。"
+                note = "还没有学习计划。下一步：用 list_question_bank 看看有哪些题，"
+                    + "挑一道之后交给 set_training_selection 开练。"
             } else {
                 note = "下一步：用 set_training_selection 选定 todayQuestions 里的一道题，"
                     + "再用 get_training_context 取考官提示词。"

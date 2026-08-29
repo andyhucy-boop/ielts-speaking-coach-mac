@@ -115,13 +115,18 @@ struct PracticeSheet: View {
     /// 这两条本来也各有出处：复训带的是复盘给的目标，「继续上次」带的是上一场那个。
     @State private var goal = ""
 
+    /// 挑题列表的搜索关键词。空串 = 不筛（与从前逐字一致）。
+    @State private var keyword = ""
+
     private var partPicker: PracticePicker { PracticePicker(questions: candidates) }
 
     /// 当前这一档筛出来的题。**挑好的那道不在这一档里时要把选择清掉**——
     /// 否则用户选了 Part 1 的一道题、切到 Part 2、再点「开始练习」，
     /// 练的是屏幕上一道也看不见的题。
     private var visibleCandidates: [Question] {
-        partPicker.questions(inParts: partSelection)
+        // 关键词筛在 Part 之后。这个弹层的列表在一个很矮的窗口里滑 99 行，
+        // 而他要找的多半是「上次那道讲书的题」——打两个字就到了（见 `QuestionSearch`）。
+        QuestionSearch.filter(partPicker.questions(inParts: partSelection), keyword: keyword)
     }
 
     /// 当前这一档筛出来的题，再**按 Part 分成几栏**。用户原话：
@@ -247,7 +252,18 @@ struct PracticeSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
                 partSection
                 goalField
+                TextField(QuestionSearch.placeholder, text: $keyword)
+                    .textFieldStyle(.roundedBorder)
+                    .font(Typography.body)
+                    .accessibilityLabel("按关键词搜题")
                 if let notice = partPicker.emptyNotice(forParts: partSelection) {
+                    emptyPartNotice(notice)
+                } else if visibleCandidates.isEmpty,
+                          let notice = QuestionSearch.emptyNotice(
+                              keyword: keyword,
+                              searchedCount: partPicker.questions(inParts: partSelection).count) {
+                    // 搜不到和「这个 Part 一道题都没有」是两件事：前者清关键词就好，
+                    // 后者要去改勾选或者导题库。说成同一句的话，他会白跑一趟。
                     emptyPartNotice(notice)
                 } else {
                     sectionsNotice

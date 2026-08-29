@@ -16,18 +16,37 @@ final class ToolCatalogTests: XCTestCase {
         try? FileManager.default.removeItem(at: directory.root)
     }
 
-    func testExposesExactlyTheSevenToolsNamedInSpec() {
-        // spec 第 4.4 节逐字列的就是这七个，顺序也照抄。
-        // 多一个、少一个、改一个字，都是把上游协议改掉了。
-        XCTAssertEqual(tools.map(\.name), [
-            "initialize_ielts_workspace",
-            "open_dashboard",
-            "set_training_selection",
-            "get_training_context",
-            "save_session_review",
-            "list_practice_history",
-            "get_dashboard_data"
-        ])
+    /// spec 第 4.4 节逐字列的那七个，**一个都不许少，相对顺序也不许乱**。
+    /// 少一个、改一个字，都是把上游协议改掉了。
+    static let specTools = [
+        "initialize_ielts_workspace",
+        "open_dashboard",
+        "set_training_selection",
+        "get_training_context",
+        "save_session_review",
+        "list_practice_history",
+        "get_dashboard_data"
+    ]
+
+    func testStillExposesTheSevenSpecToolsInTheirSpecOrder() {
+        XCTAssertEqual(tools.map(\.name).filter(Self.specTools.contains), Self.specTools)
+    }
+
+    /// **spec 之外的工具必须是一件明确决定过的事，不能是顺手加的。**
+    ///
+    /// 这条从前写的是「恰好这七个」。放宽成「七个都在 + 额外的逐个点名」，
+    /// 是因为 spec 4.4 那张表本身就比上游少：上游的 `mcp/server.mjs` 有
+    /// `list_question_bank`，而本项目当初没移植——后果是这个服务**一个题号都吐不出来**，
+    /// `set_training_selection` 的 questionId 又是必填，
+    /// 于是模型只能反过来叫用户打开 App 自己抄一串题号过来。
+    ///
+    /// 加进来是**向上游靠拢**，不是自己发明协议。名单写死在这里，
+    /// 下一个人再加一个就会当场变红、必须在这里说明理由。
+    func testAnyToolBeyondTheSpecIsOneWeDeliberatelyAdded() {
+        let extras = tools.map(\.name).filter { !Self.specTools.contains($0) }
+        XCTAssertEqual(extras, ["list_question_bank"],
+                       "出现了没记在案的工具：\(extras)。"
+                           + "下一步：要么去掉它，要么在这条测试里写清为什么加。")
     }
 
     func testEveryToolHasAChineseDescriptionAndAnObjectSchema() {
