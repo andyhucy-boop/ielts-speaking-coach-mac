@@ -1,3 +1,4 @@
+import ChatGPTBridge
 import Foundation
 import IELTSCoachCore
 import Observation
@@ -98,6 +99,9 @@ public final class PendingReviewViewModel {
     private let store: StateStore
     private let timeZone: TimeZone
     private let now: @Sendable () -> Date
+    /// 「从剪贴板补录」要读的那块剪贴板。**可注入**，否则那条路一条测试都写不了——
+    /// 而测试里去动真实剪贴板会把用户当时复制的东西弄没。
+    private let pasteboard: any PasteboardAccess
 
     public private(set) var rows: [PendingReviewRow] = []
     /// 给用户看的中文说明（成功或失败）。**非 nil 时界面必须显示它。**
@@ -105,11 +109,13 @@ public final class PendingReviewViewModel {
 
     public init(directory: DataDirectory, store: StateStore,
                 timeZone: TimeZone = .current,
-                now: @escaping @Sendable () -> Date = { Date() }) {
+                now: @escaping @Sendable () -> Date = { Date() },
+                pasteboard: any PasteboardAccess = SystemPasteboard()) {
         self.directory = directory
         self.store = store
         self.timeZone = timeZone
         self.now = now
+        self.pasteboard = pasteboard
     }
 
     public var isEmpty: Bool { rows.isEmpty }
@@ -141,6 +147,72 @@ public final class PendingReviewViewModel {
         }
     }
 
+    /// **把剪贴板里那份复盘补进某一场。**
+    ///
+    /// ## 在这之前这条路是断的
+    ///
+    /// 解析失败时工具会对用户说「回 ChatGPT 里让它按要求重新输出一次，复制之后……」——
+    /// 而 App 里**没有任何地方能把复制回来的那份收进这一场**。
+    /// 「重新导入待处理的复盘」读的是已经在盘上那个文件，也就是那份**坏的**原文，
+    /// 再导一百遍还是同一份。那句「下一步」是一张空头支票（铁律 4）。
+    ///
+    /// ## 做法：先落盘，再走原来那条路
+    ///
+    /// 剪贴板里那段字先写成这一场的又一份原文（`PendingReviewStore.write` 会自动
+    /// 落成 `<id>-2.txt`，不覆盖任何东西），然后原样走 `reimport(_:)`。
+    ///
+    /// **一行归档逻辑都不另写**：另写一份的话，「从剪贴板补录」和「重新导入」
+    /// 迟早会在归到哪一场、写不写 `reportPath`、错题怎么并这些事上分家，
+    /// 而那种分家不会报错。
+    ///
+    /// - Parameter sessionID: 补给哪一场。
+    public func importFromClipboard(into sessionID: String) {
+        let raw = (pasteboard.readString() ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        // **先看一眼再落盘。** 剪贴板里多半是别的东西（他刚复制的一个词、一条链接），
+        // 每按一次就往数据目录里丢一个文件的话，那个目录很快就没法看了。
+        guard raw.count >= ClipboardFallback.minimumLength else {
+            notice = "剪贴板里没有看起来像复盘的内容（只有 \(raw.count) 个字符）。"
+                + "下一步：回到那条 ChatGPT 对话，把它输出的那一整段复盘全选复制"
+                + "（要包含开头和结尾那两行 <<<…>>> 标记），再回来点一次这颗按钮。"
+            return
+        }
+
+        let entry: PendingReviewEntry
+        do {
+            _ = try PendingReviewStore.write(rawText: raw, sessionID: sessionID,
+                                             directory: directory)
+            // 落盘之后重新列一次，拿到刚写下的那一份。**不假设文件名叫什么**——
+            // 撞名时 `write` 会自己加 `-N` 后缀，猜名字迟早猜错。
+            let entries = try PendingReviewStore.list(directory: directory)
+            guard let written = entries.first(where: { $0.fileName.contains(sessionID) })
+                ?? entries.last else {
+                notice = "刚写下的那份复盘原文又找不到了。"
+                    + "下一步：点「刷新」看看列表里有没有它；没有的话请把这个情况告诉开发者。"
+                return
+            }
+            entry = written
+        } catch {
+            notice = "没能把剪贴板里那份复盘存进数据目录：\(error.localizedDescription) "
+                + "下一步：确认数据目录可写（默认在「资源库 › Application Support › "
+                + "IELTS Speaking Coach」），然后再点一次。"
+            return
+        }
+
+        refresh()
+        // 走原来那条路。找不到刚写的那一行时兜底自己造一行——列表那一侧另有筛选规则
+        // （已导入的会被隐藏），不该让它决定这次补录成不成。
+        let row = rows.first { $0.entry == entry }
+            ?? PendingReviewRowBuilder.rows(entries: [entry],
+                                            state: (try? store.load()) ?? CoachState.empty(),
+                                            timeZone: timeZone).first
+        guard let row else {
+            notice = "刚写下的那份复盘原文没能整理成一行记录。"
+                + "下一步：点「刷新」再看一次列表。"
+            return
+        }
+        reimport(row)
+    }
+
     public func reimport(_ row: PendingReviewRow) {
         let raw: String
         do { raw = try PendingReviewStore.read(row.entry) } catch {
@@ -168,7 +240,8 @@ public final class PendingReviewViewModel {
             notice = "「\(row.sessionID)」还是解析不了：\(PracticeRunner.diagnosisOnly(error))。"
                 + "下一步：点「查看原文」看看 ChatGPT 到底输出了什么；"
                 + "若确实不是标准格式，回 ChatGPT 里让它按要求重新输出一次，"
-                + "复制之后新练一场时会自动落盘。这个文件原样留着，没有被改动。"
+                + "把那一整段复制下来，关掉这张表，再点「从剪贴板补录这一场的复盘」。"
+                + "这个文件原样留着，没有被改动。"
             return
         }
 

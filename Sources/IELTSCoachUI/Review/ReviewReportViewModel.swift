@@ -236,6 +236,36 @@ public enum ReviewReportViewModel {
         return titles
     }
 
+    /// **这一份复盘里没有「逐题高分版」时要说的那句话。** 有就是 nil。
+    ///
+    /// ## 为什么单独盯这一节
+    ///
+    /// 它是整份复盘里对考生最有用的一节（我这么说的 → 应该怎么说）。而它**不进档案**——
+    /// 只存在 `reports/<id>.json` 里给这一页读，所以 `ArchiveOutcome.skipped`
+    /// 那套「归进档案了没有」的检查根本盯不到它。
+    ///
+    /// 缺了整节的表现是：`sections(from:)` 里 `rows.isEmpty` 那道 guard 把它整节丢掉，
+    /// 页面上那一节**根本不画出来**，而 `unreadableSections` 只报「键在、却读不出来」的情况——
+    /// 键压根不在时它一个字都不说。用户看到的是一份看起来完整的复盘。
+    ///
+    /// 本项目**有**要求它的能力（`ReviewParser` 的 `requireAnswerUpgrades`，还带着测试），
+    /// 但五个生产调用点全部传 `false`。刻意不去把那个开关翻成 `true`：
+    /// 那会把一份其余部分完好的复盘变成硬失败，用户练的半小时反而全丢了。
+    /// 说一句话、让他知道可以去要，比拒收整份复盘成比例得多。
+    public static func missingAnswerUpgradesNotice(in report: JSONValue) -> String? {
+        let usable = (report["answer_upgrades"]?.arrayValue ?? []).contains { item in
+            guard item.objectValue != nil else { return false }
+            return !(item["original_answer"] ?? .null).isBlank
+                && !(item["revised_answer"] ?? .null).isBlank
+        }
+        guard !usable else { return nil }
+        return "这次的复盘里没有「逐题高分版」——也就是「你当时怎么说的 → 高分版该怎么说」那一节，"
+            + "而它通常是整份复盘里最值得看的一节。这不影响其余内容，也不影响已经归档的错题与词汇。"
+            + "下一步：回到那条 ChatGPT 对话，让它「针对刚才每一道有实质回答的题，"
+            + "补出 answer_upgrades 这一节」，把它重新输出的那一整段复制下来，"
+            + "再回这一页点「从剪贴板补录这一场的复盘」。"
+    }
+
     /// 那张深色的「下一次唯一目标」卡片要画的内容。没有目标时返回 nil。
     ///
     /// **判据整个交给 `RetrainingPolicy.extractTarget`，这里一个条件都不许自己加。**

@@ -1,3 +1,4 @@
+import ChatGPTBridge
 import IELTSCoachCore
 import XCTest
 @testable import IELTSCoachUI
@@ -57,6 +58,98 @@ final class PendingReviewViewModelTests: XCTestCase {
     private func model() -> PendingReviewViewModel {
         PendingReviewViewModel(directory: directory, store: store, timeZone: utc,
                                now: { fixedNow })
+    }
+
+    /// 可编程的剪贴板。**绝不碰真实剪贴板**：测试里读它会把用户当时复制的东西弄没。
+    private final class StubPasteboard: PasteboardAccess, @unchecked Sendable {
+        var contents: String?
+        func readString() -> String? { contents }
+        func clear() { contents = nil }
+    }
+
+    private func model(clipboard: String?) -> (PendingReviewViewModel, StubPasteboard) {
+        let board = StubPasteboard()
+        board.contents = clipboard
+        return (PendingReviewViewModel(directory: directory, store: store, timeZone: utc,
+                                       now: { fixedNow }, pasteboard: board), board)
+    }
+
+    // MARK: - 从剪贴板补录（2026-08-20：把一句一直说不到的「下一步」变成真的）
+
+    /// 在这之前，工具会对用户说「回 ChatGPT 让它重新输出一次，复制之后……」，
+    /// 而 App 里**没有任何地方**能把复制回来的那份收进这一场：
+    /// 「重新导入待处理的复盘」读的是盘上那份**坏的**原文，再导一百遍还是同一份。
+    func testAReviewPastedBackFromChatGPTGetsArchivedIntoThatSession() throws {
+        try seedSession("2026-08-06-001")
+        // 盘上先有一份坏的原文（自动取复盘失败时留下的那种）。
+        _ = try PendingReviewStore.write(rawText: "这是坏的那一份，解析不了。",
+                                         sessionID: "2026-08-06-001", directory: directory)
+
+        let (model, _) = model(clipboard: Self.goodReview)
+        model.importFromClipboard(into: "2026-08-06-001")
+
+        let saved = try store.load()
+        XCTAssertEqual(saved.sessions.first?.reportPath, "reports/2026-08-06-001.json",
+                       "补录的这一份没有挂到那一场上：\(model.notice ?? "（没有说明）")")
+        XCTAssertEqual(saved.issues.count, 1, "错题没有归进档案")
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: directory.reportsDirectory.appending(path: "2026-08-06-001.json").path))
+    }
+
+    /// **坏的那一份原样留着。** 它是用户练了半小时换来的东西，
+    /// 而且出问题时它是唯一能拿去对照的证据。
+    func testPastingANewReviewNeverOverwritesTheOldRawText() throws {
+        try seedSession("2026-08-06-001")
+        _ = try PendingReviewStore.write(rawText: "这是坏的那一份，解析不了。",
+                                         sessionID: "2026-08-06-001", directory: directory)
+
+        let (model, _) = model(clipboard: Self.goodReview)
+        model.importFromClipboard(into: "2026-08-06-001")
+
+        let names = try pendingFileNames()
+        XCTAssertEqual(names.count, 2, "补录之后原文文件数不对：\(names)")
+        XCTAssertTrue(names.contains { $0.hasPrefix("2026-08-06-001.txt") },
+                      "坏的那一份被动过了：\(names)")
+    }
+
+    /// 剪贴板里多半是别的东西（刚复制的一个词、一条链接）。
+    /// **每按一次就往数据目录里丢一个文件的话，那个目录很快就没法看了。**
+    func testAShortClipboardIsRefusedBeforeAnythingIsWrittenToDisk() throws {
+        try seedSession("2026-08-06-001")
+        let (model, _) = model(clipboard: "borrow")
+        model.importFromClipboard(into: "2026-08-06-001")
+
+        XCTAssertEqual(try pendingFileNames(), [], "没看一眼就往盘上写了")
+        let notice = try XCTUnwrap(model.notice)
+        XCTAssertTrue(notice.contains("下一步"), notice)
+        XCTAssertTrue(notice.contains("标记"), "没告诉他要连开头结尾那两行标记一起复制：\(notice)")
+    }
+
+    /// 剪贴板是空的时候同样得说话，而不是按下去什么都不发生。
+    func testAnEmptyClipboardStillSaysSomething() throws {
+        try seedSession("2026-08-06-001")
+        let (model, _) = model(clipboard: nil)
+        model.importFromClipboard(into: "2026-08-06-001")
+        XCTAssertNotNil(model.notice)
+        XCTAssertEqual(try pendingFileNames(), [])
+    }
+
+    /// 判「这看着像不像一份复盘」用的是 `ClipboardFallback.minimumLength` 那**同一个**数
+    /// （自动取复盘那条路上也是它）。各定一个数的话，同一段文字在一处被收下、
+    /// 在另一处被拒绝，而用户没有任何办法知道为什么。这里从行为上钉那条线在哪儿。
+    func testTheLengthCutoffIsTheSameOneUsedWhenCopyingAutomatically() throws {
+        try seedSession("2026-08-06-001")
+
+        let justUnder = String(repeating: "x", count: ClipboardFallback.minimumLength - 1)
+        let (tooShort, _) = model(clipboard: justUnder)
+        tooShort.importFromClipboard(into: "2026-08-06-001")
+        XCTAssertEqual(try pendingFileNames(), [], "刚好差一个字符也该被挡在盘外")
+
+        let justOver = String(repeating: "x", count: ClipboardFallback.minimumLength)
+        let (longEnough, _) = model(clipboard: justOver)
+        longEnough.importFromClipboard(into: "2026-08-06-001")
+        XCTAssertEqual(try pendingFileNames().count, 1,
+                       "到了长度线还被挡在外面——那条线两处对不上了")
     }
 
     private func seedSession(_ id: String, questionId: String = "q1") throws {

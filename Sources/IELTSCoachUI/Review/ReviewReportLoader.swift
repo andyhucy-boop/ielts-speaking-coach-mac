@@ -15,16 +15,20 @@ public struct ReviewDocument: Equatable, Sendable {
     /// ChatGPT 在总结里写了雅思分数时要说的那句话（`BandScoreGuard`）；没写就是 nil。
     /// **不是错误**：其余内容照常显示、原文照常存着，只有带分数的那一句被挡在总结之外。
     public let scoreNotice: String?
+    /// 这份复盘里没有「逐题高分版」时的那句话；有就是 nil。
+    /// 见 `ReviewReportViewModel.missingAnswerUpgradesNotice`。
+    public let missingAnswerUpgrades: String?
 
     public init(path: String, priorityTarget: ReviewRow?, summary: String,
                 sections: [ReviewSection], unreadableSections: [String],
-                scoreNotice: String? = nil) {
+                scoreNotice: String? = nil, missingAnswerUpgrades: String? = nil) {
         self.path = path
         self.priorityTarget = priorityTarget
         self.summary = summary
         self.sections = sections
         self.unreadableSections = unreadableSections
         self.scoreNotice = scoreNotice
+        self.missingAnswerUpgrades = missingAnswerUpgrades
     }
 
     /// 解析成功了，但一个字都没有可显示的。界面必须据此说一句话——
@@ -110,6 +114,7 @@ public enum ReviewReportLoader {
             summary: ReviewReportViewModel.summary(from: report),
             sections: ReviewReportViewModel.sections(from: report),
             unreadableSections: ReviewReportViewModel.unreadableSections(in: report),
-            scoreNotice: ReviewReportViewModel.scoreNotice(from: report))
+            scoreNotice: ReviewReportViewModel.scoreNotice(from: report),
+            missingAnswerUpgrades: ReviewReportViewModel.missingAnswerUpgradesNotice(in: report))
     }
 }

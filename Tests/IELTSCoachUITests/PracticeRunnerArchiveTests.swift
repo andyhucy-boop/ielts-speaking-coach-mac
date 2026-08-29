@@ -210,7 +210,14 @@ final class PracticeRunnerArchiveTests: XCTestCase {
         XCTAssertTrue(message.contains("下一步"))
         XCTAssertFalse(message.contains("终端"),
                        "不许把用户推回终端——界面里已经有「重新导入待处理的复盘」了")
-        XCTAssertTrue(message.contains("重新导入"), "要指出界面里那个入口")
+        // 指的必须是**这份复盘能真的补回来**的那条路。
+        //
+        // 原先这里认的是「重新导入」——而那条路读的是盘上那份**已经坏掉**的原文，
+        // 再导一百遍还是同一份。这句话前半段刚让用户「回 ChatGPT 重新输出一次」，
+        // 后半段却把他指向一个收不下新内容的入口（铁律 4）。
+        // 现在指的是复盘报告页那颗「从剪贴板补录这一场的复盘」。
+        XCTAssertTrue(message.contains("从剪贴板补录"), "要指出界面里那个真能补回来的入口")
+        XCTAssertTrue(message.contains("复盘报告"), "没说这颗按钮在哪一页")
 
         let saved = try store.load()
         XCTAssertEqual(saved.sessions.count, 1, "复盘挂了，练习本身和逐字稿都还得在")

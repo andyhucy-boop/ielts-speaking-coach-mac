@@ -658,8 +658,9 @@ public final class PracticeRunner {
                     + "这一场也已经记进训练记录了。"
                     + "下一步：先点「\(retryOnFailure.buttonTitle)」再取一次；"
                     + "还是不行的话，打开上面那个文件看看 ChatGPT 到底输出了什么"
-                    + "（多半是被截断了，末尾少个 }），或者回 ChatGPT 让它按要求重新输出一次，"
-                    + "再到「复盘报告」页用「重新导入待处理的复盘」把这份原文补进来。")
+                    + "（多半是被截断了，末尾少个 }）；"
+                    + "或者回 ChatGPT 让它按要求重新输出一次，把那一整段复制下来，"
+                    + "再到「复盘报告」页点「从剪贴板补录这一场的复盘」。")
         }
 
         let timestamp = ISO8601DateFormatter().string(from: now())

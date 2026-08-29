@@ -35,6 +35,9 @@ struct ReviewReportView: View {
     /// 拿 0 顶替的话，「读完了确实没有」和「还没读」长得一模一样，正是本项目最忌讳的静默。
     @State private var inbox: PendingReviewViewModel?
     @State private var isShowingInbox = false
+    /// 「从剪贴板补录」的结果（成功或失败都要说）。**必须留在屏幕上**：
+    /// 一闪就没的话，补录到底成没成用户永远不知道，只会再按一次。
+    @State private var recoveryNotice: String?
 
     private var sessions: [PracticeSession] {
         ReviewReportViewModel.archivedSessions(in: app.state)
@@ -92,11 +95,42 @@ struct ReviewReportView: View {
         VStack(alignment: .trailing, spacing: Spacing.xs) {
             Button("重新导入待处理的复盘") { isShowingInbox = true }
                 .buttonStyle(.bordered)
+            clipboardRecoveryButton
             Text(pendingCountText)
                 .font(Typography.label)
                 .monospacedDigit()
                 .foregroundStyle(Palette.textSecondary)
         }
+    }
+
+    /// **「从剪贴板补录这一场的复盘」。**
+    ///
+    /// 在这之前这条路是断的：工具会对用户说「回 ChatGPT 让它重新输出一次，复制之后……」，
+    /// 而 App 里没有任何地方能把复制回来的那份收进这一场。
+    /// 「重新导入待处理的复盘」读的是盘上那个文件，也就是那份**坏的**原文，
+    /// 再导一百遍还是同一份——那句「下一步」一直是张空头支票（铁律 4）。
+    ///
+    /// **只在选中了某一场时才出现**：不知道补给哪一场的话，这颗按钮无处可去。
+    @ViewBuilder
+    private var clipboardRecoveryButton: some View {
+        if let selected {
+            Button("从剪贴板补录这一场的复盘") { recoverFromClipboard(into: selected) }
+                .buttonStyle(.bordered)
+                .help("先在 ChatGPT 里把它重新输出的那一整段复盘复制下来，再点这里")
+        }
+    }
+
+    /// 把剪贴板里那份复盘补进这一场。
+    ///
+    /// **补完必须把这一页重读一遍**：不重读的话，右半边显示的还是旧那份（或者一句
+    /// 「找不到复盘原文」），用户会以为补录没成，然后再按一次——
+    /// 而那会往数据目录里再落一份一模一样的原文。
+    private func recoverFromClipboard(into session: PracticeSession) {
+        guard let inbox else { return }
+        inbox.importFromClipboard(into: session.id)
+        recoveryNotice = inbox.notice
+        app.reload()
+        loadSelected()
     }
 
     /// 待处理条数。**0 也要显示出来**，那是「清点过了，确实没有」的意思；
@@ -197,6 +231,7 @@ struct ReviewReportView: View {
                 if let failure {
                     failureCard(failure)
                 } else if let document {
+                    if let notice = recoveryNotice { recoveryNoticeCard(notice) }
                     if let target = document.priorityTarget { priorityCard(target) }
                     // 摆在总结**上面**：它说的正是那段总结被动过什么，
                     // 摆到下面去的话，用户已经把改过的总结当成原文读完了。
@@ -205,6 +240,9 @@ struct ReviewReportView: View {
                         unreadableCard(document.unreadableSections)
                     }
                     if !document.summary.isEmpty { summaryCard(document.summary) }
+                    if let notice = document.missingAnswerUpgrades {
+                        missingUpgradesCard(notice)
+                    }
                     ForEach(document.sections) { section in
                         sectionCard(section)
                     }
@@ -284,6 +322,42 @@ struct ReviewReportView: View {
         }
         .buttonStyle(.bordered)
         .padding(.top, Spacing.xs)
+    }
+
+    /// 这份复盘里没有「逐题高分版」那一节时的交代。
+    ///
+    /// 缺了整节的表现是那一节**根本不画出来**，而这一页此前一个字都不会提——
+    /// 用户看到的是一份看起来完整的复盘，只是少了最值得看的一节。
+    private func missingUpgradesCard(_ notice: String) -> some View {
+        CoachCard {
+            HStack(alignment: .top, spacing: Spacing.sm) {
+                Image(systemName: "exclamationmark.triangle")
+                    .foregroundStyle(Palette.warning)
+                Text(notice)
+                    .font(Typography.secondary)
+                    .foregroundStyle(Palette.textPrimary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    /// 「从剪贴板补录」的结果。**成功和失败都用这一张**：两种都得说，
+    /// 而且都得留在屏幕上直到用户自己收起来（一闪就没等于没说）。
+    private func recoveryNoticeCard(_ notice: String) -> some View {
+        CoachCard {
+            VStack(alignment: .leading, spacing: Spacing.sm) {
+                Text(notice)
+                    .font(Typography.secondary)
+                    .foregroundStyle(Palette.textPrimary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Button("知道了") { recoveryNotice = nil }
+                    .buttonStyle(.bordered)
+            }
+        }
     }
 
     /// ChatGPT 在总结里写了雅思分数时那张卡片。
