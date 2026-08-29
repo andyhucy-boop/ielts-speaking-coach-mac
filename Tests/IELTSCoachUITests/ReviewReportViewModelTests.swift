@@ -63,6 +63,87 @@ final class ReviewReportViewModelTests: XCTestCase {
         XCTAssertTrue(target.note.contains("I just like it."))
     }
 
+    // MARK: - 分数挡在总结之外
+
+    /// 提示词里那条「绝不预测分数」此前是唯一的防线，全靠 ChatGPT 自觉。
+    /// 它真写了一句的话，那句话会原样显示在复盘页最上面那张卡片上。
+    func testABandScoreInTheSummaryIsBlockedButTheRestSurvives() throws {
+        let value = try report(#"""
+        {"summary":"你的流利度进步明显。整体大概 6.5 分。下次注意补一个例子。"}
+        """#)
+        let summary = ReviewReportViewModel.summary(from: value)
+        XCTAssertFalse(summary.contains("6.5"), "分数原样显示在总结卡片上了：\(summary)")
+        XCTAssertTrue(summary.contains("你的流利度进步明显。"), "把没问题的句子一起挡掉了")
+        XCTAssertTrue(summary.contains("下次注意补一个例子。"))
+        XCTAssertNotNil(ReviewReportViewModel.scoreNotice(from: value), "挡了却不吭声")
+        // 原文那一份一个字都不许动——「这一节是不是空的」这类判断要问它。
+        XCTAssertTrue(ReviewReportViewModel.rawSummary(from: value).contains("6.5"))
+    }
+
+    /// 整段总结都是分数时，挡完是空的。**这不能被说成「ChatGPT 没写总结」**——
+    /// 那两件事该对用户说的话完全不同。
+    func testAnAllScoreSummaryIsNotReportedAsAMissingSummary() throws {
+        let value = try report(#"{"summary":"大概 6.5 分"}"#)
+        XCTAssertTrue(ReviewReportViewModel.summary(from: value).isEmpty)
+        XCTAssertFalse(ReviewReportViewModel.unreadableSections(in: value)
+            .contains(ReviewReportViewModel.summaryTitle),
+                       "被挡掉的总结被当成「读不出来」报了一次，用户会以为复盘坏了")
+        XCTAssertNotNil(ReviewReportViewModel.scoreNotice(from: value))
+    }
+
+    /// 干净的复盘不许出现这条警告——天天误报的警告等于没有警告。
+    func testACleanSummaryRaisesNoScoreNotice() throws {
+        let value = try report(#"{"summary":"这一场你答了 3 分钟，理由部分比上次充实。"}"#)
+        XCTAssertNil(ReviewReportViewModel.scoreNotice(from: value))
+        XCTAssertEqual(ReviewReportViewModel.summary(from: value),
+                       "这一场你答了 3 分钟，理由部分比上次充实。")
+    }
+
+    // MARK: - 「带着这条去复训」那颗按钮的地址
+
+    /// 这张卡片的 id 就是那颗按钮传给复训中心的东西，而复训中心按
+    /// `RetrainingTarget.id`（`targetKey@sourceSessionId`）找那一条。
+    /// 传 `targetKey` 的话跳过去什么都不会被选中，按钮点了像没反应——
+    /// 而这种失败在界面上和「跳过去了、只是那条排在下面」长得一模一样。
+    func testThePriorityCardIsAddressableByTheRetrainingCentre() throws {
+        let value = try report(#"""
+        {"priority_target":{"id":"logic-explain","label":"补一个原因和例子",
+                            "evidence":["I just like it."]}}
+        """#)
+        let row = try XCTUnwrap(ReviewReportViewModel.priorityTarget(from: value, sessionID: "s1"))
+        let archived = try XCTUnwrap(RetrainingPolicy.extractTarget(from: value,
+                                                                    sessionID: "s1",
+                                                                    createdAt: ""))
+        XCTAssertEqual(row.id, archived.id, "卡片的地址和档案里那条目标的 id 对不上")
+        XCTAssertEqual(row.id, "logic-explain@s1")
+    }
+
+    /// 那颗按钮必须真的在，而且传的必须是这张卡片自己的 id。
+    func testTheReviewPageHasAButtonThatCarriesThisTargetIntoRetraining() throws {
+        let button = try SourceGuard.functionBody(
+            named: "retrainButton", in: try SourceGuard.code("Review/ReviewReportView.swift"))
+        XCTAssertTrue(button.contains("openRetrainingCenter(preselecting: target.id)"),
+                      "「带着这条去复训」没有把这一条的 id 传过去。实际取到的是：\n\(button)")
+    }
+
+    /// 「怎么算做到了」有具体内容时要显示出来，并且**不再**同时说那句通用的话——
+    /// 两句并排会让人不知道该照哪一句做。
+    func testTheTargetCardShowsHowToTellItWasDone() throws {
+        let value = try report(#"""
+        {"priority_target":{"id":"logic-explain","label":"补一个原因和例子",
+                            "success_behavior":"每个回答里都出现一次 This is mainly because",
+                            "evidence":["I just like it."]}}
+        """#)
+        let row = try XCTUnwrap(ReviewReportViewModel.priorityTarget(from: value, sessionID: "s1"))
+        XCTAssertEqual(row.action, "每个回答里都出现一次 This is mainly because")
+
+        let card = try SourceGuard.functionBody(
+            named: "priorityCard", in: try SourceGuard.code("Review/ReviewReportView.swift"))
+        XCTAssertTrue(card.contains("怎么算做到了"), "达标线没有画出来")
+        XCTAssertTrue(card.contains("if !target.action.isEmpty"),
+                      "没给「ChatGPT 这次没写达标线」留退路，那时卡片下面会空一句")
+    }
+
     // MARK: - 三块此前永远看不到的内容（复审第 2 条）
 
     /// **整体总结、口语习惯、逐题逻辑反馈。**
@@ -195,8 +276,10 @@ final class ReviewReportViewModelTests: XCTestCase {
                        ["必须纠正的表达", "词汇升级"])
     }
 
-    /// 七节的完整顺序，与 `ReviewRequestPrompt` 里那张键表一致。
-    func testAllSevenSectionsComeOutInTheOrderTheSchemaLists() throws {
+    /// 八节的完整顺序，与 `ReviewRequestPrompt` 里那张键表一致。
+    /// **「这几句你说对了」排在最前面**——照上游 report-schema 第 2 节的位置，
+    /// 而且一个人练的时候，先看到哪几句说对了，才读得下去后面一整屏的纠错。
+    func testAllEightSectionsComeOutInTheOrderTheSchemaLists() throws {
         let value = try report(#"""
         {"answer_upgrades":[{"question":"a","original_answer":"b","revised_answer":"c"}],
          "content_feedback":[{"thin_spot":"a","add_this":"b","example":"c"}],
@@ -204,22 +287,30 @@ final class ReviewReportViewModelTests: XCTestCase {
          "habits":[{"habit":"a","evidence":"c"}],
          "vocabulary":[{"basic":"a","better":"b","collocation":"c"}],
          "natural_upgrades":[{"learner_said":"a","more_natural":"b","usage_note":"c"}],
+         "strengths":[{"learner_said":"a","why_it_works":"b"}],
          "must_correct":[{"learner_said":"a","correction":"b","why_it_matters":"c"}]}
         """#)
         XCTAssertEqual(ReviewReportViewModel.sections(from: value).map(\.title),
-                       ["必须纠正的表达", "更自然的表达", "词汇升级",
+                       ["这几句你说对了", "必须纠正的表达", "更自然的表达", "词汇升级",
                         "口语习惯", "逐题逻辑反馈", "内容建议", "逐题高分版"])
     }
 
-    // MARK: - 三格分别是什么意思，必须写出来
+    // MARK: - 每一格是什么意思，必须写出来
 
-    /// 每个分区的三格含义都不一样：「必须纠正的表达」里第二格是改正后的说法，
+    /// 每个分区的每一格含义都不一样：「必须纠正的表达」里第二格是改正后的说法，
     /// 「词汇升级」里第二格是更准确的词，「逐题高分版」里第二格是原回答。
-    /// 不标注的话，界面上就是三行没头没脑的文字——
+    /// 不标注的话，界面上就是几行没头没脑的文字——
     /// `good / rewarding / a rewarding trip` 摆在一起，谁也看不出哪行是自己说的、哪行是建议。
-    func testEverySectionSpellsOutWhatItsThreeColumnsMean() throws {
+    ///
+    /// **判据是「显示出来的每一格都得有标注」，不是「每一节都恰好三格」。**
+    /// 各节格数已经不一样了：「这几句你说对了」两格、「必须纠正的表达」四格、其余三格。
+    /// 照着「恰好三格」写的话，两格那一节会因为「第三格没有标注」而红——
+    /// 而它根本就没有第三格，`ReviewReportView.field` 对空串是整格不画的。
+    func testEverySectionSpellsOutWhatEachOfItsColumnsMeans() throws {
         let value = try report(#"""
-        {"must_correct":[{"learner_said":"a","correction":"b","why_it_matters":"c"}],
+        {"must_correct":[{"learner_said":"a","correction":"b","why_it_matters":"c",
+                          "mini_drill":"d"}],
+         "strengths":[{"learner_said":"a","why_it_works":"b"}],
          "natural_upgrades":[{"learner_said":"a","more_natural":"b","usage_note":"c"}],
          "vocabulary":[{"basic":"a","better":"b","collocation":"c","priority":"high"}],
          "habits":[{"habit":"a","fix":"b","evidence":"c"}],
@@ -229,13 +320,30 @@ final class ReviewReportViewModelTests: XCTestCase {
                              "changes":["补了原因"]}]}
         """#)
         let sections = ReviewReportViewModel.sections(from: value)
-        // 七节：提示词要的七个数组键，一个都不能少（少一个就是又一块「永远看不到」的内容）。
-        XCTAssertEqual(sections.count, 7, "实际拆出来的是：\(sections.map(\.title))")
+        // 八节：提示词要的八个数组键，一个都不能少（少一个就是又一块「永远看不到」的内容）。
+        XCTAssertEqual(sections.count, 8, "实际拆出来的是：\(sections.map(\.title))")
         for section in sections {
+            let labels = [section.primaryLabel, section.secondaryLabel,
+                          section.noteLabel, section.actionLabel]
+            for row in section.rows {
+                let cells = [row.primary, row.secondary, row.note, row.action]
+                for (index, cell) in cells.enumerated() where !cell.isEmpty {
+                    XCTAssertFalse(labels[index].isEmpty,
+                                   "\(section.title) 第 \(index + 1) 格显示了「\(cell)」却没有标注")
+                }
+            }
             XCTAssertFalse(section.primaryLabel.isEmpty, "\(section.title) 第一格没有标注")
             XCTAssertFalse(section.secondaryLabel.isEmpty, "\(section.title) 第二格没有标注")
-            XCTAssertFalse(section.noteLabel.isEmpty, "\(section.title) 第三格没有标注")
         }
+        // 四格那一节真的把第四格取出来了。少了这一条，`mini_drill` 从提示词到界面
+        // 中间断在哪儿都测不出来——那一格不画和「ChatGPT 这次没给」长得一模一样。
+        let mustCorrect = try XCTUnwrap(sections.first { $0.title == "必须纠正的表达" })
+        XCTAssertEqual(mustCorrect.rows.first?.action, "d")
+        XCTAssertEqual(mustCorrect.actionLabel, "30 秒练法")
+        // 两格那一节不许凭空多出第三、四格的标注（多出来的标注下面永远没有内容）。
+        let strengths = try XCTUnwrap(sections.first { $0.title == "这几句你说对了" })
+        XCTAssertTrue(strengths.noteLabel.isEmpty && strengths.actionLabel.isEmpty,
+                      "「这几句你说对了」只有两格，却声明了第三或第四格的标注")
         // 各分区的第二格含义完全不同，标注不能是同一句——
         // 全填一样等于没标，而上面那圈「非空」照样全绿。
         // 拿 `sections.count` 比而不是写死一个数字：写死的话，加一节就要改两处，
@@ -321,7 +429,9 @@ final class ReviewReportViewModelTests: XCTestCase {
         let archived = try XCTUnwrap(RetrainingPolicy.extractTarget(
             from: value, sessionID: "2026-08-08-001", createdAt: "t"))
         XCTAssertEqual(card.primary, archived.label)
-        XCTAssertEqual(card.id, archived.targetKey)
+        // 地址用的是复合 id（`targetKey@sourceSessionId`），因为「带着这条去复训」
+        // 那颗按钮拿它去复训中心找那一条，而 `targetKey` 跨 session 会重复。
+        XCTAssertEqual(card.id, archived.id)
         XCTAssertEqual(card.note, archived.evidence.joined(separator: "；"))
     }
 

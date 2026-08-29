@@ -313,4 +313,85 @@ final class ReviewArchiverTests: XCTestCase {
             .skipped.contains("priority_target"),
                        "同一场重复归档，目标本来就在档案里，不该报成「没归进去」")
     }
+
+    // MARK: - 从上游补回来的两个字段（2026-08-20）
+
+    /// 上游 report-schema 第 3 节那张表本来就是四列，第四列 Mini drill 当初漏了没移植：
+    /// 错题本于是攒了一堆「你说错了、应该这么说」，一条也没告诉他此刻该张嘴练什么。
+    func testTheMiniDrillLandsInTheIssueArchive() throws {
+        let json = #"""
+        {"must_correct":[{"learner_said":"I very like it.","correction":"I really like it.",
+                          "why_it_matters":"very 不能修饰动词",
+                          "mini_drill":"把这句用 really 说三遍"}]}
+        """#
+        let outcome = ReviewArchiver.archive(report: try JSONValue.decode(from: json),
+                                             into: baseState(),
+                                             sessionID: "s1", questionID: "q1", at: "t")
+        XCTAssertEqual(outcome.state.issues.first?.miniDrill, "把这句用 really 说三遍")
+    }
+
+    /// **练法只补不换。** 这条错题上次入库时 ChatGPT 没给练法、这次给了，就补上——
+    /// 那一格是这条错题在错题本里唯一「现在能做什么」的出口。
+    /// 已经有练法时一个字都不动（换来换去只是噪音）。
+    func testAMissingDrillIsFilledInLaterButAnExistingOneIsNeverOverwritten() throws {
+        func report(drill: String) throws -> JSONValue {
+            try JSONValue.decode(from: #"""
+            {"must_correct":[{"learner_said":"I very like it.","correction":"I really like it.",
+                              "why_it_matters":"very 不能修饰动词","mini_drill":"\#(drill)"}]}
+            """#)
+        }
+        var state = ReviewArchiver.archive(report: try report(drill: ""), into: baseState(),
+                                           sessionID: "s1", questionID: "q1", at: "t1").state
+        XCTAssertEqual(state.issues.first?.miniDrill, "")
+
+        state = ReviewArchiver.archive(report: try report(drill: "说三遍"), into: state,
+                                       sessionID: "s2", questionID: "q1", at: "t2").state
+        XCTAssertEqual(state.issues.first?.miniDrill, "说三遍", "空着的练法没有被补上")
+
+        state = ReviewArchiver.archive(report: try report(drill: "换一个练法"), into: state,
+                                       sessionID: "s3", questionID: "q1", at: "t3").state
+        XCTAssertEqual(state.issues.first?.miniDrill, "说三遍", "已经有的练法被后来的覆盖了")
+    }
+
+    /// 「下次只盯这一个」必须带一句他自己能当场自查的达标线，否则那张深色卡片
+    /// 下面写的只能是一句所有目标共用的空话。
+    func testTheSuccessBehaviourIsKeptWithTheTarget() throws {
+        let json = #"""
+        {"priority_target":{"id":"logic-explain","label":"补一个原因和例子","status":"new",
+                            "success_behavior":"每个回答里都出现一次 This is mainly because",
+                            "evidence":["I just like it."]}}
+        """#
+        let outcome = ReviewArchiver.archive(report: try JSONValue.decode(from: json),
+                                             into: baseState(),
+                                             sessionID: "s1", questionID: "q1", at: "t")
+        XCTAssertEqual(outcome.state.targets.first?.successBehavior,
+                       "每个回答里都出现一次 This is mainly because")
+    }
+
+    /// **缺了达标线不许把整个目标丢掉。** 目标是改进闭环的起点，
+    /// 为了一个新加的字段把它扔了，比没有这个字段更糟。
+    func testATargetWithoutASuccessBehaviourIsStillKept() throws {
+        let json = #"{"priority_target":{"id":"logic-explain","label":"补一个原因和例子"}}"#
+        let outcome = ReviewArchiver.archive(report: try JSONValue.decode(from: json),
+                                             into: baseState(),
+                                             sessionID: "s1", questionID: "q1", at: "t")
+        XCTAssertEqual(outcome.state.targets.count, 1)
+        XCTAssertEqual(outcome.state.targets.first?.successBehavior, "")
+    }
+
+    /// 这两个字段上线之前存下来的档案仍然要读得出来。手写解码器用 `decode` 而不是
+    /// `decodeIfPresent` 的话，那个 `keyNotFound` 会一路冒泡到 `StateStore`，
+    /// 把用户全部练习记录说成「已损坏」——为了一个新加的字段。
+    func testArchivesWrittenBeforeTheseFieldsExistedStillLoad() throws {
+        let old = #"""
+        {"schemaVersion":3,
+         "issues":[{"id":"i1","learnerSaid":"a","correction":"b","whyItMatters":"c",
+                    "occurrences":1,"sourceSessionIds":["s1"],"lastSeenAt":"t"}],
+         "targets":[{"id":"t1","label":"l","status":"new","evidence":[],
+                     "sourceSessionId":"s1","createdAt":"t"}]}
+        """#
+        let state = try JSONDecoder().decode(CoachState.self, from: Data(old.utf8))
+        XCTAssertEqual(state.issues.first?.miniDrill, "")
+        XCTAssertEqual(state.targets.first?.successBehavior, "")
+    }
 }

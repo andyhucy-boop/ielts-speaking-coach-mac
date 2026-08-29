@@ -10,18 +10,49 @@ public struct RetrainingTarget: Codable, Equatable, Sendable, Identifiable {
     public var sourceSessionId: String
     public var createdAt: String
 
+    /// **下次怎么算做到了**——一句他自己能当场自查的行为，例如
+    /// 「每个回答里都出现一次 This is mainly because」。没有时是空串。
+    ///
+    /// 上游 `report-schema.md` 第 9 节要求目标必须带 `Success behavior`，本项目当初没移植：
+    /// 于是那张深色卡片下面写的是一句所有目标共用的话「下次练习时只盯这一个，别的先放着」——
+    /// 说不出这一场怎么算做到。
+    public var successBehavior: String
+
     /// state.json 里这个字段的键名必须仍是 "id"（与上游 Windows 版兼容），
     /// 即使 Swift 侧把它改叫 targetKey，好把 id 这个名字让给真正唯一的 Identifiable.id。
     enum CodingKeys: String, CodingKey {
         case targetKey = "id"
         case label, status, evidence, sourceSessionId, createdAt
+        case successBehavior
     }
 
     // 合成的 memberwise init 是 internal 的，App target 与 MCP target 构造不了。
+    //
+    // `successBehavior` **带默认值且排在最后**：这是后加的字段，既有调用点一处都不用改。
     public init(targetKey: String, label: String, status: String, evidence: [String],
-                sourceSessionId: String, createdAt: String) {
+                sourceSessionId: String, createdAt: String, successBehavior: String = "") {
         self.targetKey = targetKey; self.label = label; self.status = status
         self.evidence = evidence; self.sourceSessionId = sourceSessionId; self.createdAt = createdAt
+        self.successBehavior = successBehavior
+    }
+
+    /// 手写解码，只为一件事：**这个字段上线之前存下来的每一条目标仍然要读得出来。**
+    ///
+    /// 合成的解码器对一个新加的非 Optional 字段会要求它必须存在，
+    /// 而那个 `keyNotFound` 会一路冒泡到 `StateStore`，把整份训练数据说成「已损坏」——
+    /// 为了一个新字段，把用户全部练习记录挡在门外。与 `IssueRecord`、`TrainingPlan`
+    /// 那两处是同一套做法。其余字段保持必需，行为与从前逐字一致。
+    ///
+    /// 编码仍由 Swift 合成，所以写出去的形状只是多一个键，旧版本与上游照样读得出来。
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        targetKey = try c.decode(String.self, forKey: .targetKey)
+        label = try c.decode(String.self, forKey: .label)
+        status = try c.decode(String.self, forKey: .status)
+        evidence = try c.decode([String].self, forKey: .evidence)
+        sourceSessionId = try c.decode(String.self, forKey: .sourceSessionId)
+        createdAt = try c.decode(String.self, forKey: .createdAt)
+        successBehavior = try c.decodeIfPresent(String.self, forKey: .successBehavior) ?? ""
     }
 
     /// SwiftUI 的 ForEach 用它当唯一键。targetKey 跨 session 重复，直接拿它当 id
@@ -43,15 +74,30 @@ public struct IssueRecord: Codable, Equatable, Sendable, Identifiable {
     public var sourceSessionIds: [String]
     public var lastSeenAt: String
 
+    /// **现在张嘴练什么**——一个 30 秒之内能练一遍的动作。没有时是空串。
+    ///
+    /// 上游 `report-schema.md` 第 3 节那张表本来就是四列（Learner said / Correction /
+    /// Why it matters / **Mini drill**），本项目当初只移植了前三列。后果是错题本里
+    /// 攒了一堆「你说错了、应该这么说」，却没有一条告诉他此刻该练什么——
+    /// 而错题本正是他反复回去看的那一页。
+    ///
+    /// 空串是正常取值：提示词里明说「写不出具体动作时给空字符串，
+    /// 不要写『多加练习』这种等于没说的话」。界面对空串整格不画。
+    public var miniDrill: String
+
+    /// `miniDrill` **带默认值且排在最后**：这是后加的字段，既有调用点一处都不用改。
     public init(id: String, learnerSaid: String, correction: String, whyItMatters: String,
-                occurrences: Int, sourceSessionIds: [String], lastSeenAt: String) {
+                occurrences: Int, sourceSessionIds: [String], lastSeenAt: String,
+                miniDrill: String = "") {
         self.id = id; self.learnerSaid = learnerSaid; self.correction = correction
         self.whyItMatters = whyItMatters; self.occurrences = occurrences
         self.sourceSessionIds = sourceSessionIds; self.lastSeenAt = lastSeenAt
+        self.miniDrill = miniDrill
     }
 
     enum CodingKeys: String, CodingKey {
         case id, learnerSaid, correction, whyItMatters, occurrences, sourceSessionIds, lastSeenAt
+        case miniDrill
     }
 
     /// 手写解码：**老档案里虚高的 `occurrences` 在读盘这一刻就修回来**，
@@ -80,6 +126,10 @@ public struct IssueRecord: Codable, Equatable, Sendable, Identifiable {
 
         let stored = try c.decode(Int.self, forKey: .occurrences)
         occurrences = sourceSessionIds.isEmpty ? stored : sourceSessionIds.count
+        // 后加的字段，**必须 decodeIfPresent**：这个类型的解码器是手写的，
+        // 用 decode 的话，这个字段上线之前存下来的每一条错题都会读不出来，
+        // 而那个错会一路冒泡到 StateStore，把整份训练数据说成「已损坏」。
+        miniDrill = try c.decodeIfPresent(String.self, forKey: .miniDrill) ?? ""
     }
 }
 

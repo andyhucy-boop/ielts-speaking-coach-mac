@@ -198,6 +198,9 @@ struct ReviewReportView: View {
                     failureCard(failure)
                 } else if let document {
                     if let target = document.priorityTarget { priorityCard(target) }
+                    // 摆在总结**上面**：它说的正是那段总结被动过什么，
+                    // 摆到下面去的话，用户已经把改过的总结当成原文读完了。
+                    if let notice = document.scoreNotice { scoreNoticeCard(notice) }
                     if !document.unreadableSections.isEmpty {
                         unreadableCard(document.unreadableSections)
                     }
@@ -243,14 +246,63 @@ struct ReviewReportView: View {
                     .foregroundStyle(Palette.sidebarText)
                     .textSelection(.enabled)
             }
-            Text("下一步：下次练习时只盯这一个，别的先放着——一次改一样才看得出有没有改掉。")
-                .font(Typography.secondary)
-                .foregroundStyle(Palette.sidebarText)
+            // 「怎么算做到了」。**有具体达标线时就不再说那句通用的话**——
+            // 两句并排会让人不知道该照哪一句做，而具体那句永远更有用。
+            if !target.action.isEmpty {
+                Text("怎么算做到了：\(target.action)")
+                    .font(Typography.secondary)
+                    .foregroundStyle(Palette.sidebarTextSelected)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("下一步：下次练习时只盯这一个，别的先放着。")
+                    .font(Typography.secondary)
+                    .foregroundStyle(Palette.sidebarText)
+            } else {
+                Text("下一步：下次练习时只盯这一个，别的先放着——一次改一样才看得出有没有改掉。")
+                    .font(Typography.secondary)
+                    .foregroundStyle(Palette.sidebarText)
+            }
+            retrainButton(for: target)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Spacing.lg)
         .background(Palette.sidebarBackground)
         .clipShape(RoundedRectangle(cornerRadius: Radius.card))
+    }
+
+    /// **「带着这条去复训」。**
+    ///
+    /// 看完复盘正是最想立刻去改的那一刻，而在这之前这张卡片只有一行文字、不指向任何按钮：
+    /// 用户得自己记住目标、点侧边栏、再到复训中心一堆待复训里认出刚才那条。
+    ///
+    /// 接线件早就造好了（`NavigationState.openRetrainingCenter(preselecting:)`，
+    /// 复训中心也已经在读它），但全项目唯一的调用点传的是「不预选」——
+    /// 带 id 那条路此前只有测试在跑。
+    private func retrainButton(for target: ReviewRow) -> some View {
+        Button("带着这条去复训") {
+            app.navigation.openRetrainingCenter(preselecting: target.id)
+        }
+        .buttonStyle(.bordered)
+        .padding(.top, Spacing.xs)
+    }
+
+    /// ChatGPT 在总结里写了雅思分数时那张卡片。
+    ///
+    /// 用警告色而不是错误色：**这不是故障**，其余内容照常、原文照常存着，
+    /// 只有带分数的那一句被挡在总结之外。文字可选中，方便他自己核对被挡掉的是什么。
+    private func scoreNoticeCard(_ notice: String) -> some View {
+        CoachCard {
+            HStack(alignment: .top, spacing: Spacing.sm) {
+                Image(systemName: "exclamationmark.triangle")
+                    .foregroundStyle(Palette.warning)
+                Text(notice)
+                    .font(Typography.secondary)
+                    .foregroundStyle(Palette.textPrimary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+        }
     }
 
     /// ChatGPT 对这一场的整体总结。
@@ -305,6 +357,9 @@ struct ReviewReportView: View {
             // `Palette.success` 对白卡片约 5.0:1，够当正文读（DESIGN-SYSTEM 第 2 节）。
             field(label: section.secondaryLabel, text: row.secondary, highlighted: true)
             field(label: section.noteLabel, text: row.note)
+            // 第四格只有「必须纠正的表达」有（`mini_drill`：现在张嘴练什么）。
+            // 其余各节这里是空串，`field` 会整格不画。
+            field(label: section.actionLabel, text: row.action)
         }
     }
 

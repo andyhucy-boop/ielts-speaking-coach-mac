@@ -180,7 +180,7 @@ final class ExaminerPromptTests: XCTestCase {
     /// 而 `ReviewReportViewModel` 的分区表照着它写。
     func testReviewRequestStillAsksForTheHabitsAndLogicFeedbackBlocks() {
         let text = ReviewRequestPrompt.build(requestID: "sync-1", focusPart: .part2)
-        for key in ["summary", "must_correct", "natural_upgrades", "vocabulary",
+        for key in ["summary", "strengths", "must_correct", "natural_upgrades", "vocabulary",
                     "habits", "logic_feedback", "content_feedback",
                     "answer_upgrades", "priority_target"] {
             XCTAssertTrue(text.contains(key), "复盘请求里不再要 \(key) 这一项了")
@@ -188,6 +188,56 @@ final class ExaminerPromptTests: XCTestCase {
         XCTAssertTrue(text.contains(#""fix": 下次怎么改"#),
                       "口语习惯少了「下次怎么改」这一格。只说「你有这个毛病」而不说怎么改，"
                           + "正是本项目铁律 4 要拦的那种话。")
+    }
+
+    // MARK: - 从上游 report-schema / SKILL.md 补回来的四条（2026-08-20）
+
+    /// 上游那张表本来就是四列，第四列 Mini drill 当初漏了没移植：
+    /// 错题本于是攒了一堆「你说错了、应该这么说」，却没有一条告诉他此刻该张嘴练什么。
+    func testMustCorrectAsksForAThirtySecondDrill() {
+        let text = ReviewRequestPrompt.build(requestID: "sync-1", focusPart: .part1)
+        XCTAssertTrue(text.contains(#""mini_drill""#), "必须纠正的表达少了「30 秒练法」这一格")
+        XCTAssertTrue(text.contains("30 秒之内能练一遍的动作"),
+                      "没说清 mini_drill 要写成一个动作——不说的话它会写成「多加练习」")
+    }
+
+    /// 整份复盘从第一行到最后一行全是「哪里不行」的话，一个人练是坚持不下去的。
+    /// **但它必须引原话、必须允许空数组**，否则就变成了硬夸。
+    func testTheReviewAsksForWhatTheLearnerGotRight() {
+        let text = ReviewRequestPrompt.build(requestID: "sync-1", focusPart: .part1)
+        XCTAssertTrue(text.contains(#""why_it_works""#))
+        XCTAssertTrue(text.contains("必须引他真说过的原话"))
+        XCTAssertTrue(text.contains("不要硬夸"), "没给「没什么可夸的就给空数组」这条出口")
+    }
+
+    /// 语音转写把中国考生的话听岔一个词是常态。听岔的一句被写成 must_correct，
+    /// 会让他去改一个自己根本没犯的毛病——而那条错误会永久进错题本、
+    /// 还可能当场变成他下一场唯一要盯的目标。
+    func testTheReviewMayOnlyQuoteWhatWasActuallySaid() {
+        let text = ReviewRequestPrompt.build(requestID: "sync-1", focusPart: .part1)
+        XCTAssertTrue(text.contains("只用逐字稿里真的出现过的话"))
+        XCTAssertTrue(text.contains("（待核实）"), "拿不准的句子没有标注出口")
+        XCTAssertTrue(text.contains("must_correct 只收真的错"),
+                      "没有把「更自然的说法」挡在必须纠正之外——混进来的会被当成他犯过的错")
+    }
+
+    /// **发音那一条必须已经删掉。** 复盘请求是语音结束后在同一条对话里发的一条**文本**消息，
+    /// 录音只存本地、从不发给 ChatGPT，所以它永远只能回一句「无法从文本评估」；
+    /// 而第 2 条又规定了「含且仅含这些顶层键」，那句话根本没有字段可落——
+    /// 写了也不显示、不归档、连缺失警告都提不到（上游在同样条件下也给不出发音反馈）。
+    func testThePronunciationRuleIsGoneBecauseItCouldNeverBeAnswered() {
+        let text = ReviewRequestPrompt.build(requestID: "sync-1", focusPart: .part1)
+        XCTAssertFalse(text.contains("Not assessed from text"),
+                       "发音那一条又回来了：它要 ChatGPT 写一个没有字段可落的东西")
+        XCTAssertFalse(text.contains("发音反馈"))
+    }
+
+    /// 「下次只盯这一个」必须附一句他自己能当场自查的达标线，
+    /// 否则那张深色卡片只能显示一句所有目标共用的空话。
+    func testThePriorityTargetMustSayHowToTellItWasDone() {
+        let text = ReviewRequestPrompt.build(requestID: "sync-1", focusPart: .part1)
+        XCTAssertTrue(text.contains(#""success_behavior""#))
+        XCTAssertTrue(text.contains("他自己能当场自查"))
     }
 
     func testFullMockThreadsPart2PrepMode() {

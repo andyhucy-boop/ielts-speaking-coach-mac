@@ -28,7 +28,11 @@ public enum RetrainingPolicy {
             status: (target["status"]?.stringValue).flatMap { $0.isEmpty ? nil : $0 } ?? "new",
             evidence: (target["evidence"]?.arrayValue ?? []).compactMap(\.stringValue),
             sourceSessionId: sessionID,
-            createdAt: createdAt)
+            createdAt: createdAt,
+            // 「怎么算做到了」。**它不参与上面那道 guard**：没给达标线不等于没给目标，
+            // 因为一条这个字段而把整个目标丢掉，等于把改进闭环的起点扔了。
+            successBehavior: (target["success_behavior"]?.stringValue ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     /// `id` 缺失时兜底生成的 targetKey。**必须只由 sessionID 决定**——

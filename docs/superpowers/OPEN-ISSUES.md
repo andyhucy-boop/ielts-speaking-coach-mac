@@ -758,3 +758,20 @@ A3 是修复方没跑过的一个突变，我补上的：`lastSeenAt` 那一行�
    （`:194` 的 `guard !stopped, writer != nil`）会先拦掉，实测走不到。
    现有 `testWriteFailureStopsRecordingButKeepsWhatWasWritten` 用的是默认的 12 秒，
    所以从来没碰过 0 秒这一支。
+
+---
+
+## 2026-08-20：一次没能复现的测试抖动
+
+`swift test` 有一次报了 **2 failures**，紧接着连跑六遍全绿（2143 / 0）。
+那一次是在同一条命令里 `swift build && swift test` 连着跑的，机器刚编完还在忙。
+
+**没有查到是哪两条**：那一轮的输出里 `grep "error:"`、`grep "' failed ("` 都是空的，
+说明失败没走 XCTAssert 的常规报错路径（可能是超时类断言，或者输出被抢跑截断了）。
+
+嫌疑最大的是几条**带轮询上限**的测试（`PracticeRunnerArchiveTests.waitUntil(seconds:)`
+那一类、录音相关的几条）：它们的判据是「N 秒内条件成立」，机器负载高时会踩线。
+
+**下一步**：再遇到时，用 `swift test 2>&1 | tee /tmp/t.log` 完整留档，
+在 `/tmp/t.log` 里搜 `failed` 而不是 `error:`。在能复现之前不要动任何测试的超时数字——
+把超时调大是掩盖，不是修复。

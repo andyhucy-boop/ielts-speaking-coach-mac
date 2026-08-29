@@ -35,14 +35,20 @@ public struct IssueArchiveRow: Equatable, Identifiable, Sendable {
     public let trend: IssueTrend
     public let detail: String
     public let lastSeenText: String
+    /// **现在张嘴练什么**（`IssueRecord.miniDrill`）。空串时那一行整行不画。
+    ///
+    /// 这一页此前只有「你说错了 / 该说成 / 为什么要改」，一条也没告诉他此刻该做什么——
+    /// 而这一页恰恰是他反复回来看的地方。页面级的下一步（「去开一场复训」）是有的，
+    /// 缺的是**这一条错误自己**的练法。
+    public let miniDrill: String
 
     public init(id: String, learnerSaid: String, correction: String, whyItMatters: String,
                 occurrences: Int, sessionCount: Int, isNew: Bool, trend: IssueTrend,
-                detail: String, lastSeenText: String) {
+                detail: String, lastSeenText: String, miniDrill: String = "") {
         self.id = id; self.learnerSaid = learnerSaid; self.correction = correction
         self.whyItMatters = whyItMatters; self.occurrences = occurrences
         self.sessionCount = sessionCount; self.isNew = isNew; self.trend = trend
-        self.detail = detail; self.lastSeenText = lastSeenText
+        self.detail = detail; self.lastSeenText = lastSeenText; self.miniDrill = miniDrill
     }
 }
 
@@ -94,7 +100,8 @@ public struct IssueArchiveViewModel: Sendable {
                 trend: trend?.trend ?? .notEnoughData,
                 detail: trend?.detail ?? IssueTrend.notEnoughData.explanation,
                 // 读不出时间就说读不出，不要拿一个猜的日期糊弄过去
-                lastSeenText: lastSeen ?? "最近一次：时间不详")
+                lastSeenText: lastSeen ?? "最近一次：时间不详",
+                miniDrill: issue.miniDrill)
         }
 
         dataWarnings = SessionTimeline.build(state: state).warnings

@@ -106,6 +106,18 @@ public enum ReviewArchiver {
                     state.issues[index].sourceSessionIds.append(sessionID)
                     state.issues[index].lastSeenAt = timestamp
                 }
+                // **练法只补不换。** 这条错题上次入库时 ChatGPT 没给练法、这次给了，
+                // 就把它补上——那一格是这条错题在错题本里唯一「现在能做什么」的出口，
+                // 空着等于这条记录只会指出毛病、不会给出路。
+                //
+                // 已经有练法时**一个字都不动**，而且这一条放在上面那个 if 外面：
+                // 同一场重复归档时也要补得上（那种情形 `sourceSessionIds` 已经含这一场，
+                // 上面那块整个跳过），否则补录一次的人永远补不到练法。
+                let drill = (entry["mini_drill"]?.stringValue ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if state.issues[index].miniDrill.isEmpty && !drill.isEmpty {
+                    state.issues[index].miniDrill = drill
+                }
             } else {
                 state.issues.append(IssueRecord(
                     id: "issue-\(state.issues.count + 1)-\(sessionID)",
@@ -114,7 +126,9 @@ public enum ReviewArchiver {
                     whyItMatters: entry["why_it_matters"]?.stringValue ?? "",
                     occurrences: 1,
                     sourceSessionIds: [sessionID],
-                    lastSeenAt: timestamp))
+                    lastSeenAt: timestamp,
+                    miniDrill: (entry["mini_drill"]?.stringValue ?? "")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)))
             }
         }
         return merged

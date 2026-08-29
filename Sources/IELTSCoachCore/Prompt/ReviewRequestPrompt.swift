@@ -17,12 +17,15 @@ public enum ReviewRequestPrompt {
 
         输出要求：
         1. 只输出一个 JSON 对象，用下面两行标记严格包裹，标记前后不要有任何其他文字。
-        2. JSON 必须是一个对象，含且仅含这些顶层键：summary、must_correct、natural_upgrades、\
-        vocabulary、habits、logic_feedback、content_feedback、answer_upgrades、priority_target。
+        2. JSON 必须是一个对象，含且仅含这些顶层键：summary、strengths、must_correct、\
+        natural_upgrades、vocabulary、habits、logic_feedback、content_feedback、\
+        answer_upgrades、priority_target。
         3. 每个键的结构必须严格如下，字段名一个字都不能改：
            - summary：字符串
+           - strengths：数组，最多 3 项，每项 {"learner_said": 他说得好的那句原话, \
+        "why_it_works": 这句好在哪}
            - must_correct：数组，每项 {"learner_said": 学员原话, "correction": 改正后的说法, \
-        "why_it_matters": 为什么重要}
+        "why_it_matters": 为什么重要, "mini_drill": 一个 30 秒就能练一遍的开口练法}
            - natural_upgrades：数组，每项 {"learner_said": 学员原话, "more_natural": 更地道的说法, \
         "usage_note": 用法说明}
            - vocabulary：**数组**（不是对象），每项 {"basic": 学员用的词, "better": 更准确的表达, \
@@ -34,7 +37,7 @@ public enum ReviewRequestPrompt {
            - answer_upgrades：数组，每项 {"question": 题目, "original_answer": 原回答, \
         "revised_answer": 高分版, "changes": 中文说明的数组}
            - priority_target：对象 {"id": 短标识, "label": 目标描述, "status": "new", \
-        "evidence": 学员原话的数组}
+        "evidence": 学员原话的数组, "success_behavior": 下次怎么算做到了（一句可自查的具体行为）}
         4. **vocabulary 必须是数组，不是对象**——曾经实测 ChatGPT 把它输出成 \
         {"useful_replacements": ..., "pronunciation": ...} 这样的对象，导致这次练习完全没能归档。
         5. **content_feedback 讲的是「内容」，不是「英文」。** 它要回答的是：他这段话说得空不空。\
@@ -49,10 +52,26 @@ public enum ReviewRequestPrompt {
         最多给 3 项，最空的排最前面。这一场内容确实没有明显空洞时给空数组，不要硬凑。\
         与 logic_feedback 分工固定：logic_feedback 管条理（有没有先正面回答、顺序乱不乱），\
         content_feedback 管内容本身（有没有东西可说）。两项不要写重复的话。
-        6. priority_target 只给一个。
-        7. 只在有音频证据时给发音反馈；仅凭文本时该项写 "Not assessed from text"。
-        8. 复盘的所有说明、点评、解释一律用中文；引用学员原话与给出的英文范例保持英文原文，不要翻译。
-        9. **不要给任何形式的雅思分数、评级或水平判断**：不要写 band、不要写「大概 6.5」\
+        6. **只用逐字稿里真的出现过的话。** 不许把没说过的句子写成他的原话，
+        也不许凭「他大概会这么说」编一条来凑数。语音转写把中国考生的话听岔一个词是常态，
+        所以：**拿不准那句到底是不是他说的，就在该项的原话后面加一句「（待核实）」**，
+        并且**不要**拿这种拿不准的句子当 priority_target 的证据。
+        听岔的一句话被写成 must_correct，会让他去改一个自己根本没犯的毛病，
+        而那条错误会永久进错题本、还可能当场变成他下一场唯一要盯的目标。
+        7. **must_correct 只收真的错**（语法、用词、搭配确实不对）。
+        「这样说更自然」「换个词更准」一律放 natural_upgrades 或 vocabulary，
+        **不许混进 must_correct**——混进来的会被当成他犯过的错记进错题本、参与复训排序。
+        8. **strengths 必须引他真说过的原话**，最多 3 条，每条一句话说清好在哪。
+        这一场确实没什么可夸的就给空数组，**不要硬夸**——空洞的表扬比不表扬更糟。
+        它不是打分，是告诉他哪几个说法可以固定下来接着用。
+        9. **mini_drill 是「现在张嘴练什么」，不是「记住这条规则」。**
+        写成一个 30 秒之内能练一遍的动作，例如「把刚才那句用 I've been 开头说三遍」。
+        写不出具体动作时给空字符串，不要写「多加练习」这种等于没说的话。
+        10. priority_target 只给一个，且 success_behavior 必须是**他自己能当场自查**的行为，
+        例如「每个回答里都出现一次 This is mainly because」，
+        不能是「提高词汇量」这种没法判断做没做到的空目标。
+        11. 复盘的所有说明、点评、解释一律用中文；引用学员原话与给出的英文范例保持英文原文，不要翻译。
+        12. **不要给任何形式的雅思分数、评级或水平判断**：不要写 band、不要写「大概 6.5」\
         「相当于 7 分水平」，也不要按词数、流利度推断分数。summary 里同样一个字都不许出现——\
         它要说的是「哪里已经稳了、哪里还不稳」，不是打一个分。\
         这个数字既不准也有害，会让学员盯着数字而不是盯着具体哪句话该怎么改。

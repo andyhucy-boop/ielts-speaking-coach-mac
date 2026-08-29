@@ -12,14 +12,19 @@ public struct ReviewDocument: Equatable, Sendable {
     public let sections: [ReviewSection]
     /// 复盘里有内容、却一条都没读出来的分区名（见 `ReviewReportViewModel.unreadableSections`）。
     public let unreadableSections: [String]
+    /// ChatGPT 在总结里写了雅思分数时要说的那句话（`BandScoreGuard`）；没写就是 nil。
+    /// **不是错误**：其余内容照常显示、原文照常存着，只有带分数的那一句被挡在总结之外。
+    public let scoreNotice: String?
 
     public init(path: String, priorityTarget: ReviewRow?, summary: String,
-                sections: [ReviewSection], unreadableSections: [String]) {
+                sections: [ReviewSection], unreadableSections: [String],
+                scoreNotice: String? = nil) {
         self.path = path
         self.priorityTarget = priorityTarget
         self.summary = summary
         self.sections = sections
         self.unreadableSections = unreadableSections
+        self.scoreNotice = scoreNotice
     }
 
     /// 解析成功了，但一个字都没有可显示的。界面必须据此说一句话——
@@ -104,6 +109,7 @@ public enum ReviewReportLoader {
                                                                  sessionID: session.id),
             summary: ReviewReportViewModel.summary(from: report),
             sections: ReviewReportViewModel.sections(from: report),
-            unreadableSections: ReviewReportViewModel.unreadableSections(in: report))
+            unreadableSections: ReviewReportViewModel.unreadableSections(in: report),
+            scoreNotice: ReviewReportViewModel.scoreNotice(from: report))
     }
 }

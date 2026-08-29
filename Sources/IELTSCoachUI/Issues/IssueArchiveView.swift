@@ -172,6 +172,16 @@ struct IssueArchiveView: View {
                                 .font(Typography.secondary)
                                 .foregroundStyle(Palette.textSecondary)
                                 .fixedSize(horizontal: false, vertical: true)
+                            // **现在张嘴练什么。** 这一页此前只说「你说错了、该说成什么」，
+                            // 一条也没告诉他此刻能做什么，而这一页是他反复回来看的地方。
+                            // ChatGPT 这次没给练法时整行不画（提示词明说写不出就给空串，
+                            // 不许写「多加练习」这种等于没说的话）。
+                            if !row.miniDrill.isEmpty {
+                                Text("练一下：\(row.miniDrill)")
+                                    .font(Typography.secondary)
+                                    .foregroundStyle(Palette.success)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                         }
                         Spacer(minLength: Spacing.sm)
                         // 等宽数字：从 9 跳到 10 时这一列不许横向抖（规范第 6 节最后一条）。
