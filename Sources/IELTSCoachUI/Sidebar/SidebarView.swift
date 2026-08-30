@@ -83,11 +83,14 @@ private struct SidebarRow: View {
 
     var body: some View {
         Button(action: onSelect) {
-            surface(label)
+            label.background(pill)
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
+        // **两样都要盯。** 只盯 `isHovering` 的话，点侧边栏换页时主色竖条、
+        // 行底、文字颜色三样是同一帧硬跳过去的——而这是全 App 用得最多的控件。
         .coachAnimation(Motion.quick, value: isHovering)
+        .coachAnimation(Motion.standard, value: isSelected)
         .accessibilityLabel(item.title)
         .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
         .help(item.title)
@@ -112,25 +115,22 @@ private struct SidebarRow: View {
         .contentShape(RoundedRectangle(cornerRadius: Radius.control))
     }
 
-    /// 选中/悬停那颗药丸用**液态玻璃**；其余的行**什么底都不画**。
+    /// 选中/悬停时那颗药丸。
     ///
-    /// 两件事各修掉一个坑：
+    /// **它一直在视图树里，变的只有不透明度。** 从前是一个 `if isSelected || isHovering`
+    /// 的分支——两支是两个不同身份的视图，SwiftUI 会把整行拆掉重建，
+    /// 于是鼠标从上往下扫过侧边栏时，每划过一行，那一行的**图标和文字**都要淡出再淡入闪一下，
+    /// 十项一路划下来就是连闪十次。而本该动的只有底色。
     ///
-    /// - **不画底**：从前这里给未选中的行也铺了一块 `Palette.sidebarBackground`。
-    ///   侧边栏不透明时那是隐形的（底色一样），一旦换了底就当场现形成十个贴纸。
-    ///   这类 bug 只有在换底之后才看得见，而它在换底之前一直躺在那儿。
-    /// - **玻璃只给这颗药丸**：它浮在一片我们自己铺好的深色底上，玻璃采样到的就是那片深色，
-    ///   所以文字的落脚点仍然可控。整片侧边栏用玻璃试过，实测否掉了——见 `body` 里的说明。
-    @ViewBuilder
-    private func surface(_ content: some View) -> some View {
-        if isSelected || isHovering {
-            content.coachGlass(tint: Palette.sidebarHighlight,
-                               fallback: Palette.sidebarHighlight,
-                               interactive: true,
-                               in: RoundedRectangle(cornerRadius: Radius.control))
-        } else {
-            content
-        }
+    /// 现在是一个恒定存在的形状，只有 `opacity` 在变——身份稳定，过渡就是平滑的。
+    ///
+    /// **这颗药丸不再用液态玻璃。** 玻璃要么在、要么不在，做不出「淡入淡出」，
+    /// 而这里更要紧的是那十次闪。玻璃仍然用在两处真正的浮层上
+    /// （主行动卡片、复盘页目标横幅的按钮），那两处不需要淡入淡出。
+    private var pill: some View {
+        RoundedRectangle(cornerRadius: Radius.control)
+            .fill(Palette.sidebarHighlight)
+            .opacity(isSelected || isHovering ? 1 : 0)
     }
 }
 

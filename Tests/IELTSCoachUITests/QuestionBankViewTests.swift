@@ -258,7 +258,7 @@ final class QuestionBankViewTests: XCTestCase {
     /// **算得对和画出来是两件事**。
     func testTheThreeCountersAtTheTopActuallyPaintTheirNumbers() throws {
         let code = try Self.viewCode()
-        let header = try SourceGuard.memberBody(of: "private var header", in: code)
+        let header = try SourceGuard.memberBody(of: "private func header", in: code)
 
         XCTAssertEqual(
             SourceGuard.occurrences(of: "statistic(", in: header), 3,
@@ -267,11 +267,25 @@ final class QuestionBankViewTests: XCTestCase {
                 + "下一步：把三处 `statistic(…, caption: …)` 都摆回 `header`。"
                 + "实际取到的是：\n\(header)")
 
-        for counted in ["model.counts.total", "model.counts.practiced"] {
+        // 三个数字必须来自视图模型算出来的那个 `counts`，不许在视图里另数一遍。
+        //
+        // **2026-08-30 起 `counts` 只取一次**（`let counts = model.counts`）：
+        // 它每次都要把整库扫一遍数「练过几道」，而这一页从前一次重绘要取七次。
+        // 所以这里认的是「取过一次 `model.counts`」+「三个数字都从那一次里读」。
+        XCTAssertTrue(
+            header.contains("let counts = model.counts"),
+            "顶部统计没有从 `model.counts` 取数，那几个数字就不是从题库算出来的了。"
+                + "实际取到的是：\n\(header)")
+        XCTAssertEqual(
+            SourceGuard.occurrences(of: "model.counts", in: header), 1,
+            "`model.counts` 在 `header` 里被取了不止一次。每取一次都要把整库扫一遍数"
+                + "「练过几道」，而这一页的搜索框每敲一个字就重绘一次。"
+                + "下一步：`let counts = model.counts` 取一次，三个数字都从它读。"
+                + "实际取到的是：\n\(header)")
+        for counted in ["counts.total", "counts.practiced"] {
             XCTAssertTrue(
                 header.contains(counted),
                 "顶部统计没有用 `\(counted)`，那几个数字就不是从题库算出来的了。"
-                    + "下一步：三个数字都从 `model.counts` 取（`QuestionBankViewModelTests` 守着它）。"
                     + "实际取到的是：\n\(header)")
         }
 
@@ -296,7 +310,7 @@ final class QuestionBankViewTests: XCTestCase {
     /// 那时用户再也没法只看 Part 2 的题——而 `partSelection` / `partFilter` /
     /// `groupedByTopic(part:)` 那一整条筛选逻辑还原封不动地留在代码里，谁也碰不到它。
     func testThePartFilterIsAControlTheUserCanActuallyOperate() throws {
-        let bank = try SourceGuard.memberBody(of: "private var bank", in: try Self.viewCode())
+        let bank = try SourceGuard.memberBody(of: "private func bank", in: try Self.viewCode())
 
         XCTAssertTrue(
             bank.contains("Picker(") && bank.contains("selection: $partSelection"),
@@ -345,7 +359,7 @@ final class QuestionBankViewTests: XCTestCase {
     /// **分组算得对和分组画出来是两件事。**
     func testEveryTopicGroupIsPaintedWithItsQuestions() throws {
         let code = try Self.viewCode()
-        let bank = try SourceGuard.memberBody(of: "private var bank", in: code)
+        let bank = try SourceGuard.memberBody(of: "private func bank", in: code)
 
         XCTAssertTrue(
             bank.contains("model.groupedByTopic(part: partFilter)"),

@@ -378,11 +378,23 @@ final class AppearanceContrastTests: XCTestCase {
         XCTAssertFalse(
             body.contains("coachGlass"),
             "整片侧边栏底又用上玻璃了，理由同上。实际取到的是：\n\(body)")
-        // 反过来也要有牙齿：药丸那一处必须真的是玻璃，否则这条就只是在禁止一件没人做的事。
-        XCTAssertTrue(
-            code.contains("content.coachGlass("),
-            "选中/悬停那颗药丸没有用玻璃了。那是这一页唯一用得对的地方："
-                + "浮层 + 背后有一片我们自己铺好的深色底。")
+        // 反过来也要有牙齿：玻璃必须真的用在**某处**，否则这条就只是在禁止一件没人做的事。
+        //
+        // 用在哪儿变过一次：起初给了侧边栏选中的那颗药丸，后来撤了——
+        // 玻璃要么在要么不在，做不出淡入淡出，而那颗药丸需要跟着悬停平滑地亮起来
+        // （见 `SidebarView.pill`）。现在留在两处真正的浮层上：
+        // 主行动卡片的按钮、复盘页目标横幅的按钮，两处都浮在有颜色的面板上。
+        let glassUsers = ["DesignSystem/Components.swift", "Review/ReviewReportView.swift"]
+        var found = 0
+        for path in glassUsers where try SourceGuard.code(path).contains(".coachGlass(") {
+            found += 1
+        }
+        XCTAssertEqual(
+            found, glassUsers.count,
+            "液态玻璃已经不在那两处浮层上了（\(glassUsers)）。"
+                + "这条测试禁止把玻璃铺在承载文字的底上，但如果玻璃哪儿都不用了，"
+                + "它就只是在禁止一件没人做的事——那种守卫是恒绿的。"
+                + "下一步：确认 `coachGlass` 还用在主行动卡片和复盘页目标横幅的按钮上。")
     }
 
     // MARK: - 深色是真的深色，不是浅色的别名

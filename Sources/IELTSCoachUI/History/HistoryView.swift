@@ -113,11 +113,18 @@ struct HistoryView: View {
 
     private var monthList: some View {
         ScrollView {
+            // 展开一场是**真实位移**：录音播放器加整段逐字稿插进那一行下面，
+            // 后面所有行被顶开几百点。硬切的话内容整块瞬移，
+            // 眼睛跟不上自己刚点的是哪一行。挂在整列上，收起的那一场同样有过渡。
+            //
+            // 走 `coachAnimation` 而不是在按钮里写 `withAnimation`：
+            // 前者自己读「减弱动态效果」，后者要每个调用点各记一遍那个三元表达式。
             LazyVStack(alignment: .leading, spacing: Spacing.lg) {
                 ForEach(model.months) { month in
                     monthSection(month)
                 }
             }
+            .coachAnimation(Motion.standard, value: expandedSessionID)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }

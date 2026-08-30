@@ -111,6 +111,7 @@ struct RetrainingCenterView: View {
                 }
             }
         }
+        .coachAnimation(Motion.standard, value: selectedID)
     }
 
     private var emptyState: some View {
@@ -120,6 +121,11 @@ struct RetrainingCenterView: View {
                        action: { onGo(.today) })
     }
 
+    /// 一条待复训目标。
+    ///
+    /// 选中的那一条会从白卡变成整块紫色主行动卡（多出按钮，高度不一样），
+    /// 原来那张紫卡同一帧变回白卡。**两处高度同时变**，硬切的话中间和下面所有行整块瞬移，
+    /// 用户点的是 A，眼睛却要重新找 A 跑到哪去了。
     @ViewBuilder
     private func pendingRow(_ item: RetrainingItem, isPrimary: Bool) -> some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
@@ -297,7 +303,11 @@ struct RetrainingCenterView: View {
         if reduceMotion {
             proxy.scrollTo(targetID, anchor: .top)
         } else {
-            withAnimation(.easeOut) { proxy.scrollTo(targetID, anchor: .top) }
+            // 时长必须写出来：不写跑的是系统默认 0.35s，比 `Motion.deliberate` 还长一档，
+            // 和侧边栏、卡片悬停的节奏对不上，连着用会觉得这里「粘手」。
+            withAnimation(.easeOut(duration: Motion.standard)) {
+                proxy.scrollTo(targetID, anchor: .top)
+            }
         }
     }
 
@@ -305,7 +315,7 @@ struct RetrainingCenterView: View {
         if reduceMotion {
             showRetired.toggle()
         } else {
-            withAnimation(.easeOut) { showRetired.toggle() }
+            withAnimation(.easeOut(duration: Motion.standard)) { showRetired.toggle() }
         }
     }
 

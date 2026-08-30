@@ -34,16 +34,27 @@ struct IssueArchiveView: View {
     /// 存对象会在刷新之后指着一份旧的。
     @State private var expandedID: String?
 
-    private var model: IssueArchiveViewModel { IssueArchiveViewModel(state: app.state) }
-
+    /// **一次 body 只造一个视图模型，往下传。**
+    ///
+    /// 从前这里是 `private var model: IssueArchiveViewModel { .init(state: app.state) }`
+    /// 这样一个计算属性，而 body 里有四处访问它（`summaryLine` / `warningSection` /
+    /// `listSection` 各一次，`listSection` 里两次）——于是**一次重绘构造四个视图模型**，
+    /// 每个都要把整张错题表排一遍、把每条的时间戳解析一遍。
+    /// 2026-08-30 实测：30 条错题时一次重绘 485 ms 卡在主线程上，
+    /// 点一下顶上那排筛选按钮，窗口冻半秒。
+    ///
+    /// **不能改成 `@State` 存起来。** 它读的是 `app.state`；存进 `@State` 之后
+    /// 数据变了它不会重算，用户导入一份新复盘之后这一页显示的还是旧的错题——
+    /// 那比慢得多。所以是「body 里算一次的局部量」，不是「缓存」。
     var body: some View {
-        ScrollView {
+        let model = IssueArchiveViewModel(state: app.state)
+        return ScrollView {
             VStack(alignment: .leading, spacing: Spacing.lg) {
                 header
-                summaryLine
+                summaryLine(model)
                 filterPicker
-                warningSection
-                listSection
+                warningSection(model)
+                listSection(model)
             }
             .coachPageBody()
         }
@@ -62,7 +73,7 @@ struct IssueArchiveView: View {
     ///
     /// 抽成纯函数（`summaryText`）而不是在这儿拼字符串，理由和 `HistoryView.speakerText(for:)`
     /// 一样：扫源码只问得出「这儿有个 `Text`」，问不出它到底说了什么。
-    private var summaryLine: some View {
+    private func summaryLine(_ model: IssueArchiveViewModel) -> some View {
         let counts = model.counts
         return Text(Self.summaryText(total: counts.total, new: counts.new,
                                      improving: counts.improving))
@@ -100,7 +111,7 @@ struct IssueArchiveView: View {
     ///
     /// 用 `Palette.warning` 做左侧标记，正文仍用 `Palette.textPrimary`——
     /// 警告色是给标记用的，拿它写整段中文正文对比度过不了（DESIGN-SYSTEM 第 2 节）。
-    @ViewBuilder private var warningSection: some View {
+    @ViewBuilder private func warningSection(_ model: IssueArchiveViewModel) -> some View {
         let warnings = model.dataWarnings
         if !warnings.isEmpty {
             VStack(alignment: .leading, spacing: Spacing.sm) {
@@ -128,7 +139,7 @@ struct IssueArchiveView: View {
     // MARK: - 列表
 
     /// 顺序与内容**原样**来自 `IssueArchiveViewModel`。这一页不排、不筛、不藏。
-    @ViewBuilder private var listSection: some View {
+    @ViewBuilder private func listSection(_ model: IssueArchiveViewModel) -> some View {
         let visible = model.rows(filter: filter)
         if model.rows.isEmpty {
             emptyState

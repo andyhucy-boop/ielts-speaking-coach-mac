@@ -17,17 +17,53 @@ public enum CoachTime {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
-        // ⚠️ 不要把这两个 formatter 提成 static let。Swift 6 语言模式下
-        // ISO8601DateFormatter 不是 Sendable，static let 会直接编译不过。
-        // 每次新建的开销在本项目的数据量（几百条）下可以忽略。
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = fractional.date(from: trimmed) { return date }
-
-        let plain = ISO8601DateFormatter()
-        plain.formatOptions = [.withInternetDateTime]
-        return plain.date(from: trimmed)
+        return formatters.date(from: trimmed)
     }
+
+    /// 两个 formatter 只造一次，用锁护着复用。
+    ///
+    /// ## 这里原来写着「每次新建的开销可以忽略」，那句话是错的
+    ///
+    /// 2026-08-30 在本机实测（`swiftc -O` 单独复刻，没跑 App）：
+    /// **建一个 `ISO8601DateFormatter` 约 34–46 µs**，而 `parse` 每次建两个。
+    /// 于是「几百条」这个量级根本不能忽略——问题档案页把 `parse` 放在排序比较器里，
+    /// 30 条错题一次排序就是几百次 parse、上千个 formatter，实测单次视图模型构造
+    /// 要 159 ms，而那一页每次重绘构造 4 次 ≈ **0.6 秒的主线程阻塞**。
+    /// 点一下筛选按钮，窗口卡半秒。
+    ///
+    /// ## 为什么是加锁的 class，不是 `static let`
+    ///
+    /// 原注释说得对：`ISO8601DateFormatter` 不是 `Sendable`，直接 `static let` 编不过。
+    /// 但那不是「只能每次新建」的理由——把它装进一个自己保证线程安全的盒子就行。
+    /// 锁的开销是几十纳秒，和 34 µs 差三个数量级。
+    ///
+    /// **不用 `nonisolated(unsafe)`**：那只是把编译器的嘴堵上，并没有真的让它安全。
+    /// 这个类型在 UI（主 actor）和 MCP 服务（另一个进程/线程）两边都被调。
+    private final class ISO8601Formatters: @unchecked Sendable {
+        private let lock = NSLock()
+        private let plain = ISO8601DateFormatter()
+        private let fractional = ISO8601DateFormatter()
+
+        init() {
+            plain.formatOptions = [.withInternetDateTime]
+            fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        }
+
+        func date(from text: String) -> Date? {
+            lock.lock()
+            defer { lock.unlock() }
+            // **先试不带小数秒的那个。** 项目自己写出来的时间戳一律无小数秒
+            // （`CoachTime.string(from:)` 与各处的 `ISO8601DateFormatter().string(from:)`
+            // 用的都是默认的 `.withInternetDateTime`），所以这是常见形状。
+            // 原来的顺序是先试带小数秒的，于是**每一次解析都必然先失败一次**。
+            // 两个选项互斥（带小数秒的串过不了 plain，不带的过不了 fractional），
+            // 所以换顺序只影响快慢，不影响结果。
+            if let date = plain.date(from: text) { return date }
+            return fractional.date(from: text)
+        }
+    }
+
+    private static let formatters = ISO8601Formatters()
 
     /// 只认前十位的日期，用于从 session id 兜底取时间。
     ///
@@ -40,15 +76,35 @@ public enum CoachTime {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 10 else { return nil }
 
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")   // 不受用户区域设置影响
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = "yyyy-MM-dd"
-        // 必须严格：宽松模式会把非法日期顺延成别的日期（实测 2026-13-45 → 2027-02-14，
-        // 2026-02-30 → 2026-03-02），坏 id 被静默归进错误的周/月，算错比算少更难发现。
-        formatter.isLenient = false
-        return formatter.date(from: String(trimmed.prefix(10)))
+        return dayFormatter.date(from: String(trimmed.prefix(10)))
     }
+
+    /// 同上，复用而不是每次新建。`DateFormatter` 比 `ISO8601DateFormatter` 更贵。
+    ///
+    /// 三个设置一个都不能少，且必须在这里设死：
+    /// `en_US_POSIX` 让它不受用户区域设置影响；UTC 时区对应 id 里那十位；
+    /// **`isLenient = false` 是关键**——宽松模式会把非法日期顺延成别的日期
+    /// （实测 2026-13-45 → 2027-02-14，2026-02-30 → 2026-03-02），
+    /// 坏 id 被静默归进错误的周/月，算错比算少更难发现。
+    private final class DayFormatter: @unchecked Sendable {
+        private let lock = NSLock()
+        private let formatter = DateFormatter()
+
+        init() {
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone(secondsFromGMT: 0)
+            formatter.dateFormat = "yyyy-MM-dd"
+            formatter.isLenient = false
+        }
+
+        func date(from text: String) -> Date? {
+            lock.lock()
+            defer { lock.unlock() }
+            return formatter.date(from: text)
+        }
+    }
+
+    private static let dayFormatter = DayFormatter()
 
     /// 给界面显示用的「YYYY-MM-DD」。
     ///
@@ -61,8 +117,23 @@ public enum CoachTime {
 
     /// 写入用。与项目既有写法保持一致（UTC、无小数秒）。
     public static func string(from date: Date) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.string(from: date)
+        writer.string(from: date)
     }
+
+    /// 同上，写入端也复用。**单独一个盒子，不和解析共用**：
+    /// 解析那两个是在锁里被反复试的，写入只用一个，混在一起会让锁的持有时间毫无必要地变长。
+    private final class ISO8601Writer: @unchecked Sendable {
+        private let lock = NSLock()
+        private let formatter = ISO8601DateFormatter()
+
+        init() { formatter.formatOptions = [.withInternetDateTime] }
+
+        func string(from date: Date) -> String {
+            lock.lock()
+            defer { lock.unlock() }
+            return formatter.string(from: date)
+        }
+    }
+
+    private static let writer = ISO8601Writer()
 }

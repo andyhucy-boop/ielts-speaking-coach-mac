@@ -35,19 +35,30 @@ struct QuestionBankView: View {
     /// 关键词筛过之后的题库。**筛在 Part 之前**：两者是与的关系，
     /// 顺序不影响结果，但先筛关键词能让下面那个「这一档一道题都没有」的空状态
     /// 说的是「搜不到」而不是「这个 Part 没题」——后者会让他去导题库，白跑一趟。
-    private var model: QuestionBankViewModel {
+    /// **一次 body 只造一个，往下传。**
+    ///
+    /// 从前这里是计算属性，而 body 里访问它 7 次（`counts` 三次、`legacyShapeNotice`、
+    /// `groupedByTopic`…）。每访问一次就把 258 道题按关键词重搜一遍——搜的是题干、
+    /// 话题、以及每一条参考问句（全库约 1250 条），一遍约 1766 次
+    /// `localizedCaseInsensitiveContains`（区域感知，走 ICU），七遍约 1.2 万次。
+    /// 而搜索框每敲一个字就重绘一次，于是**光标跟不上手**。
+    ///
+    /// **不能改成 `@State` 存起来**：它读的是 `app.state.questions` 和 `keyword`，
+    /// 存起来之后导入新题库、或者改关键词，这一页都不会变。
+    private func makeModel() -> QuestionBankViewModel {
         QuestionBankViewModel(questions: QuestionSearch.filter(app.state.questions,
                                                                keyword: keyword))
     }
 
     var body: some View {
-        CoachPage {
-                header
+        let model = makeModel()
+        return CoachPage {
+                header(model)
                 if model.counts.total == 0 {
                     emptyBank
                 } else {
-                    legacyShapeCard
-                    bank
+                    legacyShapeCard(model)
+                    bank(model)
                     importCard
                 }
         }
@@ -58,15 +69,17 @@ struct QuestionBankView: View {
 
     // MARK: - 顶部：这个题库现在是什么样
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
+    private func header(_ model: QuestionBankViewModel) -> some View {
+        // 三个数字从**同一次** `counts` 里取：它每次都要把整库扫一遍数「练过几道」。
+        let counts = model.counts
+        return VStack(alignment: .leading, spacing: Spacing.md) {
             PageHeader(number: 2, label: "QUESTION BANK", title: SidebarItem.questionBank.title,
                        lede: "按话题分组。搜题目、话题或参考问句都可以。")
             CoachCard {
                 HStack(alignment: .top, spacing: Spacing.xl) {
-                    statistic(model.counts.total, caption: "题库总题数")
-                    statistic(model.counts.practiced, caption: "已经练过")
-                    statistic(model.counts.total - model.counts.practiced, caption: "还没练过")
+                    statistic(counts.total, caption: "题库总题数")
+                    statistic(counts.practiced, caption: "已经练过")
+                    statistic(counts.total - counts.practiced, caption: "还没练过")
                 }
             }
         }
@@ -94,7 +107,7 @@ struct QuestionBankView: View {
     /// 文案本身在 `QuestionBankViewModel.legacyShapeNotice` 里，那边可测；
     /// 这里只负责把它摆上屏幕。
     @ViewBuilder
-    private var legacyShapeCard: some View {
+    private func legacyShapeCard(_ model: QuestionBankViewModel) -> some View {
         if let notice = model.legacyShapeNotice {
             NoticeCard(.info, notice)
         }
@@ -102,7 +115,7 @@ struct QuestionBankView: View {
 
     // MARK: - 题库列表
 
-    private var bank: some View {
+    private func bank(_ model: QuestionBankViewModel) -> some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
             // 档位与每一格写什么，**与开练弹层那排按钮同一个出处**
             //（`QuestionPartFilter.partOptions` / `segmentTitle`）。
@@ -134,11 +147,21 @@ struct QuestionBankView: View {
                     keyword: keyword, searchedCount: app.state.questions.count) {
                     searchFoundNothing(notice)
                 } else {
-                    noQuestionsInThisPart
+                    noQuestionsInThisPart(model)
                 }
             } else {
-                ForEach(groups, id: \.topic) { group in
-                    topicCard(topic: group.topic, questions: group.questions)
+                // **必须是 `LazyVStack`。** 真实题库是 163 个话题、258 道题，
+                // 普通 `VStack` 会在每次重绘时把 163 张 `CoachCard`（每张带
+                // clipShape + strokeBorder）、258 个题目行、几百个徽章全部建出来，
+                // 哪怕屏幕上只看得见十来张。搜索框每敲一个字就是一次全量重建。
+                //
+                // 这一页**没有** `ScrollViewReader`，所以不受「`scrollTo` 够不到
+                // 还没建出来的行」那个坑影响（`PlanView` 与 `RetrainingCenterView`
+                // 有，那两页刻意没改）。
+                LazyVStack(alignment: .leading, spacing: Spacing.md) {
+                    ForEach(groups, id: \.topic) { group in
+                        topicCard(topic: group.topic, questions: group.questions)
+                    }
                 }
             }
         }
@@ -275,7 +298,7 @@ struct QuestionBankView: View {
     /// 而此刻页面下方还有一张紫色的 `importCard`，两个同样醒目的紫色块会让人不知道该点哪个
     /// （规范第 4 节）。所以退成次一级的 `bordered`，但「说明现状 + 说明下一步 + 一个能直接点的按钮」
     /// 三样一个不少。
-    private var noQuestionsInThisPart: some View {
+    private func noQuestionsInThisPart(_ model: QuestionBankViewModel) -> some View {
         CoachCard {
             VStack(alignment: .leading, spacing: Spacing.sm) {
                 Text("Part \(partSelection) 下还没有题目")

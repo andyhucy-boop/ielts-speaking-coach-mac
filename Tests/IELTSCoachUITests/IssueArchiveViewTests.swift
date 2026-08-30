@@ -67,7 +67,7 @@ final class IssueArchiveViewTests: XCTestCase {
     }
 
     func testTheSummaryLineIsBuiltFromTheViewModelCountsAndUsesMonospacedDigits() throws {
-        let summary = try SourceGuard.memberBody(of: "private var summaryLine",
+        let summary = try SourceGuard.memberBody(of: "private func summaryLine",
                                                  in: try Self.viewCode())
         XCTAssertTrue(summary.contains("summaryText(total:"),
                       "汇总那句话不是从 `summaryText` 来的，上面那条真跑起来的测试就在测"
@@ -107,7 +107,7 @@ final class IssueArchiveViewTests: XCTestCase {
     }
 
     func testTheListIsDrivenByTheSelectedFilter() throws {
-        let list = try SourceGuard.memberBody(of: "private var listSection",
+        let list = try SourceGuard.memberBody(of: "private func listSection",
                                              in: try Self.viewCode())
         XCTAssertTrue(list.contains("rows(filter: filter)"),
                       "列表没有按当前筛选取行——筛选控件点了会变蓝，列表纹丝不动。"
@@ -130,7 +130,7 @@ final class IssueArchiveViewTests: XCTestCase {
     /// `ArchiveOutcome.skipped`：查出问题却不显示，用户拿到的是一个他无法核对的结论。
     func testDataWarningsFromTheTimelineAreShownAboveTheList() throws {
         let code = try Self.viewCode()
-        let warning = try SourceGuard.memberBody(of: "private var warningSection", in: code)
+        let warning = try SourceGuard.memberBody(of: "private func warningSection", in: code)
         XCTAssertTrue(warning.contains("model.dataWarnings"),
                       "时间轴查出来的数据问题没有上屏。那几条警告说清了「有几场练习只在档案里"
                           + "留了记录」「有几条读不出时间因此趋势可能偏乐观」——不显示的话，"
@@ -274,7 +274,7 @@ final class IssueArchiveViewTests: XCTestCase {
     func testTheEmptyArchiveGivesAllThreeThings() throws {
         let code = try Self.viewCode()
         SourceGuard.assertRenders(
-            "emptyState", inBodyOf: "private var listSection", of: Self.view,
+            "emptyState", inBodyOf: "private func listSection", of: Self.view,
             because: "一个问题都没有时这一页不再走空状态那一支，用户看到的是一片空白"
                 + "（DESIGN-SYSTEM 第 4 节要求空状态必须给足三样）。")
         let empty = try SourceGuard.memberBody(of: "private var emptyState", in: code)
@@ -295,7 +295,7 @@ final class IssueArchiveViewTests: XCTestCase {
     func testFilteringDownToNothingAlsoSaysSoAndOffersAWayBack() throws {
         let code = try Self.viewCode()
         SourceGuard.assertRenders(
-            "filteredEmptyState", inBodyOf: "private var listSection", of: Self.view,
+            "filteredEmptyState", inBodyOf: "private func listSection", of: Self.view,
             because: "筛到一条都不剩时这一页是一片空白，用户会以为筛选控件坏了。")
         let empty = try SourceGuard.memberBody(of: "private var filteredEmptyState", in: code)
         XCTAssertTrue(empty.contains("EmptyStateView("),

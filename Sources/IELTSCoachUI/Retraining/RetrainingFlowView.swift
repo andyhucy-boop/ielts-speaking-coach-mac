@@ -125,7 +125,15 @@ struct RetrainingFlowView: View {
                 Text("\(candidate.stepNumber)").monospacedDigit()
                 Text(candidate.title)
             }
-            .font(isCurrent ? Typography.cardTitle : Typography.label)
+            // **字号不可动画。** 从前这里是 `isCurrent ? Typography.cardTitle : Typography.label`
+            // （15pt vs 11pt），而换步是包在 `withAnimation` 里的：文字瞬间跳到新字号，
+            // 它所在的 HStack 却在平滑重排——中间那零点几秒能看到文字挤出边界，
+            // 比干脆不做动画还生硬。
+            //
+            // 现在三格统一字体，当前那一格靠**主色**和**填实的图标**区分
+            // （`stepIcon` 给当前步返回 `largecircle.fill.circle`）。
+            // 两样都可动画，而且图标那一路本来就是规范要求的「状态不许只靠颜色传达」。
+            .font(Typography.label)
             .foregroundStyle(isCurrent ? Palette.accent : Palette.textSecondary)
             if skipped {
                 Text("换题验证跳过这一步")
@@ -703,7 +711,7 @@ struct RetrainingFlowView: View {
         if reduceMotion {
             step = next
         } else {
-            withAnimation(.easeOut) { step = next }
+            withAnimation(.easeOut(duration: Motion.standard)) { step = next }
         }
     }
 
