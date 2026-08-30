@@ -444,6 +444,15 @@ struct TodayView: View {
                 Text("本周节奏")
                     .font(Typography.label)
                     .foregroundStyle(Palette.textSecondary)
+                // **一根柱子都没有时要说一句话。** 七个空槽不配任何文字，
+                // 看着就是一块没画完的东西——而本项目对空状态的要求是
+                // 「说清现状」（铁律 6）。下一步不在这儿说：上面「本周训练」那一格
+                // 的脚注已经写着「点下面的「开始练习」」，两处各说一遍是骚扰。
+                if bars.allSatisfy({ $0.count == 0 }) {
+                    Text("这周还没有练过。")
+                        .font(Typography.secondary)
+                        .foregroundStyle(Palette.textSecondary)
+                }
                 HStack(alignment: .bottom, spacing: Spacing.sm) {
                     ForEach(bars) { bar in
                         VStack(spacing: Spacing.xs) {
