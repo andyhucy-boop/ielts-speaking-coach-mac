@@ -51,14 +51,37 @@ public enum ChatGPTLabels {
     /// **只按标签匹配是缺陷**（spec 2.3.1）：ChatGPT 每开一次语音就自动生成一条
     /// 名为 "New voice chat" 的侧边栏会话，而侧边栏在深度优先遍历里常常排在真按钮前面。
     /// 只取第一个命中会点中历史会话——实测发生过，且返回码是成功的。
+    /// **图标形状优先，叶子形状兜底。**
+    ///
+    /// `isIconOnlyControl` 现在认两种形状（图标按钮、叶子按钮，见那边的说明）。
+    /// 但同一个标签在树上可能两种都有——2026-08-30 实测：通话进行中时，
+    /// 输入框那一行是图标形状的 `Stop voice chat`，而另一个面板里还挂着一颗
+    /// 叶子形状的 `Start new voice chat`。
+    /// 一视同仁地取「第一个命中」，就会随深度优先的遍历顺序碰运气。
+    ///
+    /// 分两趟：先找图标形状的（这是改版前唯一认的形状，历来对的那一批都在这里），
+    /// 一个都没有时才退到叶子形状。**候选标签的优先级不变**——仍是按 `candidates`
+    /// 的顺序逐个试，只是每个标签内部先图标后叶子。
     public static func matchControl(_ candidates: [String],
                                     among nodes: [AXNodeSnapshot]) -> AXNodeSnapshot? {
         for candidate in candidates {
-            if let hit = nodes.first(where: {
-                controlRoles.contains($0.role) && $0.label == candidate && $0.isIconOnlyControl
-            }) { return hit }
+            if let hit = nodes.first(where: { isControl($0, labelled: candidate, iconOnly: true) }) {
+                return hit
+            }
+            if let hit = nodes.first(where: { isControl($0, labelled: candidate, iconOnly: false) }) {
+                return hit
+            }
         }
         return nil
+    }
+
+    /// 一个节点是不是「标签为 `label` 的真控制按钮」。
+    /// - Parameter iconOnly: true 只认图标形状（恰好一个 `AXImage` 子节点）；
+    ///   false 只认叶子形状（没有子节点）。
+    private static func isControl(_ node: AXNodeSnapshot, labelled label: String,
+                                  iconOnly: Bool) -> Bool {
+        guard controlRoles.contains(node.role), node.label == label else { return false }
+        return iconOnly ? node.childRoles == ["AXImage"] : node.childCount == 0
     }
 
     /// 取**最后一个**匹配的控制元素。
@@ -68,9 +91,13 @@ public enum ChatGPTLabels {
     public static func matchLastControl(_ candidates: [String],
                                         among nodes: [AXNodeSnapshot]) -> AXNodeSnapshot? {
         for candidate in candidates {
-            if let hit = nodes.last(where: {
-                controlRoles.contains($0.role) && $0.label == candidate && $0.isIconOnlyControl
-            }) { return hit }
+            // 同 `matchControl`：图标形状优先，叶子形状兜底。
+            if let hit = nodes.last(where: { isControl($0, labelled: candidate, iconOnly: true) }) {
+                return hit
+            }
+            if let hit = nodes.last(where: { isControl($0, labelled: candidate, iconOnly: false) }) {
+                return hit
+            }
         }
         return nil
     }
@@ -131,12 +158,30 @@ public enum ChatGPTLabels {
     /// | 输入框 desc | `Work with ChatGPT` | `Work with ChatGPT` |
     /// | 同行按钮 | `Dictate`、`Start new voice chat` | `Mute speakers`、`Mute microphone`、`Stop voice chat` |
     ///
-    /// 两个条件都要：`Stop voice chat` 在（通话真的开着），
-    /// 且 `Start new voice chat` 不在（界面确实已经切到通话那一屏，
-    /// 而不是还停在旧对话上、通话在别处开着）。
+    /// 这张表 2026-08-30 在 26.820.60940 上复核过，**输入框那一行仍然如此**；
+    /// 变的是别的面板（见下面那段）。
+    ///
+    /// ## 2026-08-30：撤掉「`Start new voice chat` 不在」那一半
+    ///
+    /// 那一半原本是想确认「界面确实已经切到通话那一屏」。它在 08-08 那一版成立，
+    /// 但**它是在用「证据不存在」去推断状态**，而这次实测（26.820.60940）它不成立了：
+    ///
+    /// 通话进行中时 AX 树里有**两个窗口**（`AXDialog` 的通话面板 + `AXStandardWindow`
+    /// 的主窗口），主窗口别的面板上仍然挂着一颗 `Start new voice chat`
+    /// （叶子形状，`children=0`）、侧边栏还有一条 `title="New voice chat"`。
+    /// 于是「start 不在」永远不成立，`waitForVoiceComposer` 一直等到 20 秒超时——
+    /// 用户报的就是这个。
+    ///
+    /// 现在只认正面证据：**`Stop voice chat` 在，就是在通话里**。
+    /// 这颗按钮只在通话进行时存在（08-08 与 08-30 两份 dump 都印证），
+    /// 而且它就在输入框那一行上——`Mute speakers` / `Mute microphone` / `Stop voice chat`
+    /// 这一组换掉了空对话时的 `Dictate` / `Start new voice chat`。
+    ///
+    /// 「万一界面还停在旧对话上」这个担心由 `composer(among:)` 兜着：
+    /// 它只在整棵树恰好只有一个 `AXTextArea` 时才返回（实测通话中就是 1 个），
+    /// 有歧义时返回 nil，调用方响亮地失败而不是往错的框里写字。
     public static func isInVoiceCall(_ nodes: [AXNodeSnapshot]) -> Bool {
         matchControl(stopVoice, among: nodes) != nil
-            && matchControl(startVoice, among: nodes) == nil
     }
 
     /// 专门找**语音会话里那个**输入框。

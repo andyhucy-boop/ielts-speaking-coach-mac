@@ -278,4 +278,89 @@ final class ChatGPTLabelsTests: XCTestCase {
         XCTAssertFalse(row.isIconOnlyControl,
                        "一条恰好叫「New chat」的历史会话被当成了新建按钮")
     }
+
+    // MARK: - 2026-08-30：通话进行中，别的面板上还挂着「启动语音」
+
+    /// 逐字照抄通话进行中那棵真实的树（ChatGPT 26.820.60940）里要紧的四个节点。
+    ///
+    /// 那棵树有**两个窗口**：`AXDialog` 的通话面板 + `AXStandardWindow` 的主窗口。
+    /// 输入框那一行是通话态（`Mute speakers` / `Mute microphone` / `Stop voice chat`），
+    /// 而主窗口别的面板上仍然挂着一颗叶子形状的 `Start new voice chat`、
+    /// 侧边栏还有一条 `title="New voice chat"`。
+    private var liveCallTree: [AXNodeSnapshot] {
+        [
+            // 通话面板里的停止按钮（图标形状）。
+            AXNodeSnapshot(element: AXElementRef(rawID: 1, epoch: 0), role: "AXButton",
+                           descriptionText: "Stop voice chat",
+                           childCount: 1, childRoles: ["AXImage"]),
+            // 别的面板上那颗「启动语音」——叶子形状，通话中依然在树上。
+            AXNodeSnapshot(element: AXElementRef(rawID: 2, epoch: 0), role: "AXButton",
+                           descriptionText: "Start new voice chat",
+                           childCount: 0, childRoles: []),
+            // 侧边栏那一条同名项。
+            AXNodeSnapshot(element: AXElementRef(rawID: 3, epoch: 0), role: "AXButton",
+                           title: "New voice chat", childCount: 0, childRoles: []),
+            // 通话中整棵树只有这一个输入框。
+            AXNodeSnapshot(element: AXElementRef(rawID: 4, epoch: 0), role: "AXTextArea",
+                           descriptionText: "Work with ChatGPT",
+                           childCount: 1, childRoles: ["AXGroup"])
+        ]
+    }
+
+    /// **这条守的是用户 2026-08-30 报的第二个障：「等了 20 秒仍没等到语音模式的输入框」。**
+    ///
+    /// 病因是 `isInVoiceCall` 当时要求「`Start new voice chat` 不在」——
+    /// 那是在用「证据不存在」推断状态，而这一版通话中它就在树上。
+    func testTheCallIsDetectedEvenWhileAStartVoiceControlIsStillInTheTree() {
+        XCTAssertTrue(
+            ChatGPTLabels.isInVoiceCall(liveCallTree),
+            "通话明明开着（`Stop voice chat` 在），却因为别的面板上还挂着一颗"
+                + "「启动语音」而判成不在通话里——`waitForVoiceComposer` 会一直等到超时。")
+        XCTAssertNotNil(
+            ChatGPTLabels.voiceComposer(among: liveCallTree),
+            "通话中没能取到语音输入框，考官提示词发不出去")
+    }
+
+    /// 通话没开时不许误判成开着——否则会把提示词打进普通聊天框。
+    func testNoCallMeansNoVoiceComposer() {
+        let idle = [
+            AXNodeSnapshot(element: AXElementRef(rawID: 5, epoch: 0), role: "AXButton",
+                           descriptionText: "Start new voice chat",
+                           childCount: 1, childRoles: ["AXImage"]),
+            AXNodeSnapshot(element: AXElementRef(rawID: 6, epoch: 0), role: "AXTextArea",
+                           descriptionText: "Work with ChatGPT",
+                           childCount: 1, childRoles: ["AXGroup"])
+        ]
+        XCTAssertFalse(ChatGPTLabels.isInVoiceCall(idle),
+                       "没有 `Stop voice chat` 却判成在通话里")
+        XCTAssertNil(ChatGPTLabels.voiceComposer(among: idle),
+                     "不在通话里却交出了语音输入框——提示词会被打进普通聊天框")
+    }
+
+    /// **同一个标签两种形状都在时，取图标形状的那一颗。**
+    ///
+    /// 放宽结构判据之后，同一个标签可能既有图标形状又有叶子形状；
+    /// 一视同仁地取「第一个命中」就成了碰运气——按到哪一颗全看深度优先的遍历顺序。
+    func testAnIconShapedControlWinsOverALeafWithTheSameLabel() {
+        let leafFirst = [
+            AXNodeSnapshot(element: AXElementRef(rawID: 7, epoch: 0), role: "AXButton",
+                           descriptionText: "Start new voice chat",
+                           childCount: 0, childRoles: []),
+            AXNodeSnapshot(element: AXElementRef(rawID: 8, epoch: 0), role: "AXButton",
+                           descriptionText: "Start new voice chat",
+                           childCount: 1, childRoles: ["AXImage"])
+        ]
+        XCTAssertEqual(
+            ChatGPTLabels.matchControl(ChatGPTLabels.startVoice, among: leafFirst)?.element.rawID,
+            8,
+            "叶子形状的排在前面就被选走了。改版前唯一认的是图标形状，"
+                + "历来对的那一批都在那里——叶子只该在没有图标形状时兜底。")
+
+        // 只有叶子时仍然要认得（那正是「新建会话」那次报障的形状）。
+        XCTAssertEqual(
+            ChatGPTLabels.matchControl(ChatGPTLabels.newChat, among: [
+                AXNodeSnapshot(element: AXElementRef(rawID: 9, epoch: 0), role: "AXButton",
+                               title: "New chat", childCount: 0, childRoles: [])
+            ])?.element.rawID, 9)
+    }
 }
