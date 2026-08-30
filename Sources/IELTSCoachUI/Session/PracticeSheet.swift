@@ -252,12 +252,17 @@ struct PracticeSheet: View {
 
     // MARK: - 顶部
 
+    /// 弹层顶上那两行。
+    ///
+    /// 两条选题路线合成一张卡片之后，这里也得用合并那一套文案：
+    /// 用户点的是「自己挑一道，或者交给运气」，进来却看到「从题库自由选题」，
+    /// 会以为自己点错了地方——而底下那个开关明明两种都给。
     private var header: some View {
         VStack(alignment: .leading, spacing: Spacing.xs) {
-            Text(route.title)
+            Text(route.isPickEntry ? PracticeRoute.pickEntryTitle : route.title)
                 .font(Typography.sectionTitle)
                 .foregroundStyle(Palette.textPrimary)
-            Text(route.subtitle)
+            Text(route.isPickEntry ? PracticeRoute.pickEntrySubtitle : route.subtitle)
                 .font(Typography.secondary)
                 .foregroundStyle(Palette.textSecondary)
         }
@@ -1107,8 +1112,14 @@ struct PracticeSheet: View {
     /// - 随机抽题看的是**这一组真的造得出一场练习**（`drawnSetup`），
     ///   而不是「抽过了」：抽了个空时 `drawn` 非 nil 但里面一道题都没有，
     ///   按下去会开一场什么都不考的练习。
+    ///
+    /// **判据必须问 `pickMode`，不能问 `route`。** 两条选题路线在今日训练页上
+    /// 已经合成一张卡片，进来之后靠开关切换；而 `route` 只记着**进来时**是哪一条。
+    /// 从默认的「自由选题」进来、再切到「随机抽」的人，抽完之后
+    /// `route` 仍然是 `.freePick`，问 `route` 会去看 `pickedQuestion`——
+    /// 而他根本没挑过题，于是「开始练习」永远是灰的（实机报障，2026-08-30）。
     private var readyToStart: Bool {
-        route == .randomDraw ? drawnSetup != nil : pickedQuestion != nil
+        pickMode == .random ? drawnSetup != nil : pickedQuestion != nil
     }
 
     /// 抽出来这一组对应的那一场。抽了个空、或者还没抽时是 nil。
@@ -1126,7 +1137,10 @@ struct PracticeSheet: View {
     }
 
     private func startPicked() {
-        if route == .randomDraw {
+        // 同 `readyToStart`：问 `pickMode` 而不是 `route`。
+        // 问 `route` 的话，从「自由选题」进来切到随机抽的那一场会走错分支——
+        // 拿一个不存在的 `pickedQuestion` 去开练，什么也不会发生。
+        if pickMode == .random {
             guard let setup = drawnSetup else { return }
             Task { await begin(setup) }
             return

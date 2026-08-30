@@ -555,4 +555,51 @@ final class PracticeSheetTests: XCTestCase {
             "题库里那个 Part 一道题都没有时，它仍然会被摆进来滚一个空字符串，看着像卡住了。"
                 + "实际取到的是：\n\(parts)")
     }
+
+    /// **进来之后一切问 `pickMode`，不许再问 `route`。**
+    ///
+    /// `route` 只记着**进来时**是哪一条路线；两条选题路线在今日训练页上已经合成一张卡片，
+    /// 进来之后靠开关切换。这两者一旦分家，就会出现「界面按开关走、判断按路线走」。
+    ///
+    /// 实机报障（2026-08-30）：从默认的「自由选题」进来、切到「随机抽」、抽完，
+    /// **「开始练习」还是灰的**——`readyToStart` 当时问的是 `route`，
+    /// 于是去看 `pickedQuestion`，而用户根本没挑过题。
+    /// `startPicked` 是同一个坑的第二半：就算按钮亮了，它也会走错分支。
+    ///
+    /// 唯一允许问 `route` 的地方是 `PickMode.init(route:)`——那正是「路线 → 初始档位」
+    /// 这一次映射本身。
+    func testEverythingAfterEntryAsksThePickModeNotTheRoute() throws {
+        let code = try SourceGuard.code(Self.sheet)
+
+        for member in ["private var readyToStart", "private func startPicked"] {
+            let body = try SourceGuard.memberBody(of: member, in: code)
+            XCTAssertTrue(
+                body.contains("pickMode == .random"),
+                "`\(member)` 没有问 `pickMode`。从「自由选题」进来再切到「随机抽」的人，"
+                    + "抽完之后 `route` 仍是 `.freePick`——按钮会一直是灰的，"
+                    + "或者按下去走错分支什么都不发生。实际取到的是：\n\(body)")
+            XCTAssertFalse(
+                body.contains("route =="),
+                "`\(member)` 还在问 `route`。它只记着进来时是哪一条路线，"
+                    + "而用户可以在弹层里切换。实际取到的是：\n\(body)")
+        }
+
+        // 全文件只许剩下那一处映射。多一处就是又有人拿「进来时的路线」当「当前的档位」。
+        XCTAssertEqual(
+            SourceGuard.occurrences(of: "route == .randomDraw", in: code), 1,
+            "`route == .randomDraw` 在这个文件里出现了不止一次。"
+                + "唯一该留的是 `PickMode.init(route:)`——那是「路线 → 初始档位」的映射本身；"
+                + "其余任何一处都是把「进来时的路线」错当成「现在选的档位」。")
+
+        // 弹层顶上那两行也得跟着合并入口走，否则用户点的是「自己挑一道，或者交给运气」，
+        // 进来看到的却是「从题库自由选题」，会以为自己点错了地方。
+        let header = try SourceGuard.memberBody(of: "private var header", in: code)
+        // **两行都要。** 只查「出现过」的话，把标题那一行改回 `route.title`、
+        // 只留副标题那一行照样能过——实测确认过这条断言当时是空转的。
+        XCTAssertEqual(
+            SourceGuard.occurrences(of: "route.isPickEntry", in: header), 2,
+            "弹层顶上那两行没有都用合并入口的文案。用户点的是「自己挑一道，或者交给运气」，"
+                + "进来看到的却是「从题库自由选题」，会以为自己点错了地方——"
+                + "而底下那个开关明明两种都给。实际取到的是：\n\(header)")
+    }
 }
