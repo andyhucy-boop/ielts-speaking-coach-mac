@@ -97,7 +97,18 @@ public enum IssueTrendAnalyzer {
 
     public static func analyze(state: CoachState,
                                windowSize: Int = defaultWindowSize) -> [IssueTrendResult] {
-        let timeline = SessionTimeline.build(state: state)
+        analyze(state: state, timeline: SessionTimeline.build(state: state),
+                windowSize: windowSize)
+    }
+
+    /// 时间轴由调用方给的那一版。
+    ///
+    /// **给已经建过时间轴的调用方用。** `IssueArchiveViewModel` 同时要趋势和
+    /// `timeline.warnings`，走上面那个重载的话同一份输入要建两遍时间轴，
+    /// 而建一遍要把全部练习记录的时间戳解析一轮。
+    public static func analyze(state: CoachState,
+                               timeline: SessionTimeline,
+                               windowSize: Int = defaultWindowSize) -> [IssueTrendResult] {
         let recent = Set(timeline.recentWindow(size: windowSize))
         let earlier = Set(timeline.earlierWindow(size: windowSize))
         let inWindows = recent.union(earlier)

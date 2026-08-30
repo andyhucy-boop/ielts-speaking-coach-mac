@@ -340,10 +340,15 @@ struct TodayView: View {
                 .accessibilityValue("\(progress.done) 次，共 \(progress.goal) 次")
             // 不用 `.link` 样式：那个样式画的是**系统强调色**，不在 `Palette` 里，
             // 也就不受那张对比度矩阵管，深色下更不跟着走。
+            // **不能用 `.plain`。** 那个样式不画边框、不给悬停也不给按下反馈，
+            // 在屏幕上和一行普通紫字没有区别——而这是「本周训练」那一格里唯一的动作入口。
+            // 这次改版给全项目的卡片和列表行都补上了悬停反馈，这一处反倒退回去了。
+            //
+            // 也不用 `.link`：那个样式画的是**系统强调色**，不在 `Palette` 里，
+            // 不受那张对比度矩阵管，深色下也不跟着走。
             Button("改目标") { navigator.open(.goals); openSettings() }
-                .buttonStyle(.plain)
-                .font(Typography.label)
-                .foregroundStyle(Palette.accent)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
         }
     }
 

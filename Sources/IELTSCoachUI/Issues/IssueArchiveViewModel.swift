@@ -68,8 +68,13 @@ public struct IssueArchiveViewModel: Sendable {
         // ⚠️ 不能用 Dictionary(uniqueKeysWithValues:)：state.json 被外部工具改坏、
         // 或上游写入过重复 id 时，它会 fatalError 闪退整个 App 而不是报错。
         // 本项目在 QuestionBankImporter.merge 里已经为同一个坑写过注释。
+        // **时间轴建一次，趋势和数据警告共用。**
+        // 从前是 `analyze` 内部建一遍、下面取 `dataWarnings` 时又建一遍，
+        // 而建一遍要把全部练习记录的时间戳解析一轮。
+        let timeline = SessionTimeline.build(state: state)
         var byID: [String: IssueTrendResult] = [:]
-        for result in IssueTrendAnalyzer.analyze(state: state, windowSize: windowSize) {
+        for result in IssueTrendAnalyzer.analyze(state: state, timeline: timeline,
+                                                 windowSize: windowSize) {
             byID[result.issueID] = result
         }
 
@@ -118,7 +123,7 @@ public struct IssueArchiveViewModel: Sendable {
                 miniDrill: issue.miniDrill)
         }
 
-        dataWarnings = SessionTimeline.build(state: state).warnings
+        dataWarnings = timeline.warnings
     }
 
     public func rows(filter: IssueFilter) -> [IssueArchiveRow] {

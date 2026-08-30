@@ -178,7 +178,10 @@ public struct RootView: View {
                 .navigationSplitViewColumnWidth(Layout.sidebarWidth)
                 // 深色底要一直铺到窗口标题栏底下，否则侧边栏顶上会留一条系统材质的浅色横带。
                 .ignoresSafeArea(edges: .top)
-                .toolbar(removing: .sidebarToggle)
+                // **不要 `.toolbar(removing: .sidebarToggle)`。**
+                // 一度为了让自绘的深色侧边栏顶上干净而把它去掉了，那是拿「删功能」
+                // 解「样式问题」：侧边栏固定占 220pt，小屏上用户再也没有办法把它收起来
+                // 给正文腾地方，`⌃⌘S` 也跟着失效。样式上的那点收益换不来一个系统标准能力。
         } detail: {
             detail
                 .toolbar {

@@ -64,7 +64,7 @@ public struct UpgradeView: View {
         self.metadata = metadata
         self.openURL = openURL
         _expandedVersions = State(initialValue: Changelog.defaultExpandedVersions())
-        _updates = State(initialValue: updates ?? UpdateCheckViewModel())
+        _updates = State(initialValue: updates ?? .live)
     }
 
     public var body: some View {

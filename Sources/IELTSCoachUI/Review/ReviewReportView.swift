@@ -417,7 +417,6 @@ struct ReviewReportView: View {
                     .font(Typography.sectionTitle)
                     .foregroundStyle(Palette.textPrimary)
                 CoachBadge("\(section.rows.count) 条")
-                    .monospacedDigit()
             }
             CoachCard {
                 VStack(alignment: .leading, spacing: Spacing.lg) {

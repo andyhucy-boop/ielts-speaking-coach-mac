@@ -50,14 +50,28 @@ public enum UpdateCheck {
 
     /// 查最新发布的接口。`/releases/latest` 自动跳过草稿与预发布，
     /// 所以不需要在这边再过滤一遍。
-    public static var latestReleaseAPI: URL {
-        URL(string: "https://api.github.com/repos/\(owner)/\(repository)/releases/latest")!
-    }
+    ///
+    /// **`static let` 而不是计算属性**：每次访问都重新拼串再解析一遍没有意义。
+    public static let latestReleaseAPI = url(
+        "https://api.github.com/repos/\(owner)/\(repository)/releases/latest")
 
     /// 发布页（给用户点的那个）。接口查不到时也能用——例如仓库还不公开，
     /// 用户至少能拿这个地址去问作者。
-    public static var releasesPage: URL {
-        URL(string: "https://github.com/\(owner)/\(repository)/releases")!
+    public static let releasesPage = url("https://github.com/\(owner)/\(repository)/releases")
+
+    /// 拼地址。**拼不出来当场炸给开发者看**，与 `CoachRoute.url` 同一套做法。
+    ///
+    /// `owner` / `repository` 现在是纯 ASCII 常量，走不到这里。真走到了说明有人
+    /// 把它们改成了带空格或中文的值（例如将来改成「源码私有、另开一个公开仓库放发布包」
+    /// 那条路时手滑）——那种情况必须当场停住，不能返回一个打不开的地址，
+    /// 让用户在「检查更新」上看到一句没头没脑的失败。
+    private static func url(_ text: String) -> URL {
+        guard let url = URL(string: text) else {
+            preconditionFailure(
+                "UpdateCheck 拼不出合法 URL：「\(text)」。"
+                    + "下一步：把 `owner` / `repository` 改回纯 ASCII，不要带空格或非 ASCII 字符。")
+        }
+        return url
     }
 
     // MARK: - 返回的东西怎么读

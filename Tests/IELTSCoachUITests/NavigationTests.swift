@@ -198,4 +198,51 @@ final class NavigationTests: XCTestCase {
             "页面根本没换（同一个值被写回来一次）却把带过来的那一场清掉了，"
                 + "用户点「看这次的复盘」跳过去，看到的还是最近那一场。")
     }
+
+    // MARK: - 侧边栏分组
+
+    /// **每一页都必须落在某一组里。**
+    ///
+    /// `SidebarSection.items` 是三个手写数组，而 `SidebarItem` 那几个 switch 是穷尽的——
+    /// 加第十一项时编译器会逼你补 `title` / `systemImage` / `isImplemented` /
+    /// `RootView.detail`，**唯独不会提醒你把它写进某一组**。
+    /// 漏掉的那一页照样能画、深链接照样打得开，只是**侧边栏上永远看不到它**。
+    ///
+    /// 这条测试原本只存在于 `SidebarSection.items` 的注释里（那段注释白纸黑字写着
+    /// 「`NavigationTests` 逐项对着这条」），而它当时根本没被写出来——
+    /// 一条声称有人在守、其实没有的守卫，比没有更糟。
+    func testEverySidebarItemLivesInExactlyOneSection() {
+        let grouped = SidebarSection.allCases.flatMap(\.items)
+
+        XCTAssertEqual(
+            Set(grouped), Set(SidebarItem.allCases),
+            "侧边栏分组和 `SidebarItem.allCases` 对不上。"
+                + "只在分组里的（\(Set(grouped).subtracting(SidebarItem.allCases).map(\.rawValue)))："
+                + "指向一个不存在的页面；"
+                + "只在 allCases 里的（\(Set(SidebarItem.allCases).subtracting(grouped).map(\.rawValue)))："
+                + "那一页在侧边栏上根本不出现，用户只能靠深链接进去。"
+                + "下一步：把缺的那一项写进 `SidebarSection.items` 里合适的一组。")
+
+        XCTAssertEqual(
+            grouped.count, SidebarItem.allCases.count,
+            "有页面被写进了不止一组（分组里共 \(grouped.count) 项，实际只有 "
+                + "\(SidebarItem.allCases.count) 页）。同一页在侧边栏上出现两次，"
+                + "点哪一个都跳同一页，看着像重复渲染。")
+
+        // 防空转：三组全空时上面两条会同时因为「两边都是空集」而通过。
+        XCTAssertGreaterThanOrEqual(
+            grouped.count, 10,
+            "分组里只有 \(grouped.count) 项，这条测试很可能在空转。")
+    }
+
+    /// 每一组都得有标题，而且不能重名——它是侧边栏上唯一的分隔物。
+    func testEverySectionHasItsOwnTitleAndIsNotEmpty() {
+        let titles = SidebarSection.allCases.map(\.title)
+        XCTAssertEqual(Set(titles).count, titles.count, "两组用了同一个标题：\(titles)")
+        for section in SidebarSection.allCases {
+            XCTAssertFalse(section.title.isEmpty, "\(section.rawValue) 没有标题")
+            XCTAssertFalse(section.items.isEmpty,
+                           "\(section.rawValue) 是空的——侧边栏上会出现一个底下什么都没有的组标题")
+        }
+    }
 }

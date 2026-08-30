@@ -176,7 +176,7 @@ struct QuestionBankView: View {
                         .font(Typography.cardTitle)
                         .foregroundStyle(Palette.textPrimary)
                     Spacer(minLength: Spacing.sm)
-                    CoachBadge("\(questions.count) 题").monospacedDigit()
+                    CoachBadge("\(questions.count) 题")
                 }
                 VStack(alignment: .leading, spacing: Spacing.sm) {
                     // 用下标而不是 `\.id` 做 ForEach 的身份：题库正常情况下 id 唯一
@@ -198,7 +198,7 @@ struct QuestionBankView: View {
 
     private func questionRow(_ question: Question, repeatsTopic: Bool = false) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: Spacing.md) {
-            CoachBadge("Part \(question.part)", kind: .accent).monospacedDigit()
+            CoachBadge("Part \(question.part)", kind: .accent)
 
             VStack(alignment: .leading, spacing: Spacing.xs) {
                 // 空题干仍然要说话：留一片空白会让人以为渲染坏了。

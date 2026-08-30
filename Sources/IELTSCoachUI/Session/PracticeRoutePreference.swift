@@ -63,13 +63,17 @@ public enum PracticeRouteMerge {
     /// 唯一的主行动）。这里只删，不动位置。
     public static func collapsePickRoutes(_ routes: [PracticeRoute],
                                           preferring preferred: PracticeRoute) -> [PracticeRoute] {
-        let keep: PracticeRoute? = preferred.isPickEntry
+        // 留哪一条：偏好的那条**且它这次真的可用**，否则退回列表里现有的第一条。
+        // 退回这一步不能省：偏好的那条被解析器筛掉时若直接按偏好去留，
+        // 这张卡片会整个消失——而用户明明有题库，「挑一道题练」永远是可用的。
+        //
+        // 一个表达式写完。原来分成 `keep` / `guard` / `survivor` 三步，
+        // 而「偏好不是选题路线」那一支算出来的 `keep` 必然来自 `routes`，
+        // 那一步的 `routes.contains` 恒真——三步里有一步是死逻辑。
+        let survivor = preferred.isPickEntry && routes.contains(preferred)
             ? preferred
             : routes.first(where: \.isPickEntry)
-        guard let keep else { return routes }
-        // 偏好的那条这次不可用时（例如它被解析器筛掉了），退回列表里现有的那一条，
-        // 否则这张卡片会整个消失——而用户明明有题库，「挑一道题练」永远是可用的。
-        let survivor = routes.contains(keep) ? keep : routes.first(where: \.isPickEntry)
+        // `survivor` 为 nil（列表里一条选题路线都没有）时下面这句原样返回。
         return routes.filter { !$0.isPickEntry || $0 == survivor }
     }
 }

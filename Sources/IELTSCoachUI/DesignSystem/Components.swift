@@ -126,11 +126,12 @@ public struct CoachPage<Content: View>: View {
             VStack(alignment: .leading, spacing: Spacing.section) {
                 content
             }
-            .padding(Spacing.xl)
-            .frame(maxWidth: Layout.contentMaxWidth, alignment: .leading)
-            // 外面这一层负责把上面那块**居中**：窗口比 contentMaxWidth 宽时，
-            // 内容停在中间而不是贴着侧边栏堆在左边。
-            .frame(maxWidth: .infinity, alignment: .center)
+            // **走 `coachPageBody()`，不在这儿再抄一遍那三行。**
+            // 抄一份的话，页面版式就有了两套定义：套 `CoachPage` 的几页和
+            // 直接用 `.coachPageBody()` 的那七页。以后调页面内边距或最大宽度时
+            // 改了一处忘了另一处，两组页面的边距与栏宽就会对不上——
+            // 正是这套设计系统开宗明义要消灭的那类「说不上哪儿不对」。
+            .coachPageBody()
         }
         .background(Palette.canvas)
     }
@@ -402,6 +403,18 @@ public struct CoachBadge: View {
     public var body: some View {
         Text(text)
             .font(Typography.label)
+            // **等宽数字必须写在这里，不能留给调用方。**
+            //
+            // 调用方写 `CoachBadge("9 题").monospacedDigit()` 是**没有用的**：
+            // `monospacedDigit()` 作用于环境字体，而上面这一行给 `Text` 设了显式字体，
+            // 显式字体压过环境字体。改版时三处调用就是这么从
+            // `Text(…).font(…).monospacedDigit()`（修饰符跟在自己的字体后面，必然生效）
+            // 变成了一句摆设——而源码里 `.monospacedDigit()` 这几个字还在，
+            // 扫源码的测试照样全绿。
+            //
+            // 徽章里装的几乎都是数字（「9 题」「Part 1」「6 条」），
+            // 而等宽数字对非数字字符没有影响，所以无条件加。
+            .monospacedDigit()
             .foregroundStyle(foreground)
             .padding(.horizontal, Spacing.sm)
             .padding(.vertical, Spacing.xs)

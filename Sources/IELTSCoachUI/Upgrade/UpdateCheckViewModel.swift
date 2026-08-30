@@ -82,6 +82,14 @@ public final class UpdateCheckViewModel {
     private let store: any LastUpdateCheckStore
     private let now: @Sendable () -> Date
 
+    /// 生产用的那一个。**全 App 共用一份。**
+    ///
+    /// `UpgradeView` 是结构体，父视图每重绘一次就重新构造它一次，而
+    /// `State(initialValue:)` 只认第一次——其余每一个连同它们持有的 store 与取件器
+    /// 立刻被丢弃。共用一份之后那些白造白丢就没有了，
+    /// 而且「上次什么时候查的」这件事本来就该全 App 只有一份。
+    @MainActor public static let live = UpdateCheckViewModel()
+
     public init(fetcher: any ReleaseFetching = LiveReleaseFetcher(),
                 store: any LastUpdateCheckStore = UserDefaultsUpdateCheckStore(),
                 now: @escaping @Sendable () -> Date = { Date() }) {

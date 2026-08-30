@@ -64,24 +64,54 @@ final class HotPathCostTests: XCTestCase {
     /// 正确写法是 decorate-sort-undecorate：先 `map` 出 `(元素, 解析好的 Date)`，
     /// 排序时只比已经算好的值。
     func testNoDateParsingInsideSortComparators() throws {
+        var comparatorsChecked = 0
         for file in try SourceGuard.swiftFiles() {
             let path = try SourceGuard.relativePath(of: file)
             let code = try SourceGuard.code(path)
-            guard let sortAt = code.range(of: ".sorted {") ?? code.range(of: ".sort {") else {
-                continue
+            for comparator in Self.sortComparators(in: code) {
+                comparatorsChecked += 1
+                XCTAssertFalse(
+                    comparator.contains("CoachTime.parse"),
+                    "\(path) 在排序比较器里调 `CoachTime.parse`。比较器会被调 O(n log n) 次，"
+                        + "于是 n 次解析变成几百次（实测 30 条错题 → 786 次）。"
+                        + "下一步：改成先解析再排序（decorate-sort-undecorate）——"
+                        + "`let dated = xs.map { ($0, CoachTime.parse($0.someAt)) }`，"
+                        + "比较器里只读 `.1`。实际取到的比较器是：\n\(comparator)")
             }
-            // 只看比较器那一段（到闭包收尾为止的一小截，够覆盖两三行的比较器）。
-            let tail = code[sortAt.upperBound...].prefix(600)
-            guard let closeAt = tail.range(of: "\n        }") else { continue }
-            let comparator = String(tail[..<closeAt.lowerBound])
-            XCTAssertFalse(
-                comparator.contains("CoachTime.parse"),
-                "\(path) 在排序比较器里调 `CoachTime.parse`。比较器会被调 O(n log n) 次，"
-                    + "于是 n 次解析变成几百次（实测 30 条错题 → 786 次）。"
-                    + "下一步：改成先解析再排序（decorate-sort-undecorate）——"
-                    + "`let dated = xs.map { ($0, CoachTime.parse($0.someAt)) }`，"
-                    + "比较器里只读 `.1`。实际取到的比较器是：\n\(comparator)")
         }
+        // 防空转：切分写坏了、一处比较器都切不出来时，上面那圈一次都不跑也是全绿。
+        XCTAssertGreaterThanOrEqual(
+            comparatorsChecked, 5,
+            "只切出 \(comparatorsChecked) 处排序比较器，这条测试很可能在空转。"
+                + "下一步：确认 `sortComparators(in:)` 还认得出 `.sorted {` / `.sort {` 的写法。")
+    }
+
+    /// 切出一个文件里**每一处**排序比较器的闭包体。
+    ///
+    /// 早先这里只取 `code.range(of: ".sorted {")` 的**第一处**，而且靠
+    /// `tail.range(of: "\n        }")` 这个八空格缩进去找收尾：
+    /// 一个文件里第二处排序完全不检查，缩进不是八空格的（嵌在闭包里的那些）
+    /// 直接 `continue` 静默跳过。守卫的覆盖面比它宣称的窄得多，而且不会有任何迹象。
+    ///
+    /// 现在逐处扫，并且**按大括号配对**找收尾，不看缩进。
+    private static func sortComparators(in code: String) -> [String] {
+        var found: [String] = []
+        for opener in [".sorted {", ".sort {", ".sorted(by: {", ".max(by: {", ".min(by: {"] {
+            var searchFrom = code.startIndex
+            while let hit = code.range(of: opener, range: searchFrom..<code.endIndex) {
+                searchFrom = hit.upperBound
+                // 从 `{` 之后开始数括号，数到配对的那个 `}` 为止。
+                var depth = 1
+                var index = hit.upperBound
+                while index < code.endIndex, depth > 0 {
+                    if code[index] == "{" { depth += 1 }
+                    if code[index] == "}" { depth -= 1 }
+                    if depth > 0 { index = code.index(after: index) }
+                }
+                found.append(String(code[hit.upperBound..<index]))
+            }
+        }
+        return found
     }
 
     /// **题库那 163 张话题卡必须惰性构建。**
@@ -168,5 +198,89 @@ final class HotPathCostTests: XCTestCase {
                     + "存起来之后数据变了这一页不会更新——用户导入一份新复盘，"
                     + "看到的还是旧的。下一步：改回「`body` 里算一次的局部量」。")
         }
+    }
+
+    // MARK: - 等宽数字必须焊在组件里
+
+    /// **`CoachBadge` 自己带等宽数字，调用方加不上去。**
+    ///
+    /// `monospacedDigit()` 作用于环境字体，而 `CoachBadge` 内部给 `Text` 设了显式字体，
+    /// 显式字体压过环境字体——所以 `CoachBadge("9 题").monospacedDigit()` 是一句摆设。
+    /// 改版时三处调用就是这么从 `Text(…).font(…).monospacedDigit()`
+    /// （修饰符跟在自己的字体后面，必然生效）变成了没有作用的写法，
+    /// **而源码里那几个字还在，扫源码的测试照样全绿**。
+    func testTheBadgeCarriesMonospacedDigitsItselfInsteadOfLeavingItToCallers() throws {
+        let components = try SourceGuard.code("DesignSystem/Components.swift")
+        let badge = try SourceGuard.memberBody(of: "public struct CoachBadge", in: components)
+        XCTAssertTrue(
+            badge.contains(".monospacedDigit()"),
+            "`CoachBadge` 内部没有等宽数字。徽章里装的几乎都是数字（「9 题」「Part 1」「6 条」），"
+                + "少了它，数字从 9 跳到 10 时那一行会横向抖——"
+                + "而 DESIGN-SYSTEM 第 1 节末行与第 6 节最后一条都明写这不许发生。"
+                + "**在调用处加是没用的**（显式字体压过环境字体）。实际取到的是：\n\(badge)")
+
+        // 调用处不许再写那句摆设：留着会让下一个人以为它有用。
+        for path in ["QuestionBank/QuestionBankView.swift", "Review/ReviewReportView.swift"] {
+            let code = try SourceGuard.code(path)
+            XCTAssertFalse(
+                code.contains("CoachBadge(") && code.contains(").monospacedDigit()"),
+                "\(path) 在 `CoachBadge(...)` 外面加了 `.monospacedDigit()`——那是一句摆设"
+                    + "（显式字体压过环境字体），删掉它，等宽数字由组件自己保证。")
+        }
+    }
+
+    // MARK: - 抽签滚动期间不许改输入
+
+    /// **滚动那一秒里，决定抽什么的那几个控件必须锁住。**
+    ///
+    /// `roll()` 在按下按钮那一刻就把结果定死，一秒后无条件写回 `drawn`。
+    /// 期间若还能改数量或那个开关，用户会得到一组和屏幕上的数字对不上的题——
+    /// 而 `drawCountBinding` 的注释逐字写着这件事不许发生。
+    func testTheDrawInputsAreLockedWhileTheReelIsSpinning() throws {
+        let section = try SourceGuard.memberBody(
+            of: "private var drawCountsSection",
+            in: try SourceGuard.code("Session/PracticeSheet.swift"))
+        XCTAssertEqual(
+            SourceGuard.occurrences(of: ".disabled(isRolling)", in: section), 2,
+            "抽签滚动期间三个步进器与「只抽没练过的」开关没有全部锁住。"
+                + "点「抽题」之后立刻改数量，一秒后 `roll()` 会把**按旧数量抽的**那一组写回来："
+                + "步进器写着 3、底下列出 1 道，而「开始练习」练的就是列出的这一组。"
+                + "实际取到的是：\n\(section)")
+    }
+
+    // MARK: - 页面版式只有一份定义
+
+    /// `CoachPage` 必须调 `coachPageBody()`，不许把那三行再抄一遍。
+    ///
+    /// 抄一份的话，页面版式就有了两套定义：套 `CoachPage` 的几页和直接用
+    /// `.coachPageBody()` 的那七页。以后调内边距或最大宽度时改了一处忘了另一处，
+    /// 两组页面的边距与栏宽就会对不上——这套设计系统开宗明义要消灭的就是这个。
+    func testThePageLayoutHasExactlyOneDefinition() throws {
+        let components = try SourceGuard.code("DesignSystem/Components.swift")
+        let page = try SourceGuard.memberBody(of: "public struct CoachPage", in: components)
+        XCTAssertTrue(
+            page.contains(".coachPageBody()"),
+            "`CoachPage` 没有走 `coachPageBody()`，多半是把那三行又抄了一遍。"
+                + "实际取到的是：\n\(page)")
+        XCTAssertFalse(
+            page.contains("Layout.contentMaxWidth"),
+            "`CoachPage` 里又出现了 `Layout.contentMaxWidth`——页面版式有了第二份定义。"
+                + "下一步：只留 `.coachPageBody()` 那一句。")
+    }
+
+    // MARK: - 系统标准能力不许被样式需求删掉
+
+    /// 侧边栏的折叠按钮要留着。
+    ///
+    /// 一度为了让自绘的深色侧边栏顶上干净而 `.toolbar(removing: .sidebarToggle)`，
+    /// 那是拿「删功能」解「样式问题」：侧边栏固定占 220pt，小屏上用户再也没有办法
+    /// 把它收起来给正文腾地方，`⌃⌘S` 也跟着失效。
+    func testTheSidebarCanStillBeCollapsed() throws {
+        let code = try SourceGuard.code("RootView.swift")
+        XCTAssertFalse(
+            code.contains(".toolbar(removing: .sidebarToggle)"),
+            "又把侧边栏的折叠按钮去掉了。侧边栏固定占 \(Int(Layout.sidebarWidth))pt，"
+                + "去掉它之后小屏上没有任何办法把它收起来。"
+                + "样式上的那点收益换不来一个系统标准能力。")
     }
 }

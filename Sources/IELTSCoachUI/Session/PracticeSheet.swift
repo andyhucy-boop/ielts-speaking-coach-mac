@@ -378,6 +378,13 @@ struct PracticeSheet: View {
                             .foregroundStyle(Palette.textPrimary)
                     }
                     .frame(width: 132)
+                    // **滚动期间锁住。** 不锁的话：点「抽题」→ 立刻把 Part 2 从 1 调到 3，
+                    // `drawCountBinding` 会把 `drawn` 清成 nil（那正是它存在的理由），
+                    // 但一秒后 `roll()` 的 Task 结束时无条件写回 `drawn = result`，
+                    // 而那个 result 是按**旧数量**抽的。屏幕上步进器写着 3、
+                    // 底下列出的却是 1 道，而「开始练习」练的就是列出的这一组——
+                    // 正是 `drawCountBinding` 的注释里写着不许发生的那件事。
+                    .disabled(isRolling)
                     // 两个数都要有：只写总数的话，勾上「只抽没练过的」之后用户不知道还剩多少。
                     Text(drawModel.availabilityLine(forPart: part))
                         .font(Typography.label)
@@ -389,6 +396,9 @@ struct PracticeSheet: View {
             Toggle("只抽没练过的题", isOn: $excludePracticed)
                 .font(Typography.body)
                 .foregroundStyle(Palette.textPrimary)
+                // 同上：抽签在按下按钮那一刻就用当时的开关值定好了，
+                // 滚动中途改它只会让屏幕和结果对不上。
+                .disabled(isRolling)
                 .accessibilityHint("勾上之后，训练题库里已经标成「已练」的题不会被抽到")
         }
     }
@@ -550,13 +560,21 @@ struct PracticeSheet: View {
         settledParts = []
         reelLabels = [:]
         isRolling = true
+        // **每个 Part 的候选文字只算一次。** 放进循环的话，18 帧 × 最多 3 个 Part
+        // 就是最多 54 次对 258 道题的全量过滤，全发生在主 actor 上、
+        // 而且正好挤在这一秒的每一帧之间。
+        let pools = Dictionary(uniqueKeysWithValues: parts.map { part in
+            (part.rawValue, candidates.filter { $0.part == part.rawValue }
+                .map(RandomDrawViewModel.label(for:)))
+        })
         Task {
             for (index, part) in parts.enumerated() {
                 for _ in 0..<Self.reelFramesPerPart {
                     // 还没轮到定格的那几个 Part 一起滚——一次只滚一行的话，
                     // 看着像在排队而不是在抽。
                     for spinning in parts[index...] {
-                        reelLabels[spinning.rawValue] = randomLabel(inPart: spinning)
+                        reelLabels[spinning.rawValue] =
+                            pools[spinning.rawValue]?.randomElement() ?? ""
                     }
                     try? await Task.sleep(nanoseconds: Self.reelFrameNanos)
                 }
@@ -579,10 +597,6 @@ struct PracticeSheet: View {
         }
     }
 
-    private func randomLabel(inPart part: ExamPart) -> String {
-        candidates.filter { $0.part == part.rawValue }
-            .randomElement().map(RandomDrawViewModel.label(for:)) ?? ""
-    }
 
     /// 定格时这一行写什么：真的抽到的那一道；抽到多道就写第一道加个数。
     private func settledLabel(for part: ExamPart, in result: RandomDraw.Result) -> String {
