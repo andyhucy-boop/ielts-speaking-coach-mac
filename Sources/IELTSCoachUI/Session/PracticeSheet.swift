@@ -68,10 +68,40 @@ struct PracticeSheet: View {
     /// 「也可以选择支持我选择是否要之前练过的题目」，而会去想这件事的人默认要的是新题。
     @State private var excludePracticed = true
     /// 抽出来的那一组。nil = 还没抽（这时「开始练习」是灰的）。
+    /// 弹层里这一半是「自己挑」还是「随机抽」。
+    ///
+    /// 今日训练页上这两条已经合成一张卡片（`PracticeRouteMerge`），
+    /// 差别就落在这一个开关上。**初值跟着进来的那条路线走**：
+    /// 用户在学习计划页把默认路线设成「随机抽题」，这里进来就停在随机那一档，
+    /// 不用再点一下。
+    @State private var pickMode: PickMode
+
+    /// 挑题的两种做法。
+    ///
+    /// 它**不落盘**——落盘的是 `settings.defaultRoute`（`PracticeRoute` 的 raw value）。
+    /// 这里只是这一次弹层里的选择。
+    enum PickMode: String, CaseIterable, Identifiable, Sendable {
+        case byHand, random
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .byHand: return "自己挑"
+            case .random: return "随机抽"
+            }
+        }
+
+        init(route: PracticeRoute) { self = route == .randomDraw ? .random : .byHand }
+    }
+
     @State private var drawn: RandomDraw.Result?
     /// 抽签动画正在滚。**它只是动画**：结果在按下按钮那一刻就已经定了（见 `roll()`）。
     @State private var isRolling = false
-    @State private var rollingLabel = ""
+    /// 滚动时每个 Part 那一行现在显示的是哪一道。key 是 `ExamPart.rawValue`。
+    @State private var reelLabels: [Int: String] = [:]
+    /// 已经定格的 Part。**滚动是依次停的**，所以这是一个逐渐变大的集合。
+    @State private var settledParts: Set<Int> = []
     /// 系统的「减弱动态效果」。开着时直接出结果，不滚。
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -91,6 +121,8 @@ struct PracticeSheet: View {
         self.makeDrawSetup = makeDrawSetup
         self.onClose = onClose
         _partSelection = State(initialValue: defaultParts)
+        // 进来停在哪一档跟着路线走：默认路线设成「随机抽题」的人，进来就是随机那一档。
+        _pickMode = State(initialValue: PickMode(route: route))
         _drawCounts = State(initialValue: RandomDrawViewModel(questions: candidates)
             .clampedToAvailable(RandomDrawViewModel.defaultCounts))
     }
@@ -241,9 +273,11 @@ struct PracticeSheet: View {
                     .font(Typography.body)
                     .foregroundStyle(Palette.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
-            } else if route == .randomDraw {
+            } else if pickMode == .random {
+                modeSwitch
                 randomDrawPicker
             } else {
+                modeSwitch
                 Text("先勾这一场练哪几个 Part（可以多勾，勾了就按 Part 1 → 2 → 3 的顺序连着练），"
                      + "再挑一道题。挑好之后本工具会自动打开 ChatGPT、进语音、"
                      + "并把这道题的考官提示词发过去——你什么都不用输。")
@@ -271,6 +305,22 @@ struct PracticeSheet: View {
                 }
             }
         }
+    }
+
+    /// 「自己挑」/「随机抽」。
+    ///
+    /// **两种做法共用的那半页控件在开关下面**（勾 Part、这一场只盯什么），
+    /// 所以开关摆在最上面：它切换的是下面那一段，不是整张弹层。
+    private var modeSwitch: some View {
+        Picker("怎么定这一场练什么", selection: $pickMode) {
+            ForEach(PickMode.allCases) { mode in
+                Text(mode.title).tag(mode)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
+        .accessibilityLabel("怎么定这一场练什么")
     }
 
     // MARK: - 还没定题：随机抽一组
@@ -374,35 +424,74 @@ struct PracticeSheet: View {
 
     /// 抽的过程与结果。
     ///
-    /// 滚动那 0.6 秒**不是装饰**：它是「正在替你抽」这件事的唯一表示。
-    /// 没有它的话，点一下按钮、结果直接换一批，用户分不清这次到底抽没抽
-    /// （尤其重抽时新旧两组长得差不多的情况）。
-    /// 它有明确的起止、不循环，系统开了「减弱动态效果」时整段跳过（`roll()`）。
+    /// ## 滚动那一秒不是装饰
+    ///
+    /// 它是「正在替你抽」这件事的唯一表示。没有它的话，点一下按钮、结果直接换一批，
+    /// 用户分不清这次到底抽没抽（尤其重抽时新旧两组长得差不多）。
+    ///
+    /// **它要演的是「在抽什么」，不是「在忙」。** 从前是一行随机文字加一个转圈，
+    /// 演完 0.56 秒之后结果**一帧硬切**上来——前面的铺垫在最后那一帧全被抵消。
+    /// 现在每个要抽的 Part 各占一行、各自滚动，**按 Part 1 → 2 → 3 依次定格**，
+    /// 定格的那一行换成主文字色并打勾。看完就知道这一场抽到了哪几段，
+    /// 而不只是知道「它刚才忙了一下」。
+    ///
+    /// 系统开了「减弱动态效果」时整段跳过（见 `roll()`）。
     @ViewBuilder
     private var drawOutcome: some View {
-        if isRolling {
-            CoachCard {
-                HStack(spacing: Spacing.sm) {
-                    ProgressView().controlSize(.small)
-                    Text(rollingLabel)
-                        .font(Typography.body)
-                        .foregroundStyle(Palette.textSecondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    Spacer(minLength: 0)
+        Group {
+            if isRolling {
+                CoachCard {
+                    VStack(alignment: .leading, spacing: Spacing.sm) {
+                        ForEach(reelParts, id: \.self) { part in
+                            reelRow(part)
+                        }
+                    }
                 }
-            }
-        } else if let drawn {
-            VStack(alignment: .leading, spacing: Spacing.sm) {
-                subtleLine(RandomDrawViewModel.resultSummary(for: drawn))
-                // 抽不够时必须当场交代，而且两种原因说两句不同的话——
-                // 「没练过的不够了」那一种，把开关关掉就有了。
-                ForEach(RandomDrawViewModel.shortfallNotices(for: drawn), id: \.self) {
-                    warningLine($0)
+                .transition(.opacity)
+            } else if let drawn {
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    subtleLine(RandomDrawViewModel.resultSummary(for: drawn))
+                    // 抽不够时必须当场交代，而且两种原因说两句不同的话——
+                    // 「没练过的不够了」那一种，把开关关掉就有了。
+                    ForEach(RandomDrawViewModel.shortfallNotices(for: drawn), id: \.self) {
+                        warningLine($0)
+                    }
+                    if !drawn.questions.isEmpty { drawnQuestionList(drawn) }
                 }
-                if !drawn.questions.isEmpty { drawnQuestionList(drawn) }
+                .transition(.opacity)
             }
         }
+        // 揭晓不许硬切：前面演了一秒，最后一帧「啪」地换上一张最高 220pt 的列表，
+        // 弹层高度当场跳一大截，看起来像动画卡住然后跳完。
+        .coachAnimation(Motion.standard, value: isRolling)
+    }
+
+    /// 滚动时的一行：这个 Part 正在滚到哪一道，或者已经定格在哪一道。
+    private func reelRow(_ part: ExamPart) -> some View {
+        let isSettled = settledParts.contains(part.rawValue)
+        return HStack(spacing: Spacing.sm) {
+            Text(part.englishName)
+                .font(Typography.label)
+                .monospacedDigit()
+                .foregroundStyle(Palette.textSecondary)
+                .frame(width: 56, alignment: .leading)
+            Text(reelLabels[part.rawValue] ?? "")
+                .font(Typography.body)
+                // 定格之后才是主文字色：滚动中的那几行是「还在转」，不该和结果一样重。
+                .foregroundStyle(isSettled ? Palette.textPrimary : Palette.textSecondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
+            // 只用 SF Symbols，不用 emoji（规范第 4 节）。
+            // 定格与否有两样区别（打勾 + 文字色），不是只靠颜色。
+            Image(systemName: isSettled ? "checkmark.circle.fill" : "circle.dotted")
+                .foregroundStyle(isSettled ? Palette.success : Palette.textSecondary)
+        }
+        .coachAnimation(Motion.quick, value: isSettled)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(isSettled
+                            ? "\(part.englishName) 抽到 \(reelLabels[part.rawValue] ?? "")"
+                            : "\(part.englishName) 正在抽")
     }
 
     /// 抽到的整组，按 Part 分栏列出来。
@@ -436,24 +525,71 @@ struct PracticeSheet: View {
     /// 抽一组。**结果在按下按钮那一刻就已经定了**，滚动只是把它慢慢揭开——
     /// 让动画去决定抽到什么的话，中途关掉窗口或者动画被系统打断，
     /// 这一场抽到的就成了一件谁也说不清的事。
+    ///
+    /// 滚动的节奏：每个要抽的 Part 各滚 `reelFramesPerPart` 帧，然后**依次定格**。
+    /// 三个 Part 全要时约 1 秒；只要一个 Part 时约 0.33 秒。
+    ///
+    /// 这两个常量是**这一段自制动画的帧节奏**，不是过渡时长，所以不走 `Motion`
+    /// （那三档管的是「一次状态变化持续多久」）。真正的过渡——揭晓、每一行定格——
+    /// 用的仍然是 `Motion.standard` / `Motion.quick`。
+    private static let reelFramesPerPart = 6
+    private static let reelFrameNanos: UInt64 = 55_000_000
+
     private func roll() {
         let result = RandomDraw.draw(from: candidates, counts: drawCounts,
                                      excludingPracticed: excludePracticed)
-        guard !reduceMotion, !result.isEmpty else {
+        let parts = reelParts
+        // 开了「减弱动态效果」、或者压根没抽到东西时，直接给结果。
+        // 没抽到东西却还演一秒，演完是空的，那一秒纯属耽误人。
+        guard !reduceMotion, !result.isEmpty, !parts.isEmpty else {
+            settledParts = []
             drawn = result
             return
         }
         drawn = nil
+        settledParts = []
+        reelLabels = [:]
         isRolling = true
         Task {
-            let pool = candidates.map(RandomDrawViewModel.label(for:))
-            for _ in 0..<8 {
-                rollingLabel = pool.randomElement() ?? ""
-                try? await Task.sleep(nanoseconds: 70_000_000)
+            for (index, part) in parts.enumerated() {
+                for _ in 0..<Self.reelFramesPerPart {
+                    // 还没轮到定格的那几个 Part 一起滚——一次只滚一行的话，
+                    // 看着像在排队而不是在抽。
+                    for spinning in parts[index...] {
+                        reelLabels[spinning.rawValue] = randomLabel(inPart: spinning)
+                    }
+                    try? await Task.sleep(nanoseconds: Self.reelFrameNanos)
+                }
+                reelLabels[part.rawValue] = settledLabel(for: part, in: result)
+                settledParts.insert(part.rawValue)
             }
             isRolling = false
             drawn = result
         }
+    }
+
+    /// 这一次要滚哪几个 Part：用户要了几道、而且题库里那个 Part 真有题。
+    ///
+    /// **池子空的 Part 不进来。** 进来的话那一行会一直滚一个空字符串，
+    /// 看着像卡住了——而真正该说的话（「Part 2 一道都没抽到」）由
+    /// `RandomDrawViewModel.shortfallNotices` 在结果里说。
+    private var reelParts: [ExamPart] {
+        ExamPart.allCases.filter { part in
+            drawCounts[part] > 0 && candidates.contains { $0.part == part.rawValue }
+        }
+    }
+
+    private func randomLabel(inPart part: ExamPart) -> String {
+        candidates.filter { $0.part == part.rawValue }
+            .randomElement().map(RandomDrawViewModel.label(for:)) ?? ""
+    }
+
+    /// 定格时这一行写什么：真的抽到的那一道；抽到多道就写第一道加个数。
+    private func settledLabel(for part: ExamPart, in result: RandomDraw.Result) -> String {
+        let mine = result.questions.filter { $0.part == part.rawValue }
+        guard let first = mine.first else { return "没抽到" }
+        let label = RandomDrawViewModel.label(for: first)
+        return mine.count > 1 ? "\(label)（等 \(mine.count) 道）" : label
     }
 
     private func subtleLine(_ text: String) -> some View {

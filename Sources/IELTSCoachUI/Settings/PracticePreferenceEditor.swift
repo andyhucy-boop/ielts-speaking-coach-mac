@@ -27,7 +27,14 @@ public enum PracticePreferenceEditor {
         }
     }
 
-    public static let defaultRouteExplanation = "今日训练页会把这条路线排在最前面。"
+    /// **两句话，不是一句。** 第二句是 2026-08-30 合并选题入口之后新出现的行为：
+    /// 「从题库自由选题」和「随机抽题练一场」在今日训练页上已经是同一张卡片，
+    /// 选哪一条不再改变卡片数量，而是决定**点进去停在哪一档**。
+    /// 不说的话，这个设置就在悄悄干一件界面上看不出来的事。
+    public static let defaultRouteExplanation =
+        "今日训练页会把这条路线排在最前面。"
+        + "「从题库自由选题」和「随机抽题练一场」在那一页是同一张卡片，"
+        + "选哪一条决定点进去先停在「自己挑」还是「随机抽」。"
 
     public static let feedbackTimingExplanation =
         "全程零反馈像真考试，但答砸的地方要等到最后才知道；"

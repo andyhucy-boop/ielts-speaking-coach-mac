@@ -507,8 +507,13 @@ final class PracticePreferenceEditorTests: XCTestCase {
     /// **它们不是装饰。** 「全程零反馈」和「当场点出」哪个更好取决于用户现在想练什么，
     /// 不写代价的话，他只能靠猜，而猜错要练完一整场才发现。
     func testEachPreferenceSpellsOutWhatItCostsYou() {
+        // 第二句是 2026-08-30 合并选题入口之后新出现的行为：那两条在今日训练页上
+        // 已经是同一张卡片，选哪一条不再改变卡片数量，而是决定点进去停在哪一档。
+        // 不说的话，这个设置就在悄悄干一件界面上看不出来的事。
         XCTAssertEqual(PracticePreferenceEditor.defaultRouteExplanation,
-                       "今日训练页会把这条路线排在最前面。")
+                       "今日训练页会把这条路线排在最前面。"
+                           + "「从题库自由选题」和「随机抽题练一场」在那一页是同一张卡片，"
+                           + "选哪一条决定点进去先停在「自己挑」还是「随机抽」。")
         XCTAssertEqual(
             PracticePreferenceEditor.feedbackTimingExplanation,
             "全程零反馈像真考试，但答砸的地方要等到最后才知道；"

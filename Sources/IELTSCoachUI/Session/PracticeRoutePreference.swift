@@ -45,3 +45,31 @@ public struct RouteDefaults: Equatable, Sendable {
                   part2PrepMode: settings.part2PrepMode)
     }
 }
+
+/// 今日训练页上「自由选题」和「随机抽题」合成一张卡片。
+///
+/// 抽成纯函数而不是在视图里写 `filter`：这段决定的是**用户看得见几张卡**，
+/// 而视图里的一句 `filter` 没有任何测试管得住。
+public enum PracticeRouteMerge {
+
+    /// 合并之后要显示的路线列表。
+    ///
+    /// 两条选题路线只留一条：**留用户偏好的那一条**，因为进去之后弹层就停在它对应的档
+    /// （偏好是「随机抽题」就直接停在随机那一档，不用再点一下）。
+    /// 偏好不是这两条中的任何一条时，留先出现的那一条——`availableRoutes` 已经排过序，
+    /// 那个顺序本身就是「最该先看的排前面」。
+    ///
+    /// **顺序不许重排。** 排序是解析器的事（默认路线排最前，而排最前的那张就是这一页
+    /// 唯一的主行动）。这里只删，不动位置。
+    public static func collapsePickRoutes(_ routes: [PracticeRoute],
+                                          preferring preferred: PracticeRoute) -> [PracticeRoute] {
+        let keep: PracticeRoute? = preferred.isPickEntry
+            ? preferred
+            : routes.first(where: \.isPickEntry)
+        guard let keep else { return routes }
+        // 偏好的那条这次不可用时（例如它被解析器筛掉了），退回列表里现有的那一条，
+        // 否则这张卡片会整个消失——而用户明明有题库，「挑一道题练」永远是可用的。
+        let survivor = routes.contains(keep) ? keep : routes.first(where: \.isPickEntry)
+        return routes.filter { !$0.isPickEntry || $0 == survivor }
+    }
+}

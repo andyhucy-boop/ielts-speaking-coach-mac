@@ -469,4 +469,90 @@ final class PracticeSheetTests: XCTestCase {
                                + "界面上不该有东西一直在动（DESIGN-SYSTEM 第 5 节）。")
         }
     }
+
+    // MARK: - 一个入口，两种做法
+
+    /// 弹层里得有那个「自己挑 / 随机抽」的开关，而且**进来停在哪一档跟着路线走**。
+    ///
+    /// 今日训练页把这两条合成了一张卡片，差别就落在这一个开关上。
+    /// 没有它的话，把默认路线设成「随机抽题」的人再也找不到自己挑题的入口，
+    /// 反过来也一样——两条路线里有一条会彻底消失。
+    func testTheSheetOffersBothWaysToPickAndOpensOnTheOneTheRouteAsked() throws {
+        let code = try SourceGuard.code(Self.sheet)
+
+        // **两支都要有。** 只在其中一支放开关的话，用户切到另一支就再也切不回来——
+        // 而今日训练页已经把两条路线合成一张卡片了，切不回来 = 那种做法彻底消失。
+        // 实测过：只留一支，`assertRenders` 那种「出现过就算」的写法照样全绿。
+        let picker = try SourceGuard.memberBody(of: "private var picker", in: code)
+        XCTAssertEqual(
+            SourceGuard.occurrences(of: "modeSwitch", in: picker), 2,
+            "「自己挑 / 随机抽」那个开关不是两支都有。少了哪一支，"
+                + "用户切到那一支之后就再也切不回来了。实际取到的是：\n\(picker)")
+
+        XCTAssertTrue(
+            code.contains("PickMode(route: route)"),
+            "进来停在哪一档没有跟着路线走。用户在学习计划页把默认路线设成「随机抽题」，"
+                + "进来却停在「自己挑」，每次都得先点一下开关。")
+
+        for mode in ["自己挑", "随机抽"] {
+            XCTAssertTrue(code.contains(mode), "开关上少了「\(mode)」这一档")
+        }
+    }
+
+    // MARK: - 抽题动画
+
+    /// **结果在按下按钮那一刻就定了，动画只是把它揭开。**
+    ///
+    /// 让动画去决定抽到什么的话，中途关掉窗口、或者动画被系统打断，
+    /// 这一场抽到的就成了一件谁也说不清的事。
+    func testTheDrawIsDecidedBeforeTheAnimationNotByIt() throws {
+        let roll = try SourceGuard.functionBody(named: "roll", in: try SourceGuard.code(Self.sheet))
+        let decidedAt = roll.range(of: "RandomDraw.draw(")
+        let animatedAt = roll.range(of: "isRolling = true")
+        XCTAssertNotNil(decidedAt, "`roll()` 里不再调 `RandomDraw.draw`——那这一组是谁抽的？")
+        if let decidedAt, let animatedAt {
+            XCTAssertTrue(
+                decidedAt.lowerBound < animatedAt.lowerBound,
+                "抽签排在动画后面了。动画一旦被打断，这一场抽到什么就说不清了。"
+                    + "下一步：先 `RandomDraw.draw(...)` 定下结果，再开始滚。")
+        }
+        XCTAssertTrue(
+            roll.contains("guard !reduceMotion"),
+            "开了「减弱动态效果」还是要滚一秒（规范第 5 节，硬性要求）。"
+                + "实际取到的是：\n\(roll)")
+    }
+
+    /// 动画要演的是「**在抽什么**」，不是「在忙」。
+    ///
+    /// 从前是一行随机文字加一个转圈，演完 0.56 秒之后结果一帧硬切上来——
+    /// 前面的铺垫在最后那一帧全被抵消，看起来像动画卡住然后跳完。
+    /// 现在每个要抽的 Part 各占一行、各自滚动、依次定格。
+    func testEachPartGetsItsOwnReelAndSettlesInTurn() throws {
+        let code = try SourceGuard.code(Self.sheet)
+        let outcome = try SourceGuard.memberBody(of: "private var drawOutcome", in: code)
+
+        XCTAssertTrue(
+            outcome.contains("ForEach(reelParts"),
+            "抽的过程不再是逐个 Part 一行。只给一行随机文字的话，"
+                + "用户看完只知道「它刚才忙了一下」，不知道抽到了哪几段。"
+                + "实际取到的是：\n\(outcome)")
+
+        XCTAssertTrue(
+            outcome.contains("coachAnimation(Motion.standard, value: isRolling)"),
+            "揭晓那一下是硬切。前面演了一秒，最后一帧「啪」地换上一张最高 220pt 的列表，"
+                + "弹层高度当场跳一大截。实际取到的是：\n\(outcome)")
+
+        let roll = try SourceGuard.functionBody(named: "roll", in: code)
+        XCTAssertTrue(
+            roll.contains("settledParts.insert"),
+            "没有「依次定格」这件事了——那是这段动画要演的全部内容。"
+                + "实际取到的是：\n\(roll)")
+
+        // 池子空的 Part 不该进来滚：那一行会一直滚空字符串，看着像卡住。
+        let parts = try SourceGuard.memberBody(of: "private var reelParts", in: code)
+        XCTAssertTrue(
+            parts.contains("candidates.contains"),
+            "题库里那个 Part 一道题都没有时，它仍然会被摆进来滚一个空字符串，看着像卡住了。"
+                + "实际取到的是：\n\(parts)")
+    }
 }

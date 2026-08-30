@@ -238,17 +238,44 @@ final class TodayViewTests: XCTestCase {
                 + "不说出处，用户没法回去看当时的复盘。实际取到的是：\n\(detail)")
     }
 
-    /// 「从题库自由选题」得先说清题库里有多少题，否则这张卡片上只有一个动词。
-    func testTheFreePickCardSaysHowManyQuestionsTheBankHas() throws {
-        let detail = try SourceGuard.memberBody(of: "private var freePickDetail",
+    /// 合并之后那张选题卡片得说清**两件事**：题库里有多少题、其中多少还没练过。
+    ///
+    /// 从前这是两张卡片、两段说明（`freePickDetail` / `randomDrawDetail`），
+    /// 各说各的一半。合并成一个入口之后必须并进一句——只说一半的话，
+    /// 另一半的功能（「只抽没练过的」那个开关全看还剩多少）在弹层里等着他，
+    /// 而他在卡片上看不到任何依据。
+    func testThePickCardSaysBothHowManyQuestionsAndHowManyAreFresh() throws {
+        let detail = try SourceGuard.memberBody(of: "private var pickEntryDetail",
                                                 in: try Self.todayViewCode())
         XCTAssertTrue(
             detail.contains("app.state.questions.count"),
-            "「从题库自由选题」卡片没说题库里有多少题。实际取到的是：\n\(detail)")
+            "选题卡片没说题库里有多少题。实际取到的是：\n\(detail)")
+        XCTAssertTrue(
+            detail.contains("model.fresh(inPart:"),
+            "选题卡片没说还有多少道没练过。「只抽没练过的」那个开关有没有用，"
+                + "全看这个数还剩多少。实际取到的是：\n\(detail)")
         XCTAssertTrue(
             detail.contains(".monospacedDigit()"),
             "题数没用等宽数字：导完一批题从「12」跳到「120」时这一行会横向抖"
                 + "（DESIGN-SYSTEM 第 6 节最后一条）。实际取到的是：\n\(detail)")
+    }
+
+    /// **两条选题路线在这一页只占一张卡片。**
+    ///
+    /// 它们是同一件事的两种做法（都要先勾 Part、都在同一张弹层里完成），
+    /// 差别只有「这一道我自己点、还是交给运气」——那是弹层里一个开关的事。
+    /// 摆成两张并排的卡片，用户得读完两段副标题才分得清差别在哪。
+    func testTheTwoPickRoutesCollapseIntoOneCard() throws {
+        let code = try Self.todayViewCode()
+        SourceGuard.assertRenders(
+            "PracticeRouteMerge.collapsePickRoutes(",
+            inBodyOf: "private var availableRoutes", of: Self.viewRelativePath,
+            because: "「自由选题」和「随机抽题」又变回两张并排的卡片了。"
+                + "下一步：把 `PracticeRouteMerge.collapsePickRoutes(_:preferring:)` 放回去。")
+        XCTAssertTrue(
+            code.contains("case .freePick, .randomDraw: pickEntryDetail"),
+            "两条选题路线的卡片说明又分家了。合并成一张卡片之后它们必须共用同一段说明——"
+                + "各说各的话，用户看到的是其中一半。")
     }
 
     /// **整页只有一个主行动**（DESIGN-SYSTEM 第 4 节）：排在第一位的那条路线。

@@ -38,6 +38,27 @@ public enum PracticeRoute: String, CaseIterable, Identifiable, Sendable {
         self == .freePick || self == .randomDraw
     }
 
+    /// 今日训练页上，这两条**合成一张卡片**。
+    ///
+    /// 它们本来就是同一件事的两种做法：都是「题库里挑这一场练什么」，
+    /// 都要先勾 Part，都在同一张弹层里完成，连弹层里那半页控件都是共用的。
+    /// 摆成两张并排的卡片，用户得先读完两段副标题才能分清差别在哪——
+    /// 而差别只有一个：**这一道是我自己点，还是交给运气**。
+    /// 那是个应该在弹层里一秒钟切换的开关，不是两条要分头进入的路线。
+    ///
+    /// 枚举里仍然是两个 case，因为 raw value 会落进 `state.json`
+    /// （`settings.defaultRoute`）——用户把默认路线设成「随机抽题」时，
+    /// 这张合并卡片进去就停在随机那一档（见 `PracticeSheet.PickMode`）。
+    public var isPickEntry: Bool { picksMaterialInTheSheet }
+
+    /// 合并之后那张卡片上写什么。
+    ///
+    /// **标题不提「随机」也不提「自由」**：进去之后两种都在，先说哪一种都会让另一种像是次要的。
+    public static let pickEntryTitle = "自己挑一道，或者交给运气"
+    public static let pickEntrySubtitle =
+        "先勾这一场练哪几个 Part（可多选），再决定是自己点一道、还是让它随机抽一组"
+
+
     public var subtitle: String {
         switch self {
         case .planToday: return "按学习计划安排的今日题目"

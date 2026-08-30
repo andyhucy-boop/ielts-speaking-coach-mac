@@ -66,8 +66,16 @@ struct TodayView: View {
     /// 解得出来才收进列表——这是「显示出来的每一条都点得动」唯一守得住的做法
     /// （`PracticeRouteResolverTests.testEveryShownRouteCanActuallyStart` 钉着这条不变量）。
     private var availableRoutes: [PracticeRoute] {
-        PracticeRouteResolver.availableRoutes(state: app.state,
-                                              preferring: preferredRoute, defaults: defaults)
+        // **「自由选题」和「随机抽题」合成一张卡片**（`PracticeRouteMerge`）：
+        // 它们是同一件事的两种做法，差别只有「这一道我自己点、还是交给运气」，
+        // 而那是弹层里一个开关的事，不该是两条要分头进入的路线。
+        //
+        // 合并只影响**显示**：解析、开练、默认路线偏好都还认原来那两条，
+        // 因为 `settings.defaultRoute` 的取值已经落在用户的 state.json 里了。
+        PracticeRouteMerge.collapsePickRoutes(
+            PracticeRouteResolver.availableRoutes(state: app.state,
+                                                  preferring: preferredRoute, defaults: defaults),
+            preferring: preferredRoute)
     }
 
     var body: some View {
@@ -200,6 +208,16 @@ struct TodayView: View {
         case .unavailable(let message):
             blockedRoutes[route] = message
         }
+    }
+
+    /// 这张卡片上写什么。合并入口（自由选题 / 随机抽题）用它们共用的那一套文案——
+    /// 用哪一条的标题都会让另一条像是次要的。
+    private func title(of route: PracticeRoute) -> String {
+        route.isPickEntry ? PracticeRoute.pickEntryTitle : route.title
+    }
+
+    private func subtitle(of route: PracticeRoute) -> String {
+        route.isPickEntry ? PracticeRoute.pickEntrySubtitle : route.subtitle
     }
 
     /// 这条路线的按钮上写什么。**「复训一个旧问题」不能也叫「开始练习」**：
@@ -386,8 +404,8 @@ struct TodayView: View {
     }
 
     private func primaryCard(_ route: PracticeRoute) -> some View {
-        PrimaryActionCard(title: route.title,
-                          subtitle: route.subtitle,
+        PrimaryActionCard(title: title(of: route),
+                          subtitle: subtitle(of: route),
                           actionTitle: actionTitle(route),
                           action: { act(route) }) {
             routeDetail(route)
@@ -405,10 +423,10 @@ struct TodayView: View {
         CoachActionCard(actionLabel: "\(route.title)。\(actionTitle(route))",
                         action: { act(route) }) {
             VStack(alignment: .leading, spacing: Spacing.xs) {
-                Text(route.title)
+                Text(title(of: route))
                     .font(Typography.cardTitle)
                     .foregroundStyle(Palette.textPrimary)
-                Text(route.subtitle)
+                Text(subtitle(of: route))
                     .font(Typography.secondary)
                     .foregroundStyle(Palette.textSecondary)
                 routeDetail(route)
@@ -528,8 +546,9 @@ struct TodayView: View {
     private func routeDetail(_ route: PracticeRoute) -> some View {
         switch route {
         case .planToday: planTodayDetail
-        case .freePick: freePickDetail
-        case .randomDraw: randomDrawDetail
+        // 两条选题路线在这一页合成了一张卡片（`PracticeRouteMerge`），
+        // 所以它们共用同一段说明——各说各的话，用户会以为自己看到的是其中一条。
+        case .freePick, .randomDraw: pickEntryDetail
         case .continueLast: continueLastDetail
         case .retrain: retrainDetail
         }
@@ -541,12 +560,18 @@ struct TodayView: View {
     /// 「只抽没练过的」，而那个开关有没有用，全看这个数字还剩多少。
     /// 数字从 `RandomDrawViewModel` 出，与弹层里每个步进器下面那一行同一个出处——
     /// 这一页另数一份的话，两处迟早对不上。
-    private var randomDrawDetail: some View {
+    /// 合并入口那张卡片上的几行说明。
+    ///
+    /// **两件事都要说**：题库有多少题（自己挑时要知道池子多大）、其中多少还没练过
+    /// （随机抽的「只抽没练过的」那个开关全看这个数还剩多少）。
+    /// 从前这两句分别挂在两张卡片上，合并之后必须并进一句，
+    /// 否则用户看到的是其中一半，而另一半的功能在弹层里等着他。
+    private var pickEntryDetail: some View {
         let model = RandomDrawViewModel(questions: app.state.questions)
         let fresh = ExamPart.allCases.reduce(0) { $0 + model.fresh(inPart: $1) }
         // 等宽数字：抽完一场之后这两个数会变，行宽不许跟着抖（规范第 6 节最后一条）。
         return Text("题库里现在有 \(app.state.questions.count) 道题，其中 \(fresh) 道还没练过。"
-                    + "点右边那颗按钮之后先定每个 Part 抽几道，抽出来才会开始。")
+                    + "点右边那颗按钮，在弹层里选「自己挑」或者「随机抽」，定好才会开始。")
             .font(Typography.body)
             .monospacedDigit()
             .fixedSize(horizontal: false, vertical: true)
@@ -602,15 +627,6 @@ struct TodayView: View {
                             : "还没练：Part \(item.part) \(promptText(item))")
     }
 
-    /// 「从题库自由选题」：先说清题库里有多少题，否则这张卡片上只剩一个动词。
-    private var freePickDetail: some View {
-        // 等宽数字：导完一批题从「12」跳到「120」时这一行不许横向抖（规范第 6 节最后一条）。
-        Text("题库里现在有 \(app.state.questions.count) 道题。"
-             + "点右边那颗按钮之后先挑一道，挑好才会开始。")
-            .font(Typography.body)
-            .monospacedDigit()
-            .fixedSize(horizontal: false, vertical: true)
-    }
 
     /// 「继续上次练习」：上次练的哪道题、什么时候练的、上次盯的是什么目标。
     ///
