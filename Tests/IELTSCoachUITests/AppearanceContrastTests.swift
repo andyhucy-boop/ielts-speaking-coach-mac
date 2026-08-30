@@ -41,9 +41,13 @@ final class AppearanceContrastTests: XCTestCase {
         "sidebarBackground": \.sidebarBackground,
         "sidebarText": \.sidebarText,
         "sidebarTextSelected": \.sidebarTextSelected,
+        "sidebarHighlight": \.sidebarHighlight,
         "canvas": \.canvas,
         "card": \.card,
+        "surfaceSubtle": \.surfaceSubtle,
+        "accentSoft": \.accentSoft,
         "cardBorder": \.cardBorder,
+        "cardBorderStrong": \.cardBorderStrong,
         "textPrimary": \.textPrimary,
         "textSecondary": \.textSecondary,
         "textOnAccent": \.textOnAccent,
@@ -62,9 +66,13 @@ final class AppearanceContrastTests: XCTestCase {
         "sidebarBackground": Palette.sidebarBackground,
         "sidebarText": Palette.sidebarText,
         "sidebarTextSelected": Palette.sidebarTextSelected,
+        "sidebarHighlight": Palette.sidebarHighlight,
         "canvas": Palette.canvas,
         "card": Palette.card,
+        "surfaceSubtle": Palette.surfaceSubtle,
+        "accentSoft": Palette.accentSoft,
         "cardBorder": Palette.cardBorder,
+        "cardBorderStrong": Palette.cardBorderStrong,
         "textPrimary": Palette.textPrimary,
         "textSecondary": Palette.textSecondary,
         "textOnAccent": Palette.textOnAccent,
@@ -87,22 +95,32 @@ final class AppearanceContrastTests: XCTestCase {
     /// **下面的 `textPairs(for:)` 是从这张表算出来的，不是另抄一份。**
     /// 抄两份的话，新加的配对写进一边、忘了另一边，是这类表的通病。
     private static let textTokensOnBackgrounds: [String: [String]] = [
-        "textPrimary": ["canvas", "card"],
-        "textSecondary": ["canvas", "card"],
+        "textPrimary": ["canvas", "card", "surfaceSubtle", "accentSoft"],
+        "textSecondary": ["canvas", "card", "surfaceSubtle", "accentSoft"],
         "textOnAccent": ["accent"],
-        "sidebarText": ["sidebarBackground"],
-        "sidebarTextSelected": ["sidebarBackground"],
-        "success": ["canvas", "card"],
-        "warning": ["canvas", "card"],
-        "danger": ["canvas", "card"],
-        "accent": ["canvas", "card"]
+        // 侧边栏那一行在「选中 / 鼠标悬停」时底色会换成 `sidebarHighlight`，
+        // 两种底色上都得读得清——只验一种的话，另一种就是没人看过的那一半。
+        "sidebarText": ["sidebarBackground", "sidebarHighlight"],
+        "sidebarTextSelected": ["sidebarBackground", "sidebarHighlight"],
+        // 语义色**刻意不列 `accentSoft`**：那是主色调的浅底，
+        // 橙字压紫底是不该出现的配色，工程里也没有这么用的地方。
+        // 归到这里只为了「不好过就少列一个」——那正是铁律 10 禁止的（见下面那条完整性守卫）。
+        "success": ["canvas", "card", "surfaceSubtle"],
+        "warning": ["canvas", "card", "surfaceSubtle"],
+        "danger": ["canvas", "card", "surfaceSubtle"],
+        // `accent` 既当底色也当文字色：`CoachBadge(kind: .accent)` 是主色字压在 `accentSoft` 上。
+        "accent": ["canvas", "card", "surfaceSubtle", "accentSoft"]
     ]
 
     /// 从不当文字用的令牌。列在这里是一次显式的判断，不是「忘了检查」——
     /// `cardBorder` 是发丝边框（DESIGN-SYSTEM 第 4 节），按文字标准量它必然不达标，
     /// 但它本来就不是给人读的。
     private static let nonTextTokens: Set<String> = [
-        "canvas", "card", "sidebarBackground", "cardBorder"
+        "canvas", "card", "surfaceSubtle", "accentSoft",
+        "sidebarBackground", "sidebarHighlight",
+        // 两道边框都不是给人读的：`cardBorder` 是发丝分层线，
+        // `cardBorderStrong` 是悬停/选中时那一档。按文字标准量它们必然不达标。
+        "cardBorder", "cardBorderStrong"
     ]
 
     /// 失败信息里的中文名。看到「深色的『警告文字 vs 卡片』只有 3.9:1」，
@@ -115,7 +133,9 @@ final class AppearanceContrastTests: XCTestCase {
     ]
     private static let backgroundNames = [
         "canvas": "内容区底色", "card": "卡片",
-        "sidebarBackground": "侧边栏底色", "accent": "主色"
+        "surfaceSubtle": "卡片里的浅色嵌块", "accentSoft": "主色浅底",
+        "sidebarBackground": "侧边栏底色", "sidebarHighlight": "侧边栏选中/悬停底",
+        "accent": "主色"
     ]
 
     /// 所有承载文字的前景/背景配对。
@@ -144,7 +164,7 @@ final class AppearanceContrastTests: XCTestCase {
             let pairs = textPairs(for: appearance)
             // 防空转：配对表被清空、key path 对不上号的话，下面那圈一次都不跑也是全绿。
             XCTAssertGreaterThanOrEqual(
-                pairs.count, 15,
+                pairs.count, 26,
                 "\(appearance.rawValue) 只算出 \(pairs.count) 对配对，这条测试很可能在空转。"
                     + "下一步：确认 `textTokensOnBackgrounds` 与 `accessors` 还对得上号。")
             for pair in pairs {
@@ -163,7 +183,7 @@ final class AppearanceContrastTests: XCTestCase {
         // ContrastMath 只合成前景的 alpha。背景一旦半透明，
         // 上面那条矩阵算出来的就只是个好看的数字，跟屏幕上看到的没关系。
         let backgrounds = Set(Self.textTokensOnBackgrounds.values.joined())
-        XCTAssertGreaterThanOrEqual(backgrounds.count, 4,
+        XCTAssertGreaterThanOrEqual(backgrounds.count, 7,
                                     "只取到 \(backgrounds.count) 个底色，这条测试很可能在空转")
         for appearance in Appearance.allCases {
             let tokens = Palette.tokens(for: appearance)
@@ -202,14 +222,14 @@ final class AppearanceContrastTests: XCTestCase {
         let body = try SourceGuard.memberBody(of: "public struct PaletteTokens", in: code)
         let declared = Set(Self.declaredPropertyNames(in: body))
 
-        XCTAssertGreaterThanOrEqual(declared.count, 13,
+        XCTAssertGreaterThanOrEqual(declared.count, 17,
                                     "只解析到 \(declared.count) 个颜色令牌，疑似空转。"
                                         + "下一步：确认 `PaletteTokens` 里还是 `public let` 声明。")
 
         // 视图引用的那一面。`dynamic(_:)` 是 private func，不会被这条正则算进来。
         let staticMembers = Set(try SourceGuard.declaredTokenNames(inEnum: "Palette", of: code))
         XCTAssertGreaterThanOrEqual(
-            staticMembers.count, 15,
+            staticMembers.count, 19,
             "只解析到 \(staticMembers.count) 个 `Palette` 成员，疑似空转。"
                 + "下一步：确认 `Palette` 里还是 `public static let` 声明。")
         XCTAssertTrue(
@@ -310,8 +330,8 @@ final class AppearanceContrastTests: XCTestCase {
         }
         // 防空转：映射表被清空、或 guard 每次都走了 continue，上面那圈一次都不跑也是全绿。
         XCTAssertGreaterThanOrEqual(
-            checked, 26,
-            "只验了 \(checked) 个令牌×外观的组合（应为 13×2），这条测试很可能在空转。"
+            checked, 34,
+            "只验了 \(checked) 个令牌×外观的组合（应为 17×2），这条测试很可能在空转。"
                 + "下一步：确认 `dynamicTokens` 与 `accessors` 还对得上号。")
     }
 

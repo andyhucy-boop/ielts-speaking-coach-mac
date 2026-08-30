@@ -37,9 +37,6 @@ public struct RootView: View {
     /// 只会以为程序坏了（铁律：禁止静默失败）。
     @State private var deepLinkNotice: String?
 
-    /// 开了系统「减弱动态效果」就不做过渡（DESIGN-SYSTEM 第 5 节，那是硬性要求）。
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
     /// 首次使用引导走到第几步。
     ///
     /// **它必须在这一层，不能在 `WelcomeFlowView` 自己手里**：引导里「重新检查」那一下
@@ -111,8 +108,8 @@ public struct RootView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(minWidth: 900, minHeight: 600)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: deepLinkNotice)
+        .frame(minWidth: Layout.minWindowWidth, minHeight: Layout.minWindowHeight)
+        .coachAnimation(Motion.standard, value: deepLinkNotice)
         .task { await app.startInitialPermissionCheckIfNeeded() }
         // **必须挂在这一层，不能挂在 `workspace` 上。** `workspace` 是
         // `RootRouter.screen` 的一条分支：`AppState.isCheckingPermission` 初值是 `true`，
@@ -175,10 +172,13 @@ public struct RootView: View {
 
     private var workspace: some View {
         NavigationSplitView {
-            List(SidebarItem.allCases, selection: sidebarSelection) { item in
-                Label(item.title, systemImage: item.systemImage).tag(item)
-            }
-            .navigationSplitViewColumnWidth(200)
+            // **自己画，不用系统 `List`。** 理由写在 `SidebarView` 上：设计稿定好、
+            // 而且逐项验过对比度的那四个侧边栏令牌，在这之前一个都没被用过。
+            SidebarView(selection: current, onSelect: { go(to: $0) })
+                .navigationSplitViewColumnWidth(Layout.sidebarWidth)
+                // 深色底要一直铺到窗口标题栏底下，否则侧边栏顶上会留一条系统材质的浅色横带。
+                .ignoresSafeArea(edges: .top)
+                .toolbar(removing: .sidebarToggle)
         } detail: {
             detail
                 .toolbar {
@@ -206,40 +206,14 @@ public struct RootView: View {
     ///
     /// 不截断（`fixedSize`）：这句话的后半截才是「下一步做什么」，截掉就只剩抱怨。
     private func deepLinkBanner(_ message: String) -> some View {
-        HStack(alignment: .top, spacing: Spacing.sm) {
-            Image(systemName: "exclamationmark.triangle")
-                .foregroundStyle(Palette.warning)
-            Text(message)
-                .font(Typography.body)
-                .foregroundStyle(Palette.textPrimary)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Button { deepLinkNotice = nil } label: {
-                Image(systemName: "xmark").foregroundStyle(Palette.textSecondary)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("关闭这条提示")
-            .help("关闭这条提示")
+        NoticeCard(.warning, message) {
+            Button("关闭这条提示") { deepLinkNotice = nil }
+                .buttonStyle(.bordered)
         }
-        .padding(Spacing.md)
-        .background(Palette.card)
-        .clipShape(RoundedRectangle(cornerRadius: Radius.card))
-        .overlay(RoundedRectangle(cornerRadius: Radius.card)
-            .strokeBorder(Palette.warning, lineWidth: BorderWidth.hairline))
         .padding(.horizontal, Spacing.xl)
         // 只补上边：下边那一档由 `body` 里那个 `VStack(spacing: Spacing.md)` 给，
         // 两处都写就会变成 32pt 的空当。
         .padding(.top, Spacing.md)
-    }
-
-    /// 侧边栏的选中项。**不能直接把导航状态交出去**：写进来的那一头还要顺手
-    /// 把「从训练记录带过来的那一场」作废掉（见 `go(to:)`）。
-    ///
-    /// 对外仍是 `SidebarItem?`，因为 `List(selection:)` 只收可选值——用户按 ⌘ 点掉选中时
-    /// 它会写回 nil。而 `NavigationState.selection` 是非可选的，理由见 `go(to:)`。
-    private var sidebarSelection: Binding<SidebarItem?> {
-        Binding(get: { app.navigation.selection }, set: { go(to: $0) })
     }
 
     /// 换一页。**凡是用户自己发起的切页都要走这里**——侧边栏，以及各页面里那些

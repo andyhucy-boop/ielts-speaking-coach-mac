@@ -41,7 +41,7 @@ final class IssueArchiveViewTests: XCTestCase {
 
     func testThePageHeaderSaysWhichPageThisIsAndWhatItIsFor() throws {
         SourceGuard.assertRenders(
-            "SectionHeader(number: 1, label: \"ISSUE ARCHIVE\"",
+            "PageHeader(number: 1, label: \"ISSUE ARCHIVE\"",
             inBodyOf: "private var header", of: Self.view,
             because: "页头不见了，用户点进来看到的是一堆没有标题的卡片"
                 + "（DESIGN-SYSTEM 第 4 节）。")

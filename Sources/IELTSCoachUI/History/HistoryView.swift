@@ -55,8 +55,8 @@ struct HistoryView: View {
                 monthList
             }
         }
-        .padding(Spacing.xl)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .coachPageBody()
+        .frame(maxHeight: .infinity, alignment: .topLeading)
         .background(Palette.canvas)
         .confirmationDialog(pendingDeletion.map(deletionTitle) ?? "",
                             isPresented: isConfirmingDeletion,
@@ -77,7 +77,7 @@ struct HistoryView: View {
 
     private var header: some View {
         HStack(alignment: .top, spacing: Spacing.lg) {
-            SectionHeader(number: 2, label: "TRAINING HISTORY", title: SidebarItem.history.title)
+            PageHeader(number: 2, label: "TRAINING HISTORY", title: SidebarItem.history.title)
             transcriptStatus
         }
     }

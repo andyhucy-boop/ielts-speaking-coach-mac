@@ -203,6 +203,20 @@ final class ReviewReportViewTests: XCTestCase {
                           + "\n下一步：把 `sectionCard(section)` 放回循环体里。")
     }
 
+    /// **复盘正文那一栏必须限宽。**
+    ///
+    /// 这是整个 App 里文字最密的一页，而 2026-08-30 之前它一处宽度限制都没有：
+    /// 窗口拉到 1728pt 时这一栏有九百多点，一行一百多个汉字——眼睛读完一行找不回下一行的行首。
+    /// 这种缺陷不会有编译错误、不改变任何一个字，也没有任何一条测试有话说，
+    /// 只会让人觉得「读起来累」。
+    func testTheReportColumnIsCappedToAReadableWidth() throws {
+        let body = try SourceGuard.memberBody(of: "var body: some View", in: try Self.viewCode())
+        XCTAssertTrue(body.contains("Layout.readingMaxWidth"),
+                      "复盘正文那一栏没有限宽（`Layout.readingMaxWidth`）。"
+                          + "窗口一拉宽，每一段中文就是一行上百个字（DESIGN-SYSTEM 第 3 节）。"
+                          + "实际取到的是：\n\(body)")
+    }
+
     /// 一节卡片自己得画出：这一节叫什么、有几条、每一条长什么样。
     ///
     /// 第三条同样是「连数据源一起钉」：把 `ForEach(Array(section.rows.enumerated())` 换成空数组，

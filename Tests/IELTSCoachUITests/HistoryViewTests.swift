@@ -37,7 +37,7 @@ final class HistoryViewTests: XCTestCase {
 
     func testThePageHeaderSaysWhichPageThisIs() throws {
         SourceGuard.assertRenders(
-            "SectionHeader(number: 2, label: \"TRAINING HISTORY\"",
+            "PageHeader(number: 2, label: \"TRAINING HISTORY\"",
             inBodyOf: "private var header", of: Self.view,
             because: "页头不见了，用户点进来看到的是一堆没有标题的卡片。"
                 + "下一步：把 `SectionHeader` 放回去（DESIGN-SYSTEM 第 4 节）。")
@@ -323,13 +323,16 @@ final class HistoryViewTests: XCTestCase {
                 + "`RootRouter.carriedReviewSession(_:navigatingFrom:to:)` 处理，"
                 + "那个值就又变成只写不清的了：用户点过一次「看这次的复盘」之后，"
                 + "此后每一次从侧边栏点「复盘报告」，落到的都是那一场旧的。")
-        SourceGuard.assertRenders(
-            "go(to:", inBodyOf: "private var sidebarSelection", of: "RootView.swift",
-            because: "侧边栏那个绑定写进去的时候没走 `go(to:)`，"
-                + "用户从侧边栏切页时带过来的那一场清不掉。")
-        XCTAssertTrue(root.contains("selection: sidebarSelection"),
-                      "侧边栏又直接绑到 `$selection` 上了，`sidebarSelection` 成了摆设——"
-                          + "用户点侧边栏时那段清理逻辑一次都不会跑。")
+        // 2026-08-30 改版：侧边栏从系统 `List(selection:)` 换成了自绘的 `SidebarView`，
+        // 于是那个 `sidebarSelection` 绑定不再需要——它存在的理由就是「`List` 只收可选值」。
+        // 现在选中项直接回调 `go(to:)`，路径更短，但要守的还是同一件事。
+        XCTAssertTrue(root.contains("SidebarView(selection: current, onSelect: { go(to: $0) })"),
+                      "侧边栏没有把选中项交给 `go(to:)`——用户从侧边栏切页时，"
+                          + "「从训练记录带过来的那一场」清不掉，"
+                          + "此后每次点「复盘报告」落到的都是那一场旧的。")
+        SourceGuard.assertOmits(
+            "app.navigation.selection = $0", in: "RootView.swift",
+            because: "侧边栏又绕过 `go(to:)` 直接写导航状态了，那段清理逻辑一次都不会跑。")
         SourceGuard.assertRenders(
             "onGo: { go(to: $0) }", in: "RootView.swift", atLeast: 4,
             because: "页面里那些「去今日训练」「看复盘报告」按钮没走 `go(to:)`。"

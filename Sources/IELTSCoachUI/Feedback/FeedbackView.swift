@@ -204,8 +204,7 @@ public struct FeedbackView: View {
                 SectionHeader(number: 2, label: "LAST ERROR", title: "最近一次出错")
                 lastErrorCard
             }
-            .padding(Spacing.xl)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .coachPageBody()
         }
         .background(Palette.canvas)
         .font(Typography.body)

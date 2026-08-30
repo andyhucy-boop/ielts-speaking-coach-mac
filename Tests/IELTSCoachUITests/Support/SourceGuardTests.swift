@@ -448,12 +448,13 @@ final class SourceGuardTests: XCTestCase {
     func testDeclaredTokenNamesReadsTheRealTokenList() throws {
         let metrics = try SourceGuard.code("DesignSystem/Metrics.swift")
         XCTAssertEqual(try SourceGuard.declaredTokenNames(inEnum: "Radius", of: metrics),
-                       ["card", "control", "pill"])
+                       ["panel", "card", "control", "pill"])
         // 只取这一个 enum 里的，不许把隔壁 enum 的令牌算进来——算多了，那张表会「怎么都对得上」。
         XCTAssertFalse(try SourceGuard.declaredTokenNames(inEnum: "Radius", of: metrics)
                         .contains("xs"))
         XCTAssertEqual(SourceGuard.declaredEnumNames(in: metrics),
-                       ["Spacing", "Radius", "BorderWidth", "Tracking"])
+                       ["Spacing", "Radius", "BorderWidth", "Tracking",
+                        "LineHeight", "Layout", "Motion"])
     }
 
     /// enum 改了名字却没同步改这里，必须抛错。返回空数组的话，

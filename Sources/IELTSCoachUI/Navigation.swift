@@ -58,6 +58,42 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// 侧边栏的分组。
+///
+/// **十项平铺是这条侧边栏最大的问题。** 一列十个同样粗细、同样间距的条目，
+/// 用户找「问题档案」时只能从上到下读一遍——列表没有形状，就没有肌肉记忆。
+/// 分完组之后每组三四项，落点由「在第几组」加「组里第几个」两级定位。
+///
+/// 分组只影响**怎么摆**，不影响有哪些页面：`items` 拼起来必须恰好是
+/// `SidebarItem.allCases`，`NavigationTests` 逐项对着这条。
+public enum SidebarSection: String, CaseIterable, Identifiable, Sendable {
+    case practice, review, library
+
+    public var id: String { rawValue }
+
+    /// 组标题。**用中文，不用英文缩写**：侧边栏是这个 App 里最常被扫的一列，
+    /// 组标题要一眼认出来，不该让人先翻译一次。
+    public var title: String {
+        switch self {
+        case .practice: return "练习"
+        case .review: return "复盘"
+        case .library: return "资料与设置"
+        }
+    }
+
+    /// 这一组里有哪几页，顺序就是屏幕上的顺序。
+    ///
+    /// **顺序不是随手排的**：每一组的第一项是这一组里最常去的那一页
+    /// （今日训练 / 复盘报告 / 我的词汇）。
+    public var items: [SidebarItem] {
+        switch self {
+        case .practice: return [.today, .questionBank, .plan, .retraining]
+        case .review: return [.reviewReports, .history, .issues]
+        case .library: return [.vocabulary, .upgrade, .feedback]
+        }
+    }
+}
+
 /// 根视图当前该显示哪一屏。
 public enum RootScreen: Equatable, Sendable {
     /// 环境检查还没出结论。

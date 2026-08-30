@@ -171,20 +171,35 @@ final class DeepLinkTests: XCTestCase {
 
     /// 横幅的出现/消失要尊重系统「减弱动态效果」（DESIGN-SYSTEM 第 5 节，硬性要求）。
     ///
-    /// 这是本任务新加的一条 `reduceMotion` 分支，而它同样零覆盖：把
-    /// `reduceMotion ? nil :` 那一段换成写死的动画，全套测试一条不红。
-    /// 本项目已有两处同样的守法（`RetrainingFlowViewTests` / `RetrainingCenterViewTests` 的 `if reduceMotion`）。
+    /// **2026-08-30 改版把这件事从「每处记得写」改成了「由构造保证」。**
+    /// 从前每个动画点都要自己写一遍 `reduceMotion ? nil : …`，而漏写的那一处
+    /// 不会报错、不会变红，只会在开了那个开关的人机器上照样动。
+    /// 现在统一走 `View.coachAnimation(_:value:)`，那个修饰符自己读环境值。
+    ///
+    /// 所以这一条也跟着换了守法，而且比原来严：**原来只守 `RootView` 这一处，
+    /// 现在守的是所有调用点共用的那一处实现。**
     func testTheDeepLinkBannerRespectsReduceMotion() throws {
-        let root = try SourceGuard.code("RootView.swift")
-        XCTAssertTrue(root.contains("@Environment(\\.accessibilityReduceMotion)"),
-                      "`RootView` 没有读「减弱动态效果」，开着这个开关的用户照样会看到横幅滑进滑出"
-                          + "（规范第 5 节）。下一步：加上这个 `@Environment` 并在动画处分支。")
-        let bodyCode = try SourceGuard.memberBody(of: "public var body: some View", in: root)
-        XCTAssertTrue(bodyCode.contains("reduceMotion ? nil :"),
-                      "横幅的动画没有按「减弱动态效果」分支——开着开关的用户仍会看到过渡。"
+        let bodyCode = try SourceGuard.memberBody(of: "public var body: some View",
+                                                  in: try SourceGuard.code("RootView.swift"))
+        XCTAssertTrue(bodyCode.contains("coachAnimation("),
+                      "横幅的过渡没走 `.coachAnimation(_:value:)`——自己写 `.animation(...)` 的话，"
+                          + "「减弱动态效果」这条就又回到「每处记得写」了（规范第 5 节）。"
                           + "实际取到的是：\n\(bodyCode)")
         XCTAssertTrue(bodyCode.contains("value: deepLinkNotice"),
-                      "那条 `.animation` 没有绑在 `deepLinkNotice` 上，"
-                          + "等于横幅进出根本不受这段分支管。实际取到的是：\n\(bodyCode)")
+                      "那条过渡没有绑在 `deepLinkNotice` 上，"
+                          + "等于横幅进出根本不受它管。实际取到的是：\n\(bodyCode)")
+
+        // 修饰符本体真的读了那个环境值。少了这一句，上面两条就只是在验一个名字——
+        // `coachAnimation` 完全可以是个不看开关的空壳。
+        let components = try SourceGuard.code("DesignSystem/Components.swift")
+        let modifier = try SourceGuard.memberBody(of: "private struct CoachAnimation",
+                                                  in: components)
+        XCTAssertTrue(modifier.contains("@Environment(\\.accessibilityReduceMotion)"),
+                      "`coachAnimation` 没有读「减弱动态效果」。它是全项目每一处过渡的唯一出口，"
+                          + "这里不读，开着那个开关的用户在每一页都还会看到动画。"
+                          + "实际取到的是：\n\(modifier)")
+        XCTAssertTrue(modifier.contains("reduceMotion ? nil :"),
+                      "`coachAnimation` 读了那个环境值却没有据此分支——读了不用等于没读。"
+                          + "实际取到的是：\n\(modifier)")
     }
 }

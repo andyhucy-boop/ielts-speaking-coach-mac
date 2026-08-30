@@ -71,8 +71,7 @@ struct PlanView: View {
                     deleteSection
                     preferences
                 }
-                .padding(Spacing.xl)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .coachPageBody()
             }
             .background(Palette.canvas)
             .onAppear { scrollToToday(scroller) }
@@ -99,14 +98,9 @@ struct PlanView: View {
     // MARK: - 页头
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: Spacing.sm) {
-            SectionHeader(number: 1, label: "STUDY PLAN", title: SidebarItem.plan.title)
-            Text("选一个周期和重点 Part，这一页会把题库拆成每天几道；"
-                 + "练完一道，进度就往前走一格。")
-                .font(Typography.body)
-                .foregroundStyle(Palette.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
+        PageHeader(number: 1, label: "STUDY PLAN", title: SidebarItem.plan.title,
+                   lede: "选一个周期和重点 Part，这一页会把题库拆成每天几道；"
+                       + "练完一道，进度就往前走一格。")
     }
 
     /// 生成 / 删除 / 存偏好之后的那句话。**成功与失败共用这一张卡片**：
