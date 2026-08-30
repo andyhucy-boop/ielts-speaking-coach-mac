@@ -103,8 +103,7 @@ struct VocabularyView: View {
                 deletionNoticeSection
                 listSection
             }
-            .padding(Spacing.xl)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .coachPageBody()
         }
         .background(Palette.canvas)
         .fileExporter(isPresented: savePanelIsShowing,
@@ -142,14 +141,9 @@ struct VocabularyView: View {
     // MARK: - 页头与汇总
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: Spacing.sm) {
-            SectionHeader(number: 1, label: "VOCABULARY", title: "我的词汇")
-            Text("复盘里推荐过的词都在这儿，按「先背哪个」排好。"
-                 + "筛完可以直接导出成 Anki 卡片——导出的就是你眼下看到的这些。")
-                .font(Typography.body)
-                .foregroundStyle(Palette.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
+        PageHeader(number: 1, label: "VOCABULARY", title: "我的词汇",
+                   lede: "复盘里推荐过的词都在这儿，按「先背哪个」排好。"
+                       + "筛完可以直接导出成 Anki 卡片——导出的就是你眼下看到的这些。")
     }
 
     /// 标题下那一行汇总。

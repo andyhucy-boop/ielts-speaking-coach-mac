@@ -71,8 +71,7 @@ struct TodayView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Spacing.section) {
+        CoachPage {
                 header
                 // 题库空时整页只做一件事：把用户送去导入。
                 //
@@ -105,11 +104,7 @@ struct TodayView: View {
                     recentPractice
                     issueTrends
                 }
-            }
-            .padding(Spacing.xl)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(Palette.canvas)
         // 重读放在 onDismiss 上而不是 onClose 里：存档会改 state.json（错题本、词汇本、
         // 复训目标、计划进度），不重读的话这一页显示的还是开练之前那份，用户会以为没生效。
         // 挂在 onDismiss 上，是为了让「不是从按钮走的那些关闭方式」也照样重读。
@@ -225,12 +220,8 @@ struct TodayView: View {
     // MARK: - 顶部：问候与日期
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: Spacing.sm) {
-            SectionHeader(number: 1, label: "TODAY", title: SidebarItem.today.title)
-            Text("\(greeting)。今天是 \(Self.dayDisplay.string(from: Date()))。")
-                .font(Typography.body)
-                .foregroundStyle(Palette.textSecondary)
-        }
+        PageHeader(number: 1, label: "TODAY", title: SidebarItem.today.title,
+                   lede: "\(greeting)。今天是 \(Self.dayDisplay.string(from: Date()))。")
     }
 
     private var greeting: String {
@@ -255,7 +246,13 @@ struct TodayView: View {
     /// 窗口窄时自动折成两行（`.adaptive`）：四格挤成一条会把脚注压成一列单字，
     /// 而脚注正是「下一步做什么」所在的地方，不能因为窗口小就读不了。
     private var statsRow: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: Spacing.md)],
+        // **`alignment: .top` 不是可选项。** `GridItem` 的纵向对齐默认是居中，
+        // 而这四格高度天差地别（「本周训练」那格多一根进度条和一颗按钮，
+        // 「出现变少的毛病」那格的脚注有四行）。居中的结果是四张卡片的上下边
+        // 各自错开十几点，看着就像布局坏了——这是改版前首页最扎眼的一处。
+        // 顶对齐 + 每格纵向撑满（见 `statCard`），四条上边和四条下边才各自齐平。
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: Spacing.md,
+                                     alignment: .top)],
                   alignment: .leading, spacing: Spacing.md) {
             ForEach(model.statTiles) { tile in
                 statCard(tile)
@@ -264,7 +261,8 @@ struct TodayView: View {
     }
 
     private func statCard(_ tile: StatTile) -> some View {
-        CoachCard {
+        let isWeek = tile.id == StatTile.weekID
+        return CoachCard {
             VStack(alignment: .leading, spacing: Spacing.sm) {
                 Text(tile.caption)
                     .font(Typography.label)
@@ -274,10 +272,12 @@ struct TodayView: View {
                     // 等宽数字（规范第 1 节末行、第 6 节最后一条）：「3/5」跳到「10/5」、
                     // 「9」跳到「10」时整行不许横向抖一下。`Typography.number` 自带
                     // `.monospacedDigit()`，这里再写一次是为了让这条要求在视图上看得见。
+                    // 「本周训练」那一格用最大的那一档：这一页真正要看的就是它，
+                    // 四格全用同一个字号等于一个都没突出（见 `Typography.numberHero`）。
                     Text(tile.value)
-                        .font(Typography.number)
+                        .font(isWeek ? Typography.numberHero : Typography.number)
                         .monospacedDigit()
-                        .foregroundStyle(Palette.textPrimary)
+                        .foregroundStyle(isWeek ? Palette.accent : Palette.textPrimary)
                     Text(tile.unit)
                         .font(Typography.secondary)
                         .foregroundStyle(Palette.textSecondary)
@@ -287,12 +287,18 @@ struct TodayView: View {
 
                 // **脚注不许因为「太长了不好看」就不显示**：它是这一格里唯一说清
                 // 「下一步做什么」的地方（铁律 6）。
+                //
+                // 它同时是这一格里最长的一段中文，所以要加行距——不加的话
+                // 四行方块字会糊成一堵墙，而墙里写的正是下一步该干什么。
                 Text(tile.footnote)
                     .font(Typography.secondary)
                     .foregroundStyle(Palette.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .coachParagraph()
+
+                // 把这一格纵向撑满，四张卡片的下边才齐平（配合上面那个 `.top`）。
+                Spacer(minLength: 0)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
     }
 
@@ -314,8 +320,12 @@ struct TodayView: View {
                 .tint(Palette.accent)
                 .accessibilityLabel("本周训练进度")
                 .accessibilityValue("\(progress.done) 次，共 \(progress.goal) 次")
+            // 不用 `.link` 样式：那个样式画的是**系统强调色**，不在 `Palette` 里，
+            // 也就不受那张对比度矩阵管，深色下更不跟着走。
             Button("改目标") { navigator.open(.goals); openSettings() }
-                .buttonStyle(.bordered)
+                .buttonStyle(.plain)
+                .font(Typography.label)
+                .foregroundStyle(Palette.accent)
         }
     }
 
@@ -334,17 +344,7 @@ struct TodayView: View {
     @ViewBuilder
     private var recordingNotice: some View {
         if let text = TodayViewModel.unwiredRecordingNotice() {
-            CoachCard {
-                Label {
-                    Text(text)
-                        .font(Typography.secondary)
-                        .foregroundStyle(Palette.textPrimary)
-                        .fixedSize(horizontal: false, vertical: true)
-                } icon: {
-                    Image(systemName: "exclamationmark.triangle")
-                        .foregroundStyle(Palette.warning)
-                }
-            }
+            NoticeCard(.warning, text)
         }
     }
 
@@ -394,21 +394,25 @@ struct TodayView: View {
         }
     }
 
+    /// 次一级的路线卡片。**整块可点**（`CoachActionCard`）。
+    ///
+    /// 改版前这里是「卡片 + 右上角一颗 `.bordered` 按钮」，而卡片有一千点宽：
+    /// 标题在最左、按钮在最右，中间一大片空白。卡片本来就长得像能点的东西，
+    /// 用户第一下多半点在卡片上，然后什么也不发生。
+    ///
+    /// 主色仍然只给第一张（`primaryCard`）——规范第 4 节：每页最多一个主行动。
     private func secondaryCard(_ route: PracticeRoute) -> some View {
-        CoachCard {
-            HStack(alignment: .top, spacing: Spacing.md) {
-                VStack(alignment: .leading, spacing: Spacing.xs) {
-                    Text(route.title)
-                        .font(Typography.cardTitle)
-                        .foregroundStyle(Palette.textPrimary)
-                    Text(route.subtitle)
-                        .font(Typography.secondary)
-                        .foregroundStyle(Palette.textSecondary)
-                    routeDetail(route)
-                }
-                Spacer(minLength: Spacing.sm)
-                Button(actionTitle(route)) { act(route) }
-                    .buttonStyle(.bordered)
+        CoachActionCard(actionLabel: "\(route.title)。\(actionTitle(route))",
+                        action: { act(route) }) {
+            VStack(alignment: .leading, spacing: Spacing.xs) {
+                Text(route.title)
+                    .font(Typography.cardTitle)
+                    .foregroundStyle(Palette.textPrimary)
+                Text(route.subtitle)
+                    .font(Typography.secondary)
+                    .foregroundStyle(Palette.textSecondary)
+                routeDetail(route)
+                    .padding(.top, Spacing.xs)
             }
         }
     }
@@ -423,18 +427,7 @@ struct TodayView: View {
     @ViewBuilder
     private func blockedNotice(_ route: PracticeRoute) -> some View {
         if let message = blockedRoutes[route] {
-            CoachCard {
-                Label {
-                    Text(message)
-                        .font(Typography.secondary)
-                        .foregroundStyle(Palette.textPrimary)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                } icon: {
-                    Image(systemName: "exclamationmark.triangle")
-                        .foregroundStyle(Palette.warning)
-                }
-            }
+            NoticeCard(.warning, message)
         }
     }
 
@@ -446,26 +439,42 @@ struct TodayView: View {
     private var weekBars: some View {
         let bars = model.weekBars
         let peak = max(bars.map(\.count).max() ?? 0, 1)
-        return HStack(alignment: .bottom, spacing: Spacing.sm) {
-            ForEach(bars) { bar in
-                VStack(spacing: Spacing.xs) {
-                    // 等宽数字：某一天从 1 跳到 2 时这一列不该横向抖。
-                    Text(bar.count > 0 ? "\(bar.count)" : " ")
-                        .font(Typography.label)
-                        .monospacedDigit()
-                        .foregroundStyle(Palette.textSecondary)
-                    RoundedRectangle(cornerRadius: Radius.control)
-                        .fill(bar.count > 0 ? Palette.accent : Palette.cardBorder)
-                        .frame(width: 18,
-                               height: max(4, CGFloat(bar.count) / CGFloat(peak) * 36))
-                    Text(bar.isToday ? "今" : bar.label)
-                        .font(Typography.label)
-                        .foregroundStyle(bar.isToday ? Palette.textPrimary : Palette.textSecondary)
+        return CoachCard {
+            VStack(alignment: .leading, spacing: Spacing.md) {
+                Text("本周节奏")
+                    .font(Typography.label)
+                    .foregroundStyle(Palette.textSecondary)
+                HStack(alignment: .bottom, spacing: Spacing.sm) {
+                    ForEach(bars) { bar in
+                        VStack(spacing: Spacing.xs) {
+                            // 等宽数字：某一天从 1 跳到 2 时这一列不该横向抖。
+                            Text(bar.count > 0 ? "\(bar.count)" : " ")
+                                .font(Typography.label)
+                                .monospacedDigit()
+                                .foregroundStyle(Palette.textSecondary)
+                            // **画一整条底槽，柱子长在里面。** 改版前没练的那天只画一根
+                            // 4pt 高的小墩子，七天连起来像一排断掉的东西；有了底槽，
+                            // 「这天是 0」和「这天练了 2 次」才是同一把尺子上的两个读数。
+                            ZStack(alignment: .bottom) {
+                                RoundedRectangle(cornerRadius: Radius.control)
+                                    .fill(Palette.surfaceSubtle)
+                                    .frame(height: 44)
+                                RoundedRectangle(cornerRadius: Radius.control)
+                                    .fill(bar.isToday ? Palette.accent : Palette.cardBorderStrong)
+                                    .frame(height: max(bar.count > 0 ? 8 : 0,
+                                                       CGFloat(bar.count) / CGFloat(peak) * 44))
+                            }
+                            .frame(maxWidth: .infinity)
+                            Text(bar.isToday ? "今" : bar.label)
+                                .font(Typography.label)
+                                .foregroundStyle(bar.isToday
+                                                 ? Palette.accent : Palette.textSecondary)
+                        }
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("周\(bar.label)练了 \(bar.count) 次")
+                    }
                 }
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("周\(bar.label)练了 \(bar.count) 次")
             }
-            Spacer(minLength: 0)
         }
     }
 
@@ -481,25 +490,14 @@ struct TodayView: View {
     @ViewBuilder
     private var unfinishedSessionCard: some View {
         if let session = UnfinishedSession.pending(in: app.state) {
-            CoachCard {
-                VStack(alignment: .leading, spacing: Spacing.sm) {
-                    HStack(alignment: .top, spacing: Spacing.sm) {
-                        Image(systemName: "exclamationmark.triangle")
-                            .foregroundStyle(Palette.warning)
-                        Text(UnfinishedSession.notice(for: session, in: app.state))
-                            .font(Typography.body)
-                            .foregroundStyle(Palette.textPrimary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Spacer(minLength: 0)
-                    }
-                    HStack(spacing: Spacing.sm) {
-                        Button("存进训练记录") { keepUnfinished(session) }
-                            .buttonStyle(.borderedProminent)
-                            .tint(Palette.accent)
-                        Button("丢掉这一场") { discardUnfinished() }
-                            .buttonStyle(.bordered)
-                        Spacer(minLength: 0)
-                    }
+            NoticeCard(.warning, UnfinishedSession.notice(for: session, in: app.state)) {
+                HStack(spacing: Spacing.sm) {
+                    Button("存进训练记录") { keepUnfinished(session) }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Palette.accent)
+                    Button("丢掉这一场") { discardUnfinished() }
+                        .buttonStyle(.bordered)
+                    Spacer(minLength: 0)
                 }
             }
         }
@@ -672,7 +670,8 @@ struct TodayView: View {
                      + "也可以用「从题库自由选题」自己挑一道。")
                     .font(Typography.secondary)
                     .foregroundStyle(Palette.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .coachParagraph()
+                    .coachReadingColumn()
                 Button("去学习计划") { onGo(.plan) }
                     .buttonStyle(.bordered)
                     .padding(.top, Spacing.xs)

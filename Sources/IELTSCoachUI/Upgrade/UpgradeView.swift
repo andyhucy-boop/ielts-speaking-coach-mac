@@ -59,8 +59,7 @@ public struct UpgradeView: View {
                 SectionHeader(number: 2, label: "PHASES", title: "十个阶段走到哪儿了")
                 phasesSection
             }
-            .padding(Spacing.xl)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .coachPageBody()
         }
         .background(Palette.canvas)
         .font(Typography.body)

@@ -56,22 +56,26 @@ struct ReviewReportView: View {
             // 入口摆在这里、**排在下面那个分支之前**，是因为条数为 0 时它也必须在，
             // 一次复盘都还没成功归档的人（恰恰最可能是取复盘一直失败的那位）更是要看得见它。
             HStack(alignment: .top, spacing: Spacing.lg) {
-                SectionHeader(number: 5, label: "REVIEW REPORTS",
-                              title: SidebarItem.reviewReports.title)
+                PageHeader(number: 5, label: "REVIEW REPORTS",
+                           title: SidebarItem.reviewReports.title)
                 Spacer(minLength: Spacing.md)
                 pendingReviewEntry
             }
             if sessions.isEmpty {
                 emptyState
             } else {
-                HStack(alignment: .top, spacing: Spacing.lg) {
-                    sessionList.frame(width: 240)
-                    reportPane
+                HStack(alignment: .top, spacing: Spacing.xl) {
+                    sessionList.frame(width: 260)
+                    // **报告栏必须限宽。** 这一页是整个 App 里文字最密的一页，
+                    // 而窗口拉到 1700pt 时这一栏有九百多点：一行一百多个汉字，
+                    // 读完一行找不回下一行的行首。
+                    reportPane.frame(maxWidth: Layout.readingMaxWidth, alignment: .leading)
+                    Spacer(minLength: 0)
                 }
             }
         }
-        .padding(Spacing.xl)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .coachPageBody()
+        .frame(maxHeight: .infinity, alignment: .topLeading)
         .background(Palette.canvas)
         // 换一次会话就重读一次文件。放在 body 里读盘的话，每次重绘都要碰一次磁盘。
         .task(id: selected?.id) { loadSelected() }
@@ -195,7 +199,8 @@ struct ReviewReportView: View {
         } label: {
             VStack(alignment: .leading, spacing: Spacing.xs) {
                 Text(dateText(session.startedAt))
-                    .font(Typography.cardTitle)
+                    .font(Typography.rowTitle)
+                    .monospacedDigit()
                 Text(questionText(session))
                     .font(Typography.secondary)
                     .lineLimit(2)
@@ -275,13 +280,14 @@ struct ReviewReportView: View {
     private func priorityCard(_ target: ReviewRow) -> some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
             Text("NEXT SINGLE TARGET")
-                .font(Typography.label)
-                .tracking(Tracking.label)
+                .font(Typography.overline)
+                .tracking(Tracking.overline)
                 .foregroundStyle(Palette.sidebarText)
             Text(target.primary)
                 .font(Typography.sectionTitle)
                 .foregroundStyle(Palette.sidebarTextSelected)
                 .textSelection(.enabled)
+                .coachParagraph(LineHeight.tight)
             if !target.note.isEmpty {
                 Text("你当时说的：\(target.note)")
                     .font(Typography.secondary)
@@ -309,7 +315,7 @@ struct ReviewReportView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Spacing.lg)
         .background(Palette.sidebarBackground)
-        .clipShape(RoundedRectangle(cornerRadius: Radius.card))
+        .clipShape(RoundedRectangle(cornerRadius: Radius.panel))
     }
 
     /// **「带着这条去复训」。**
@@ -321,11 +327,24 @@ struct ReviewReportView: View {
     /// 复训中心也已经在读它），但全项目唯一的调用点传的是「不预选」——
     /// 带 id 那条路此前只有测试在跑。
     private func retrainButton(for target: ReviewRow) -> some View {
-        Button("带着这条去复训") {
+        // **不能用 `.bordered`。** 这颗按钮压在那块近黑的面板上，
+        // 系统的次级按钮样式画的是一层几乎透明的浅色底 + 系统前景色——
+        // 在这块底色上它是一颗看不见的按钮（实机截图确认过）。
+        // 改成白底主色字，和主行动卡片上那颗同一套；这一对的对比度有测试守着。
+        Button {
             app.navigation.openRetrainingCenter(preselecting: target.id)
+        } label: {
+            HStack(spacing: Spacing.xs) {
+                Text("带着这条去复训").font(Typography.action)
+                Image(systemName: "arrow.right")
+            }
+            .foregroundStyle(Palette.accent)
+            .padding(.horizontal, Spacing.md)
+            .padding(.vertical, Spacing.sm)
+            .background(Palette.card, in: RoundedRectangle(cornerRadius: Radius.control))
         }
-        .buttonStyle(.bordered)
-        .padding(.top, Spacing.xs)
+        .buttonStyle(.plain)
+        .padding(.top, Spacing.sm)
     }
 
     /// 这份复盘里没有「逐题高分版」那一节时的交代。
@@ -333,18 +352,7 @@ struct ReviewReportView: View {
     /// 缺了整节的表现是那一节**根本不画出来**，而这一页此前一个字都不会提——
     /// 用户看到的是一份看起来完整的复盘，只是少了最值得看的一节。
     private func missingUpgradesCard(_ notice: String) -> some View {
-        CoachCard {
-            HStack(alignment: .top, spacing: Spacing.sm) {
-                Image(systemName: "exclamationmark.triangle")
-                    .foregroundStyle(Palette.warning)
-                Text(notice)
-                    .font(Typography.secondary)
-                    .foregroundStyle(Palette.textPrimary)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
-            }
-        }
+        NoticeCard(.warning, notice)
     }
 
     /// 这一场的录音回放。**没开录音、或这一场没录到时整段不渲染**
@@ -365,17 +373,9 @@ struct ReviewReportView: View {
     /// 「从剪贴板补录」的结果。**成功和失败都用这一张**：两种都得说，
     /// 而且都得留在屏幕上直到用户自己收起来（一闪就没等于没说）。
     private func recoveryNoticeCard(_ notice: String) -> some View {
-        CoachCard {
-            VStack(alignment: .leading, spacing: Spacing.sm) {
-                Text(notice)
-                    .font(Typography.secondary)
-                    .foregroundStyle(Palette.textPrimary)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Button("知道了") { recoveryNotice = nil }
-                    .buttonStyle(.bordered)
-            }
+        NoticeCard(.info, notice) {
+            Button("知道了") { recoveryNotice = nil }
+                .buttonStyle(.bordered)
         }
     }
 
@@ -384,18 +384,7 @@ struct ReviewReportView: View {
     /// 用警告色而不是错误色：**这不是故障**，其余内容照常、原文照常存着，
     /// 只有带分数的那一句被挡在总结之外。文字可选中，方便他自己核对被挡掉的是什么。
     private func scoreNoticeCard(_ notice: String) -> some View {
-        CoachCard {
-            HStack(alignment: .top, spacing: Spacing.sm) {
-                Image(systemName: "exclamationmark.triangle")
-                    .foregroundStyle(Palette.warning)
-                Text(notice)
-                    .font(Typography.secondary)
-                    .foregroundStyle(Palette.textPrimary)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
-            }
-        }
+        NoticeCard(.warning, notice)
     }
 
     /// ChatGPT 对这一场的整体总结。
@@ -413,7 +402,7 @@ struct ReviewReportView: View {
                     .font(Typography.body)
                     .foregroundStyle(Palette.textPrimary)
                     .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .coachParagraph(LineHeight.relaxed)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
@@ -425,13 +414,11 @@ struct ReviewReportView: View {
                 Text(section.title)
                     .font(Typography.sectionTitle)
                     .foregroundStyle(Palette.textPrimary)
-                Text("\(section.rows.count) 条")
-                    .font(Typography.label)
+                CoachBadge("\(section.rows.count) 条")
                     .monospacedDigit()
-                    .foregroundStyle(Palette.textSecondary)
             }
             CoachCard {
-                VStack(alignment: .leading, spacing: Spacing.md) {
+                VStack(alignment: .leading, spacing: Spacing.lg) {
                     // 用下标而不是 `\.id` 做身份：id 由「键名 + 序号」拼出来，正常情况下唯一，
                     // 但复盘是 ChatGPT 生成的，不值得为这一点赌 ForEach 不错乱地复用行。
                     ForEach(Array(section.rows.enumerated()), id: \.offset) { index, row in
@@ -443,12 +430,31 @@ struct ReviewReportView: View {
         }
     }
 
+    /// 一条复盘。
+    ///
+    /// ## 版式
+    ///
+    /// 改版前这里是四组「小灰标注 + 一行文字」自上而下平铺，四组之间只有 8pt 间距，
+    /// 一节六条就是二十四段等重的文字。用户要找的是「我说错的那句」和「该怎么说」这一对，
+    /// 而它们和「为什么要改」「现在练什么」在版面上完全等重——一整节读下来像一份日志。
+    ///
+    /// 现在把**前两格**（原话 → 改成什么）圈进一块浅色底里：它们是一对，是这一行的主角，
+    /// 而且是这份复盘里唯一需要逐字读的英文，所以用大一档的 `Typography.lede`。
+    /// 后两格是解释，留在外面用正常字号。
     private func rowView(_ row: ReviewRow, in section: ReviewSection) -> some View {
-        VStack(alignment: .leading, spacing: Spacing.sm) {
-            field(label: section.primaryLabel, text: row.primary)
-            // 第二格是「改成什么」，是这一行真正要看的东西，用语义色标出来。
-            // `Palette.success` 对白卡片约 5.0:1，够当正文读（DESIGN-SYSTEM 第 2 节）。
-            field(label: section.secondaryLabel, text: row.secondary, highlighted: true)
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            VStack(alignment: .leading, spacing: Spacing.sm) {
+                field(label: section.primaryLabel, text: row.primary, isSentence: true)
+                // 第二格是「改成什么」，是这一行真正要看的东西，用语义色标出来。
+                // `Palette.success` 对浅色底约 5.1:1，够当正文读（DESIGN-SYSTEM 第 2 节）。
+                field(label: section.secondaryLabel, text: row.secondary,
+                      isSentence: true, highlighted: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(Spacing.md)
+            .background(Palette.surfaceSubtle,
+                        in: RoundedRectangle(cornerRadius: Radius.control))
+
             field(label: section.noteLabel, text: row.note)
             // 第四格只有「必须纠正的表达」有（`mini_drill`：现在张嘴练什么）。
             // 其余各节这里是空串，`field` 会整格不画。
@@ -456,8 +462,15 @@ struct ReviewReportView: View {
         }
     }
 
+    /// 一格：小标注 + 内容。
+    ///
+    /// - Parameters:
+    ///   - isSentence: 这一格装的是要**逐字读**的句子（英文原话、改写句），
+    ///     用大一档的 `Typography.lede`。中文解释不用——它们是说明，不是要背的东西。
+    ///   - highlighted: 「改成什么」那一格，用 `Palette.success` 标出来。
     @ViewBuilder
-    private func field(label: String, text: String, highlighted: Bool = false) -> some View {
+    private func field(label: String, text: String,
+                       isSentence: Bool = false, highlighted: Bool = false) -> some View {
         // 某一格空着时整格不画，而不是留一行悬空的标注。
         if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             VStack(alignment: .leading, spacing: Spacing.xs) {
@@ -465,10 +478,10 @@ struct ReviewReportView: View {
                     .font(Typography.label)
                     .foregroundStyle(Palette.textSecondary)
                 Text(text)
-                    .font(highlighted ? Typography.cardTitle : Typography.body)
+                    .font(isSentence ? Typography.lede : Typography.body)
                     .foregroundStyle(highlighted ? Palette.success : Palette.textPrimary)
                     .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .coachParagraph()
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }

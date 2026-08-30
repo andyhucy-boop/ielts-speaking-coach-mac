@@ -31,15 +31,55 @@
 2. 系统字体自动支持动态字号，用户在系统里调大文字时界面不会崩
 3. 不用打包字体文件，也没有授权问题
 
-| 用途 | SwiftUI | 近似字号 | 字重 |
-|---|---|---|---|
-| 页面大标题 | `.largeTitle` | 26 | `.bold` |
-| 区块标题 | `.title2` | 17 | `.semibold` |
-| 卡片标题 | `.headline` | 13 | `.semibold` |
-| 正文 | `.body` | 13 | `.regular` |
-| 次要说明 | `.callout` | 12 | `.regular` |
-| 小标签 | `.caption` | 11 | `.medium` |
-| 数字（统计、时长）| `.title` + `.monospacedDigit()` | 22 | `.semibold` |
+| 令牌 | 用途 | SwiftUI | 近似字号 | 字重 | 行距 |
+|---|---|---|---|---|---|
+| `pageTitle` | 页面大标题 | `.largeTitle` | 26 | `.bold` | `tight` |
+| `sectionTitle` | 区块标题 | `.title2` | 17 | `.semibold` | `tight` |
+| `cardTitle` | 卡片标题 | `.title3` | 15 | `.semibold` | `tight` |
+| `lede` | 引导语、要逐字读的例句 | `.title3` | 15 | `.regular` | `body` |
+| `rowTitle` | 密排列表的行标题 | `.headline` | 13 | `.semibold` | `tight` |
+| `body` | 正文 | `.body` | 13 | `.regular` | `body` |
+| `secondary` | 次要说明 | `.callout` | 12 | `.regular` | `body` |
+| `label` | 小标签 | `.caption` | 11 | `.medium` | `tight` |
+| `overline` | 区块眉标（`01 TODAY`）| `.caption2` | 10 | `.semibold` | `tight` |
+| `navItem` | 侧边栏一项 | `.body` | 13 | `.medium` | `tight` |
+| `action` | 按钮文字 | `.headline` | 13 | `.semibold` | `tight` |
+| `number` | 统计数字、时长 | `.title` + `.monospacedDigit()` | 22 | `.semibold` | — |
+| `numberHero` | 一屏里最大的那个数字 | `.largeTitle` + `.monospacedDigit()` | 26 | `.bold` | — |
+
+### 2026-08-30 改版：把「全是 13 磅」拆开
+
+改版前只有七档，而其中 `cardTitle`（`.headline`）与 `body`（`.body`）**在 macOS 上是同一个字号**，
+只差一档字重；`secondary` 12、`label` 11 又紧挨着它们。于是整页从卡片标题到脚注全落在
+11–13 磅这一条窄缝里，层级只能靠颜色深浅去分——**这是改版前界面显得平、显得糊的头号原因**。
+
+改法是把标题那一档整体抬高一级（`cardTitle` 13 → 15），并补上两头：`lede`（15 regular）
+撑开需要逐字读的地方，`overline`（10 semibold）收紧眉标。
+改完的层级是 26 / 22 / 17 / 15 / 13 / 12 / 11 / 10，每一档之间都看得出差别。
+
+`testTheTypeScaleActuallySeparatesItsTiers` 守着这条：同字重的档位里任意两档不许取同一个值。
+上面那张表只钉得住「每一档是什么」，钉不住「这几档还分不分得开」。
+
+### 行距：中文段落必须加
+
+SwiftUI 的默认行距是按拉丁文字定的，中文方块字在同样的行距下会贴在一起——一段五行的中文说明
+读起来像一堵墙，而这个 App 的界面文字**绝大多数是中文长句**（每条错误信息都要写清
+「发生了什么 + 下一步做什么」）。
+
+```swift
+public enum LineHeight {
+    public static let tight: CGFloat = 0    // 标题、单行标签：不额外加
+    public static let body: CGFloat = 5     // 中文正文，13pt 上约合 1.4 倍
+    public static let relaxed: CGFloat = 8  // 需要逐字读的长段，约 1.55 倍
+}
+```
+
+视图用 `.coachParagraph()`（`Components.swift`）而不是自己写 `.lineSpacing(5)`：
+那个修饰符连 `fixedSize` 一起带上，省得每处各记一次「中文段落还要防截断」。
+
+**`tight` 是 0，写出来是刻意的**：让「这一处不加行距」这件事在代码里看得见，
+而不是靠「没写就是没有」。
+
 
 **统计数字必须用等宽数字**（`.monospacedDigit()`）。否则「本周 3/5 次」跳到「本周 10/5 次」时整行会抖动。
 
@@ -62,51 +102,84 @@
 public enum Appearance: String, CaseIterable, Sendable { case light, dark }
 
 public struct PaletteTokens: Equatable, Sendable {
-    public let accent, sidebarBackground, sidebarText, sidebarTextSelected: Color
-    public let canvas, card, cardBorder: Color
+    public let accent: Color
+    public let sidebarBackground, sidebarHighlight: Color
+    public let sidebarText, sidebarTextSelected: Color
+    public let canvas, card, surfaceSubtle, accentSoft: Color
+    public let cardBorder, cardBorderStrong: Color
     public let textPrimary, textSecondary, textOnAccent: Color
     public let success, warning, danger: Color
 }
 
 public enum Palette {
-    /// 浅色。取值来自设计稿，只有 success 与 warning 按对比度底线调深过。
     public static let light = PaletteTokens(
         accent: Color(red: 0.361, green: 0.318, blue: 0.910),            // #5C51E8
         sidebarBackground: Color(red: 0.133, green: 0.118, blue: 0.239), // #221E3D
-        sidebarText: Color.white.opacity(0.72),                          // 对侧边栏底 8.82:1
-        sidebarTextSelected: .white,                                     // 15.89:1
+        sidebarHighlight: Color(red: 0.180, green: 0.161, blue: 0.314),  // 选中/悬停那一行的底
+        sidebarText: Color.white.opacity(0.72),                          // 对侧边栏底 8.85:1
+        sidebarTextSelected: .white,                                     // 15.96:1
         canvas: Color(red: 0.957, green: 0.957, blue: 0.969),            // #F4F4F7
         card: .white,
+        surfaceSubtle: Color(red: 0.945, green: 0.945, blue: 0.965),     // #F1F1F6
+        accentSoft: Color(red: 0.941, green: 0.937, blue: 0.992),        // #F0EFFD，主色 4.86:1
         cardBorder: Color.black.opacity(0.08),
-        textPrimary: Color(red: 0.07, green: 0.07, blue: 0.09),          // 对卡片 18.69:1
+        cardBorderStrong: Color.black.opacity(0.16),                     // 悬停 / 选中
+        textPrimary: Color(red: 0.07, green: 0.07, blue: 0.09),          // 对卡片 18.82:1
         textSecondary: Color.black.opacity(0.56),                        // 对卡片 4.94:1
-        textOnAccent: .white,                                            // 对主色 5.52:1
-        success: Color(red: 0.09, green: 0.50, blue: 0.27),              // 5.02:1 / 4.58:1
-        warning: Color(red: 0.60, green: 0.39, blue: 0.02),              // 5.05:1 / 4.60:1
-        danger: Color(red: 0.80, green: 0.20, blue: 0.20))               // 5.14:1 / 4.68:1
+        textOnAccent: .white,                                            // 对主色 5.53:1
+        success: Color(red: 0.08, green: 0.46, blue: 0.25),              // 最暗底 5.07:1
+        warning: Color(red: 0.55, green: 0.355, blue: 0.02),             // 最暗底 5.16:1
+        danger: Color(red: 0.75, green: 0.18, blue: 0.18))               // 最暗底 5.09:1
 
     /// 深色。**每一个值都是降饱和的色调变体，不是反色。**
     public static let dark = PaletteTokens(
-        accent: Color(red: 0.651, green: 0.631, blue: 0.878),            // 对卡片 6.92:1
+        accent: Color(red: 0.651, green: 0.631, blue: 0.878),            // 对卡片 6.94:1
         sidebarBackground: Color(red: 0.106, green: 0.094, blue: 0.188),
-        sidebarText: Color.white.opacity(0.78),                          // 对侧边栏底 10.80:1
+        sidebarHighlight: Color(red: 0.133, green: 0.118, blue: 0.220),
+        sidebarText: Color.white.opacity(0.78),                          // 对侧边栏底 10.86:1
         sidebarTextSelected: .white,                                     // 17.22:1
         canvas: Color(red: 0.078, green: 0.078, blue: 0.102),
         card: Color(red: 0.118, green: 0.118, blue: 0.149),              // 比底色亮，卡片才不是个洞
+        surfaceSubtle: Color(red: 0.149, green: 0.149, blue: 0.184),     // 又亮一档，嵌在卡片里
+        accentSoft: Color(red: 0.165, green: 0.153, blue: 0.263),        // 主色 5.98:1
         cardBorder: Color.white.opacity(0.14),
-        textPrimary: Color(red: 0.929, green: 0.929, blue: 0.949),       // 对卡片 14.16:1
-        textSecondary: Color.white.opacity(0.70),                        // 对卡片 8.68:1
-        textOnAccent: Color(red: 0.078, green: 0.078, blue: 0.102),      // 对主色 7.68:1
-        success: Color(red: 0.42, green: 0.79, blue: 0.56),              // 8.20:1 / 9.11:1
-        warning: Color(red: 0.95, green: 0.74, blue: 0.35),              // 9.59:1 / 10.65:1
-        danger: Color(red: 0.98, green: 0.53, blue: 0.51))               // 6.97:1 / 7.75:1
+        cardBorderStrong: Color.white.opacity(0.26),
+        textPrimary: Color(red: 0.929, green: 0.929, blue: 0.949),       // 对卡片 14.07:1
+        textSecondary: Color.white.opacity(0.70),                        // 对卡片 8.69:1
+        textOnAccent: Color(red: 0.078, green: 0.078, blue: 0.102),      // 对主色 7.74:1
+        success: Color(red: 0.42, green: 0.79, blue: 0.56),
+        warning: Color(red: 0.95, green: 0.74, blue: 0.35),
+        danger: Color(red: 0.98, green: 0.53, blue: 0.51))
 
     public static func tokens(for appearance: Appearance) -> PaletteTokens { … }
 
     // 视图用这一组：名字与类型跟以前完全一样，只是会跟着系统外观自己解析。
-    public static let accent = dynamic(\.accent)   // …以下 13 个同理
+    public static let accent = dynamic(\.accent)   // …以下 16 个同理
 }
 ```
+
+### 2026-08-30 改版新增的四个令牌
+
+改版前只有两级底色（`canvas` 灰、`card` 白），**没有第三级**——于是「卡片里再嵌一块」
+这种再普通不过的层次做不出来，所有内容只能平铺在白卡片上，一节六条读下来像一份日志。
+四个新令牌各解决一件事：
+
+| 令牌 | 干什么 | 哪儿在用 |
+|---|---|---|
+| `surfaceSubtle` | 卡片**里面**再低一档的底 | 复盘行里「原话 → 改成什么」那一对、悬停行、柱状图底槽 |
+| `accentSoft` | 主色的浅底，配主色文字 | `CoachBadge(kind: .accent)`、Part 标记 |
+| `cardBorderStrong` | 悬停 / 选中时那一档边框 | `CoachActionCard`、列表行 |
+| `sidebarHighlight` | 侧边栏选中 / 悬停那一行的底 | `SidebarRow` |
+
+**`sidebarHighlight` 顺带修掉一处深色下的失守：** 侧边栏选中行原本打算用 `accent` 作底 +
+白字，而深色的 `accent` 是调亮过的 `#A6A1E0`，白字压上去只有 **2.39:1**。
+现在选中标记是「`sidebarHighlight` 底 + 主色竖条」，两套外观下白字都在 13:1 以上。
+
+**语义色（success / warning / danger）在浅色下比上一版再深了约一档**
+（例如 success `(0.09,0.50,0.27)` → `(0.08,0.46,0.25)`）。原值只在 `card` / `canvas` 上刚过
+4.5:1（4.61），压到新的 `surfaceSubtle` 上就掉到 4.45——而那正是新版复盘行的底色。
+现在三个都在最暗的底上仍有 5.07:1 以上的余量。**看着比上一版再沉一点是刻意的。**
+
 
 **语义色为什么比设计稿深（2026-08-06 实测修正）：** 设计稿里的绿是 3.64:1、橙只有 2.72:1，
 都进不了下面那条「不可协商」的 4.5:1。这两个颜色不是装饰——它们要承载中文正文
@@ -117,21 +190,6 @@ public enum Palette {
 `(0.95, 0.74, 0.35)`）：同一个色相在近黑底色上要往亮的一侧走才读得清。
 深色主色也因此翻了一次面——主色调亮到 `#A6A1E0` 之后，压在它上面的文字必须是近黑，
 白字只有 2.7:1。一个令牌不可能同时满足「主色当文字用」和「白字压在主色上」。
-
-> ### ⚠️ 上面 `success` 与 `warning` 两个取值不达标（2026-08-06 跨阶段复审记，**待用户确认后改写本节**）
->
-> 按下面「对比度底线」那张表实测：
->
-> | 令牌 | 上面写的 | 对白卡片 | 对内容区底色 | 建议改成 | 改后 |
-> |---|---|---|---|---|---|
-> | `success` | `(0.13, 0.60, 0.35)` | **3.64:1** | 3.44:1 | `(0.09, 0.50, 0.27)` | 约 5.02:1 / 4.58:1 |
-> | `warning` | `(0.85, 0.55, 0.10)` | **2.72:1** | 2.57:1 | `(0.60, 0.39, 0.02)` | 约 5.05:1 / 4.60:1 |
->
-> 两者都低于本节那条「不可协商」的 4.5:1，而 **Phase 8 明确要用 `Palette.warning` 显示一段中文正文**——那是正文，不是装饰。`danger`（约 5.14:1）达标，不动。
->
-> **Phase 3 Task 7 与 Phase 10 Task 12 都已按建议值实现，并有测试拦着。**
-> 改后的颜色在浅色下会明显更深；**用户确认观感之后，把上面代码块里那两行直接改掉、删掉本注记**。
-> 若用户想换别的取值，唯一前提是仍 ≥ 4.5:1。
 
 ### 深色模式
 
@@ -178,6 +236,7 @@ public enum Spacing {
 }
 
 public enum Radius {
+    public static let panel: CGFloat = 16     // 页面级大面板
     public static let card: CGFloat = 12
     public static let control: CGFloat = 8
     public static let pill: CGFloat = 999
@@ -185,6 +244,33 @@ public enum Radius {
 ```
 
 **页面内边距统一 `Spacing.xl`（32）**，卡片内边距 `Spacing.lg`（24）。设计稿里的留白很足，这是它显得高级的主要原因——**不要为了多塞内容压缩留白**。
+
+圆角要跟着面积走：同一个 12 贴在 1000pt 宽的面板上和贴在 200pt 的小卡上看着不是一回事，
+所以页面级的大面板（首屏主行动卡、复盘页顶上那条目标横幅）用 `panel`（16）。
+
+### 版面尺寸（2026-08-30 新增）
+
+```swift
+public enum Layout {
+    public static let readingMaxWidth: CGFloat = 720   // 连续段落
+    public static let contentMaxWidth: CGFloat = 1040  // 页面内容整体
+    public static let sidebarWidth: CGFloat = 220
+    public static let railWidth: CGFloat = 4
+    public static let minWindowWidth: CGFloat = 960
+    public static let minWindowHeight: CGFloat = 640
+}
+```
+
+**`readingMaxWidth` 是这次改版里效果最大的一个令牌。** 改版前整个 App 一处宽度限制都没有，
+窗口拉到 1728pt 时：
+
+- 复盘报告的中文段落一行 1100pt、上百个字——眼睛读完一行找不回下一行的行首；
+- 每张卡片被拉成一千点宽的长条，标题贴在最左、按钮被 `Spacer` 顶到最右，中间空出九百多点。
+  卡片本来就长得像能点的东西，用户第一下多半点在卡片上，然后什么也不发生。
+
+两档而不是一档：**正文要窄（读），列表与网格可以宽（扫）**。
+页面用 `CoachPage` 或 `.coachPageBody()` 套上 `contentMaxWidth` 并居中；
+段落另外用 `.coachReadingColumn()` 收到 `readingMaxWidth`。
 
 ---
 
@@ -231,6 +317,35 @@ public enum Radius {
 
 **空白页会让用户以为程序坏了**——这条在本项目已经写进硬性约束（错误信息必须说清「发生了什么 + 下一步做什么」），空状态同理。
 
+### 整块可点的卡片 `CoachActionCard` / `PrimaryActionCard`
+
+一张卡片如果代表一个动作，**整块都要能点**，右边给一个 `chevron.right` 作提示，并且必须有悬停反馈。
+
+理由见上面 `readingMaxWidth` 那一段：把动作藏在一颗离标题九百点远的小按钮里，
+既难点，又让人以为卡片本身是死的。
+
+### 提示 `NoticeCard`
+
+图标 + 文字（+ 可选按钮），按语气分 info / success / warning / danger 四种。
+
+**不许在页面里手搓。** 改版前这块在六个地方各写了一遍，图标、间距、边框各不相同，
+而它承载的恰恰是本项目最要紧的那类文字——「发生了什么 + 下一步做什么」。
+
+### 标记 `CoachBadge`
+
+`Part 1`、`没练过`、`6 条` 这类状态词用胶囊，不要用一行小灰字跟在标题后面：
+一屏几十行的列表里，跟在后面的小灰字扫一眼分不出哪个是内容、哪个是状态。
+
+### 侧边栏
+
+深色（`sidebarBackground`），**按用途分组**，每一项都要有悬停反馈。
+选中标记有两样：左边那道主色竖条 + 底色换成 `sidebarHighlight`——
+只靠底色的话「选中」和「鼠标正悬在上面」长得一样；只靠竖条则是纯颜色信息。
+
+> 2026-08-30 之前，这条侧边栏是一个系统默认样式的 `List`：
+> 上面那四个为它定好、而且逐项验过对比度的令牌**一个都没被用过**。
+> 也就是说这个 App 最显眼的那一块，此前从没有被设计过。
+
 ### 图标
 
 **只用 SF Symbols，不用 emoji。** emoji 在不同系统版本渲染不一致，也无法跟随语义颜色。
@@ -250,7 +365,28 @@ public enum Radius {
 | 同屏动画元素 | 最多 1–2 个 |
 | 禁止 | 纯装饰性动画、循环浮动、视差 |
 
+```swift
+public enum Motion {
+    public static let quick: Double = 0.16       // 悬停、按下
+    public static let standard: Double = 0.22    // 展开、切换、内容替换
+    public static let deliberate: Double = 0.32  // 整屏过渡，上限就是它
+}
+```
+
 **必须尊重「减弱动态效果」系统设置**（`@Environment(\.accessibilityReduceMotion)`）。开启时禁用所有过渡。
+
+**视图不要自己写 `.animation(...)`，用 `.coachAnimation(_:value:)`**（`Components.swift`）：
+那个修饰符自己读「减弱动态效果」，于是这条无障碍要求由构造保证。
+从前它靠每个调用点记得写 `reduceMotion ? nil : …` 这个三元表达式，
+而漏写的那一处不会报错、不会变红，只会在开了那个开关的人机器上照样动。
+
+### 悬停（桌面应用的硬要求）
+
+改版前全项目**一处 `onHover` 都没有**：所有卡片、所有列表行、整条侧边栏，
+鼠标划过去毫无反应。在 Mac 上这会让界面显得是一张图片而不是一个程序。
+
+现在可点的东西都要有悬停反馈，而且**不用投影**（第 4 节禁止投影）：
+底色换 `surfaceSubtle`、边框换 `cardBorderStrong`，主色面板上则是加一圈白边。
 
 ### 键盘与焦点
 
@@ -288,5 +424,8 @@ public enum Radius {
 - [ ] 系统文字调到最大时，界面不截断、不重叠
 - [ ] 所有超过 300ms 的操作都有进度提示
 - [ ] 统计数字用等宽数字，数值变化时不抖动
+- [ ] **没有任何一段正文能横着长过 `readingMaxWidth`**（把窗口拉到最宽再看一遍）
+- [ ] 每个可点的卡片/行都有悬停反馈，且整块可点（不是只有角落那颗按钮）
+- [ ] 网格里同一行的卡片上下边各自齐平（`GridItem` 的纵向对齐默认是居中，要显式写 `.top`）
 
 最后一条最容易被忽略，也最容易被察觉——**抖动的数字会让整个界面显得廉价**。

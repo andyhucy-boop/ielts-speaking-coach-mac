@@ -16,11 +16,15 @@ public enum Appearance: String, CaseIterable, Sendable {
 public struct PaletteTokens: Equatable, Sendable {
     public let accent: Color
     public let sidebarBackground: Color
+    public let sidebarHighlight: Color
     public let sidebarText: Color
     public let sidebarTextSelected: Color
     public let canvas: Color
     public let card: Color
+    public let surfaceSubtle: Color
+    public let accentSoft: Color
     public let cardBorder: Color
+    public let cardBorderStrong: Color
     public let textPrimary: Color
     public let textSecondary: Color
     public let textOnAccent: Color
@@ -28,17 +32,24 @@ public struct PaletteTokens: Equatable, Sendable {
     public let warning: Color
     public let danger: Color
 
-    public init(accent: Color, sidebarBackground: Color, sidebarText: Color,
-                sidebarTextSelected: Color, canvas: Color, card: Color, cardBorder: Color,
+    public init(accent: Color, sidebarBackground: Color, sidebarHighlight: Color,
+                sidebarText: Color,
+                sidebarTextSelected: Color, canvas: Color, card: Color,
+                surfaceSubtle: Color, accentSoft: Color,
+                cardBorder: Color, cardBorderStrong: Color,
                 textPrimary: Color, textSecondary: Color, textOnAccent: Color,
                 success: Color, warning: Color, danger: Color) {
         self.accent = accent
         self.sidebarBackground = sidebarBackground
+        self.sidebarHighlight = sidebarHighlight
         self.sidebarText = sidebarText
         self.sidebarTextSelected = sidebarTextSelected
         self.canvas = canvas
         self.card = card
+        self.surfaceSubtle = surfaceSubtle
+        self.accentSoft = accentSoft
         self.cardBorder = cardBorder
+        self.cardBorderStrong = cardBorderStrong
         self.textPrimary = textPrimary
         self.textSecondary = textSecondary
         self.textOnAccent = textOnAccent
@@ -66,17 +77,21 @@ public enum Palette {
     public static let light = PaletteTokens(
         accent: Color(red: 0.361, green: 0.318, blue: 0.910),            // #5C51E8
         sidebarBackground: Color(red: 0.133, green: 0.118, blue: 0.239), // #221E3D
+        sidebarHighlight: Color(red: 0.180, green: 0.161, blue: 0.314),  // 选中/悬停那一行的底
         sidebarText: Color.white.opacity(0.72),                          // 对侧边栏底 8.8:1
         sidebarTextSelected: .white,                                     // 15.9:1
         canvas: Color(red: 0.957, green: 0.957, blue: 0.969),            // #F4F4F7
         card: .white,
+        surfaceSubtle: Color(red: 0.945, green: 0.945, blue: 0.965),     // #F1F1F6
+        accentSoft: Color(red: 0.941, green: 0.937, blue: 0.992),        // #F0EFFD，主色 4.86:1
         cardBorder: Color.black.opacity(0.08),
-        textPrimary: Color(red: 0.07, green: 0.07, blue: 0.09),          // 对卡片 18.7:1
+        cardBorderStrong: Color.black.opacity(0.16),
+        textPrimary: Color(red: 0.07, green: 0.07, blue: 0.09),          // 对卡片 18.8:1
         textSecondary: Color.black.opacity(0.56),                        // 对卡片 4.94:1
         textOnAccent: .white,                                            // 对主色 5.5:1
-        success: Color(red: 0.09, green: 0.50, blue: 0.27),              // 对卡片 5.0:1
-        warning: Color(red: 0.60, green: 0.39, blue: 0.02),              // 对卡片 5.0:1
-        danger: Color(red: 0.80, green: 0.20, blue: 0.20))               // 对卡片 5.1:1
+        success: Color(red: 0.08, green: 0.46, blue: 0.25),              // 最暗底 5.07:1
+        warning: Color(red: 0.55, green: 0.355, blue: 0.02),             // 最暗底 5.16:1
+        danger: Color(red: 0.75, green: 0.18, blue: 0.18))               // 最暗底 5.09:1
 
     /// 深色。**每一个值都是降饱和的色调变体，不是反色。**
     /// 两处刻意的不对称，都是为了守住 4.5:1：
@@ -86,11 +101,15 @@ public enum Palette {
     public static let dark = PaletteTokens(
         accent: Color(red: 0.651, green: 0.631, blue: 0.878),            // 对卡片 6.9:1
         sidebarBackground: Color(red: 0.106, green: 0.094, blue: 0.188),
+        sidebarHighlight: Color(red: 0.133, green: 0.118, blue: 0.220),
         sidebarText: Color.white.opacity(0.78),                          // 对侧边栏底 10.8:1
         sidebarTextSelected: .white,                                     // 17.2:1
         canvas: Color(red: 0.078, green: 0.078, blue: 0.102),
         card: Color(red: 0.118, green: 0.118, blue: 0.149),              // 比底色亮，卡片才不是个洞
+        surfaceSubtle: Color(red: 0.149, green: 0.149, blue: 0.184),     // 又亮一档，嵌在卡片里
+        accentSoft: Color(red: 0.165, green: 0.153, blue: 0.263),        // 主色 5.98:1
         cardBorder: Color.white.opacity(0.14),
+        cardBorderStrong: Color.white.opacity(0.26),
         textPrimary: Color(red: 0.929, green: 0.929, blue: 0.949),       // 对卡片 14.2:1
         textSecondary: Color.white.opacity(0.70),                        // 对卡片 8.7:1
         textOnAccent: Color(red: 0.078, green: 0.078, blue: 0.102),      // 对主色 7.7:1
@@ -112,11 +131,15 @@ public enum Palette {
 
     public static let accent = dynamic(\.accent)
     public static let sidebarBackground = dynamic(\.sidebarBackground)
+    public static let sidebarHighlight = dynamic(\.sidebarHighlight)
     public static let sidebarText = dynamic(\.sidebarText)
     public static let sidebarTextSelected = dynamic(\.sidebarTextSelected)
     public static let canvas = dynamic(\.canvas)
     public static let card = dynamic(\.card)
+    public static let surfaceSubtle = dynamic(\.surfaceSubtle)
+    public static let accentSoft = dynamic(\.accentSoft)
     public static let cardBorder = dynamic(\.cardBorder)
+    public static let cardBorderStrong = dynamic(\.cardBorderStrong)
     public static let textPrimary = dynamic(\.textPrimary)
     public static let textSecondary = dynamic(\.textSecondary)
     public static let textOnAccent = dynamic(\.textOnAccent)

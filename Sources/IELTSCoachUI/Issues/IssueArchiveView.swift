@@ -45,8 +45,7 @@ struct IssueArchiveView: View {
                 warningSection
                 listSection
             }
-            .padding(Spacing.xl)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .coachPageBody()
         }
         .background(Palette.canvas)
     }
@@ -54,14 +53,9 @@ struct IssueArchiveView: View {
     // MARK: - 页头与汇总
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: Spacing.sm) {
-            SectionHeader(number: 1, label: "ISSUE ARCHIVE", title: "你的问题档案")
-            Text("这里只说两件事：一个毛病在几场练习里犯过，最近有没有变少。"
-                 + "按犯过的场次从多到少排，最上面那条就是眼下最该盯的那个。")
-                .font(Typography.body)
-                .foregroundStyle(Palette.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
+        PageHeader(number: 1, label: "ISSUE ARCHIVE", title: "你的问题档案",
+                   lede: "这里只说两件事：一个毛病在几场练习里犯过，最近有没有变少。"
+                       + "按犯过的场次从多到少排，最上面那条就是眼下最该盯的那个。")
     }
 
     /// 标题下那一行汇总。

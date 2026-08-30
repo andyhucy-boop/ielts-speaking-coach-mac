@@ -297,8 +297,7 @@ public struct AboutView: View {
                 acknowledgementsSection
                 licenseSection
             }
-            .padding(Spacing.xl)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .coachPageBody()
         }
         .background(Palette.canvas)
         .font(Typography.body)

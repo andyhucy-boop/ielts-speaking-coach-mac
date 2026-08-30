@@ -41,8 +41,7 @@ struct QuestionBankView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Spacing.section) {
+        CoachPage {
                 header
                 if model.counts.total == 0 {
                     emptyBank
@@ -51,11 +50,7 @@ struct QuestionBankView: View {
                     bank
                     importCard
                 }
-            }
-            .padding(Spacing.xl)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(Palette.canvas)
         .sheet(item: $feedback) { result in
             QuestionBankImportResultSheet(feedback: result) { feedback = nil }
         }
@@ -65,7 +60,8 @@ struct QuestionBankView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
-            SectionHeader(number: 2, label: "QUESTION BANK", title: SidebarItem.questionBank.title)
+            PageHeader(number: 2, label: "QUESTION BANK", title: SidebarItem.questionBank.title,
+                       lede: "按话题分组。搜题目、话题或参考问句都可以。")
             CoachCard {
                 HStack(alignment: .top, spacing: Spacing.xl) {
                     statistic(model.counts.total, caption: "题库总题数")
@@ -100,16 +96,7 @@ struct QuestionBankView: View {
     @ViewBuilder
     private var legacyShapeCard: some View {
         if let notice = model.legacyShapeNotice {
-            CoachCard {
-                HStack(alignment: .top, spacing: Spacing.md) {
-                    Image(systemName: "rectangle.stack.badge.person.crop")
-                        .foregroundStyle(Palette.accent)
-                    Text(notice)
-                        .font(Typography.secondary)
-                        .foregroundStyle(Palette.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
+            NoticeCard(.info, notice)
         }
     }
 
@@ -135,6 +122,8 @@ struct QuestionBankView: View {
             TextField(QuestionSearch.placeholder, text: $keyword)
                 .textFieldStyle(.roundedBorder)
                 .font(Typography.body)
+                // 输入框拉满一千点是没有意义的：搜的是几个词，不是一段话。
+                .frame(maxWidth: Layout.readingMaxWidth, alignment: .leading)
                 .accessibilityLabel("按关键词搜题")
 
             let groups = model.groupedByTopic(part: partFilter)
@@ -164,10 +153,7 @@ struct QuestionBankView: View {
                         .font(Typography.cardTitle)
                         .foregroundStyle(Palette.textPrimary)
                     Spacer(minLength: Spacing.sm)
-                    Text("\(questions.count) 题")
-                        .font(Typography.label)
-                        .monospacedDigit()
-                        .foregroundStyle(Palette.textSecondary)
+                    CoachBadge("\(questions.count) 题").monospacedDigit()
                 }
                 VStack(alignment: .leading, spacing: Spacing.sm) {
                     // 用下标而不是 `\.id` 做 ForEach 的身份：题库正常情况下 id 唯一
@@ -176,25 +162,30 @@ struct QuestionBankView: View {
                     // 显示出来是「同一道题出现两次、另一道消失」，极难查。
                     ForEach(Array(questions.enumerated()), id: \.offset) { index, question in
                         if index > 0 { Divider() }
-                        questionRow(question)
+                        // **题干和话题一字不差时不再抄一遍。** Part 1 的题库里
+                        // 话题名本来就是题干（「Accommodation」），于是每张卡片
+                        // 都把同一个词上下写两遍，中间隔着 8pt——一屏只装得下五六个话题，
+                        // 而其中一半的像素在重复它上面那一行。
+                        questionRow(question, repeatsTopic: question.prompt == topic)
                     }
                 }
             }
         }
     }
 
-    private func questionRow(_ question: Question) -> some View {
+    private func questionRow(_ question: Question, repeatsTopic: Bool = false) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: Spacing.md) {
-            Text("Part \(question.part)")
-                .font(Typography.label)
-                .monospacedDigit()
-                .foregroundStyle(Palette.textSecondary)
+            CoachBadge("Part \(question.part)", kind: .accent).monospacedDigit()
 
             VStack(alignment: .leading, spacing: Spacing.xs) {
-                Text(question.prompt.isEmpty ? "（这道题没有题干）" : question.prompt)
-                    .font(Typography.body)
-                    .foregroundStyle(Palette.textPrimary)
-                    .textSelection(.enabled)
+                // 空题干仍然要说话：留一片空白会让人以为渲染坏了。
+                // 与话题重复时才省——那不是「没内容」，是「上面刚写过」。
+                if !repeatsTopic {
+                    Text(question.prompt.isEmpty ? "（这道题没有题干）" : question.prompt)
+                        .font(Typography.body)
+                        .foregroundStyle(Palette.textPrimary)
+                        .textSelection(.enabled)
+                }
                 if !question.followups.isEmpty {
                     Text("附 \(question.followups.count) 条追问")
                         .font(Typography.label)
@@ -213,16 +204,9 @@ struct QuestionBankView: View {
     /// **和「这个 Part 下没有题」分开**：都说成后者的话，用户会去导一份新题库，
     /// 而问题只是关键词打长了。那颗按钮清的是关键词，不是 Part 档位。
     private func searchFoundNothing(_ notice: String) -> some View {
-        CoachCard {
-            VStack(alignment: .leading, spacing: Spacing.sm) {
-                Text(notice)
-                    .font(Typography.body)
-                    .foregroundStyle(Palette.textPrimary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Button("清空搜索") { keyword = "" }
-                    .buttonStyle(.bordered)
-            }
+        NoticeCard(.info, notice) {
+            Button("清空搜索") { keyword = "" }
+                .buttonStyle(.bordered)
         }
     }
 

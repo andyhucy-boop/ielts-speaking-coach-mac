@@ -417,6 +417,26 @@ final class TodayViewTests: XCTestCase {
     /// 「本周训练」那一格里的进度条得跟着设置里的目标走，不是写死的 5。
     /// 认这一格靠 `StatTile.weekID`——两处各写一个 `"week"` 字面量的话，
     /// 改了一处另一处会安静地不再匹配，进度条就此消失。
+    /// 四格必须**顶对齐**。
+    ///
+    /// `GridItem` 的纵向对齐默认是居中，而这四格高度天差地别（「本周训练」那格多一根进度条
+    /// 和一颗按钮，「出现变少的毛病」那格的脚注有四行）。居中的结果是四张卡片的上下边各自
+    /// 错开十几点——2026-08-30 改版前首页最扎眼的一处，而它没有任何一条测试有话说：
+    /// 版式没有编译错误，也不改变任何一个字。
+    func testTheFourTilesLineUpInsteadOfFloatingAtDifferentHeights() throws {
+        let row = try SourceGuard.memberBody(of: "private var statsRow", in: try Self.todayViewCode())
+        XCTAssertTrue(row.contains("alignment: .top"),
+                      "四格没有显式顶对齐。`GridItem` 的默认纵向对齐是**居中**，"
+                          + "而这四格高度各不相同——结果是四张卡片的上下边各自错开十几点，"
+                          + "看着像布局坏了。下一步：`GridItem(…, alignment: .top)`。"
+                          + "实际取到的是：\n\(row)")
+        let card = try SourceGuard.memberBody(of: "private func statCard", in: try Self.todayViewCode())
+        XCTAssertTrue(card.contains("maxHeight: .infinity"),
+                      "每一格没有纵向撑满，四条下边不会齐平——顶对齐只解决了一半。"
+                          + "下一步：给格子内容 `.frame(maxHeight: .infinity, alignment: .topLeading)`。"
+                          + "实际取到的是：\n\(card)")
+    }
+
     func testTheWeeklyProgressBarSitsInTheWeekTileAndFollowsTheConfiguredGoal() throws {
         let code = try Self.todayViewCode()
         let card = try SourceGuard.memberBody(of: "private func statCard", in: code)

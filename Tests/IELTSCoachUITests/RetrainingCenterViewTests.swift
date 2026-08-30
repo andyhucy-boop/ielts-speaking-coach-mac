@@ -43,7 +43,7 @@ final class RetrainingCenterViewTests: XCTestCase {
 
     func testThePageHeaderSaysWhichPageThisIsAndWhatItIsFor() throws {
         SourceGuard.assertRenders(
-            "SectionHeader(number: 4, label: \"RETRAINING\"",
+            "PageHeader(number: 4, label: \"RETRAINING\"",
             inBodyOf: "private var header", of: Self.view,
             because: "页头不见了，用户点进来看到的是一堆没有标题的卡片"
                 + "（DESIGN-SYSTEM 第 4 节）。")
@@ -280,11 +280,39 @@ final class RetrainingCenterViewTests: XCTestCase {
         SourceGuard.assertRenders(
             "noticeCard", inBodyOf: "var body: some View", of: Self.view,
             because: "那句中文说明写好了却没摆进 `body`，失败时用户一个字都看不到。")
+        // 2026-08-30 改版：这块从手搓的「CoachCard + 三角图标 + 警告色」换成了 `NoticeCard`。
+        // 语义色、图标、可选中现在**由那个组件保证**，所以这里守的是「用的是警告那一档」，
+        // 底下三件事由 `testTheNoticeComponentAlwaysCarriesItsTintIconAndSelectableText` 一并守。
         let notice = try SourceGuard.memberBody(of: "private var noticeCard", in: code)
-        XCTAssertTrue(notice.contains("Palette.warning"),
-                      "失败说明没用 `Palette.warning` 标出来，混在正文里没人会注意到。")
-        XCTAssertTrue(notice.contains(".textSelection(.enabled)"),
-                      "失败说明里带着目标编号，必须能选中复制。")
+        XCTAssertTrue(notice.contains("NoticeCard(.warning"),
+                      "失败说明没走 `NoticeCard(.warning …)`，混在正文里没人会注意到。"
+                          + "实际取到的是：\n\(notice)")
+    }
+
+    /// `NoticeCard` 是全项目每一句「发生了什么 + 下一步做什么」的唯一出口。
+    ///
+    /// 改版前这块在六个页面各手搓了一遍，于是「语义色 / 图标 / 文字可选中」这三件事
+    /// 要在六处各守一遍——而实际上只有两三处真的守着。现在收成一个组件，
+    /// 这一条替所有调用点守住那三件事：
+    ///
+    /// - **语义色**：不标出来就会混在正文里没人注意到；
+    /// - **图标**：光靠颜色传达状态过不了无障碍那一关（规范第 4 节）；
+    /// - **可选中**：这些句子里带着目标编号、文件路径，用户要复制出来核对。
+    func testTheNoticeComponentAlwaysCarriesItsTintIconAndSelectableText() throws {
+        let body = try SourceGuard.memberBody(
+            of: "public struct NoticeCard",
+            in: try SourceGuard.code("DesignSystem/Components.swift"))
+        for (needle, why) in [
+            ("Image(systemName: symbol)", "没有图标——只靠颜色传达状态，色觉障碍的用户看不出这是一条警告"),
+            ("foregroundStyle(tint)", "图标没上语义色，四种语气长得一模一样"),
+            ("Palette.warning", "警告那一档没有接到 `Palette.warning`"),
+            ("Palette.danger", "错误那一档没有接到 `Palette.danger`"),
+            (".textSelection(.enabled)", "文字选不中——这些句子里带着目标编号和文件路径，用户要复制出来核对")
+        ] {
+            XCTAssertTrue(body.contains(needle),
+                          "`NoticeCard` 里\(why)（缺 `\(needle)`）。"
+                              + "它是全项目每一句提示的唯一出口，这里丢一样，六个页面一起丢。")
+        }
     }
 
     // MARK: - 要求 7：从别的页面跳过来，只生效一次

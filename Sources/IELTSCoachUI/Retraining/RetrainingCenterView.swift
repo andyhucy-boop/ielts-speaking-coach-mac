@@ -58,8 +58,7 @@ struct RetrainingCenterView: View {
                     pendingSection
                     retiredSection
                 }
-                .padding(Spacing.xl)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .coachPageBody()
             }
             .background(Palette.canvas)
             .onAppear { adoptPendingTarget(using: proxy) }
@@ -84,30 +83,14 @@ struct RetrainingCenterView: View {
     // MARK: - 顶部
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: Spacing.sm) {
-            SectionHeader(number: 4, label: "RETRAINING", title: "一次只解决一个问题")
-            Text("从复盘留下的目标里挑一个，回看当时到底说了什么，带着它把原题重答一遍；"
-                 + "然后换一道题再练一次——分清是真会了，还是只记住了那个答案。")
-                .font(Typography.body)
-                .foregroundStyle(Palette.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
+        PageHeader(number: 4, label: "RETRAINING", title: "一次只解决一个问题",
+                   lede: "从复盘留下的目标里挑一个，回看当时到底说了什么，带着它把原题重答一遍；"
+                       + "然后换一道题再练一次——分清是真会了，还是只记住了那个答案。")
     }
 
     @ViewBuilder private var noticeCard: some View {
         if let notice {
-            CoachCard {
-                HStack(alignment: .top, spacing: Spacing.sm) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .foregroundStyle(Palette.warning)
-                    Text(notice)
-                        .font(Typography.secondary)
-                        .foregroundStyle(Palette.textPrimary)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 0)
-                }
-            }
+            NoticeCard(.warning, notice)
         }
     }
 
@@ -183,10 +166,13 @@ struct RetrainingCenterView: View {
                     .monospacedDigit()
                     .foregroundStyle(Palette.textSecondary)
                 targetDetail(item)
+                // 按钮**跟在内容后面**，不靠 `Spacer` 顶到最右边。
+                // 卡片有一千点宽，顶到右边的话，标题和要点的东西隔着大半个屏幕。
                 HStack(spacing: Spacing.sm) {
-                    Spacer(minLength: Spacing.sm)
                     mainActionButton(item)
+                    Spacer(minLength: 0)
                 }
+                .padding(.top, Spacing.xs)
             }
         }
         .contentShape(Rectangle())

@@ -28,7 +28,10 @@ final class DesignSystemTests: XCTestCase {
     func testRadiusScaleIsOrdered() {
         // 控件比卡片更圆或一样圆，会让按钮看起来像卡片。
         XCTAssertLessThan(Radius.control, Radius.card)
-        XCTAssertGreaterThan(Radius.pill, Radius.card)
+        // 圆角跟着面积走：页面级的大面板比普通卡片再圆一档，
+        // 同一个半径贴在 1000pt 宽的面板上和贴在 200pt 的小卡上看着不是一回事。
+        XCTAssertLessThan(Radius.card, Radius.panel)
+        XCTAssertGreaterThan(Radius.pill, Radius.panel)
     }
 
     /// 逐个钉住取值。**上面那条「是 4 的倍数」远远不够**：实测把 `Spacing.lg` 从 24 改成 8、
@@ -59,6 +62,31 @@ final class DesignSystemTests: XCTestCase {
         // 第 4 节：区块标题的编号与英文标签「字距略宽」。规范没给数值，取值定在令牌里，
         // 所以更要钉住：调到 20 的话那行英文标签会散成一串孤零零的字母，而这里不钉就没人管。
         XCTAssertEqual(Tracking.label, 1.2, "Tracking.label 与 Metrics.swift 里定的取值对不上")
+
+        XCTAssertEqual(Radius.panel, 16, "Radius.panel 与第 3 节对不上（页面级大面板）")
+        XCTAssertEqual(BorderWidth.emphasis, 2, "BorderWidth.emphasis 与第 4 节对不上")
+        XCTAssertEqual(Tracking.overline, 1.6, "Tracking.overline 与第 4 节对不上")
+
+        // 行距（第 1 节新增那一列）。`tight` 是 0，写出来是为了让「这一处刻意不加」
+        // 在代码里看得见；改成 4 的话每个标题下面都会莫名多出一档间距。
+        XCTAssertEqual(LineHeight.tight, 0, "LineHeight.tight 与第 1 节对不上")
+        XCTAssertEqual(LineHeight.body, 5, "LineHeight.body 与第 1 节对不上")
+        XCTAssertEqual(LineHeight.relaxed, 8, "LineHeight.relaxed 与第 1 节对不上")
+
+        // 版面尺寸（第 3 节新增）。`readingMaxWidth` 是改版里效果最大的一个：
+        // 没有它，窗口一拉宽每一段中文就是一行上百个字。
+        XCTAssertEqual(Layout.readingMaxWidth, 720, "Layout.readingMaxWidth 与第 3 节对不上")
+        XCTAssertEqual(Layout.contentMaxWidth, 1040, "Layout.contentMaxWidth 与第 3 节对不上")
+        XCTAssertEqual(Layout.sidebarWidth, 220, "Layout.sidebarWidth 与第 3 节对不上")
+        XCTAssertEqual(Layout.railWidth, 4, "Layout.railWidth 与第 3 节对不上")
+        XCTAssertEqual(Layout.minWindowWidth, 960, "Layout.minWindowWidth 与第 3 节对不上")
+        XCTAssertEqual(Layout.minWindowHeight, 640, "Layout.minWindowHeight 与第 3 节对不上")
+
+        // 动效时长（第 5 节）。三档必须都落在「微交互 150–250ms」那条线附近，
+        // `deliberate` 是给整屏过渡留的余量，上限就是它。
+        XCTAssertEqual(Motion.quick, 0.16, "Motion.quick 与第 5 节对不上")
+        XCTAssertEqual(Motion.standard, 0.22, "Motion.standard 与第 5 节对不上")
+        XCTAssertEqual(Motion.deliberate, 0.32, "Motion.deliberate 与第 5 节对不上")
 
         // 刻度必须是严格递增的，否则「xs 比 md 大」这种手误照样能逐条对齐地写进去。
         let scale = [Spacing.xs, Spacing.sm, Spacing.md, Spacing.lg, Spacing.xl, Spacing.section]
@@ -97,7 +125,7 @@ final class DesignSystemTests: XCTestCase {
             }
         }
         XCTAssertGreaterThanOrEqual(
-            checked, 11,
+            checked, 25,
             "只对到 \(checked) 个令牌，这条测试很可能在空转。"
                 + "下一步：确认 Metrics.swift 的解析（public enum / public static let）还认得出来。")
     }
@@ -111,7 +139,7 @@ final class DesignSystemTests: XCTestCase {
             in: try SourceGuard.testCode("DesignSystemTests.swift"))
 
         let tokens = try SourceGuard.declaredTokenNames(inEnum: "Typography", of: typography)
-        XCTAssertGreaterThanOrEqual(tokens.count, 8, "只解析到 \(tokens.count) 个字体令牌，疑似空转")
+        XCTAssertGreaterThanOrEqual(tokens.count, 13, "只解析到 \(tokens.count) 个字体令牌，疑似空转")
         for token in tokens {
             XCTAssertTrue(
                 pinning.contains("XCTAssertEqual(Typography.\(token),"),
@@ -138,13 +166,46 @@ final class DesignSystemTests: XCTestCase {
     func testTypographyTokensMatchTheSpecTable() {
         XCTAssertEqual(Typography.pageTitle, Font.largeTitle.weight(.bold))
         XCTAssertEqual(Typography.sectionTitle, Font.title2.weight(.semibold))
-        XCTAssertEqual(Typography.cardTitle, Font.headline.weight(.semibold))
+        // **2026-08-30 改版：从 `.headline`（13）抬到 `.title3`（15）。**
+        // 抬之前它和 `body` 同号，只差一档字重——卡片标题与卡片正文在屏幕上分不开。
+        XCTAssertEqual(Typography.cardTitle, Font.title3.weight(.semibold))
+        XCTAssertEqual(Typography.rowTitle, Font.headline.weight(.semibold))
+        XCTAssertEqual(Typography.overline, Font.caption2.weight(.semibold))
         XCTAssertEqual(Typography.body, Font.body.weight(.regular))
+        XCTAssertEqual(Typography.lede, Font.title3.weight(.regular))
         XCTAssertEqual(Typography.secondary, Font.callout.weight(.regular))
         XCTAssertEqual(Typography.label, Font.caption.weight(.medium))
+        XCTAssertEqual(Typography.navItem, Font.body.weight(.medium))
         XCTAssertEqual(Typography.number, Font.title.weight(.semibold).monospacedDigit())
-        // 表里没有「按钮」这一行，`action` 是加的，取与卡片标题同一档。
+        XCTAssertEqual(Typography.numberHero, Font.largeTitle.weight(.bold).monospacedDigit())
+        // 表里没有「按钮」这一行，`action` 是加的，取与密排行标题同一档。
         XCTAssertEqual(Typography.action, Font.headline.weight(.semibold))
+    }
+
+    /// 层级真的分得开：相邻两档不许是同一个值。
+    ///
+    /// **这条是改版的那一条守卫。** 改版前 `cardTitle`（`.headline`）与 `body`（`.body`）
+    /// 在 macOS 上都是 13 磅，只差一档字重；`secondary` 12、`label` 11 又紧挨着——
+    /// 整页从标题到脚注落在 11–13 磅这条窄缝里，谁也压不住谁。
+    /// 上面那张表逐行钉的是「每一档是什么」，钉不住「这几档还分不分得开」：
+    /// 把 `cardTitle` 改回 `.headline` 那张表照样能逐行对齐地写下来。
+    ///
+    /// 只比同字重的档位：`lede` 与 `cardTitle` 同为 `.title3`、靠字重分，那是刻意的。
+    func testTheTypeScaleActuallySeparatesItsTiers() {
+        let regular: [(String, Font)] = [
+            ("pageTitle", Typography.pageTitle), ("sectionTitle", Typography.sectionTitle),
+            ("lede", Typography.lede), ("body", Typography.body),
+            ("secondary", Typography.secondary), ("label", Typography.label)
+        ]
+        for (indexA, a) in regular.enumerated() {
+            for b in regular[(indexA + 1)...] {
+                XCTAssertNotEqual(
+                    a.1, b.1,
+                    "`Typography.\(a.0)` 和 `Typography.\(b.0)` 是同一个值，这两档在屏幕上分不开。"
+                        + "下一步：往上或往下挑一档语义字体（DESIGN-SYSTEM 第 1 节字体表）；"
+                        + "确实想让它们同号，就靠字重分，并在表里写清楚。")
+            }
+        }
     }
 
     /// 每个令牌都必须真的带上字重，不能是光秃秃的语义字体。
@@ -155,7 +216,14 @@ final class DesignSystemTests: XCTestCase {
     func testTypographyTokensDoNotFallBackToBareSemanticFonts() {
         XCTAssertNotEqual(Typography.pageTitle, Font.largeTitle, "pageTitle 没带字重")
         XCTAssertNotEqual(Typography.sectionTitle, Font.title2, "sectionTitle 没带字重")
-        XCTAssertNotEqual(Typography.cardTitle, Font.headline, "cardTitle 没带字重")
+        XCTAssertNotEqual(Typography.cardTitle, Font.title3, "cardTitle 没带字重")
+        XCTAssertNotEqual(Typography.rowTitle, Font.headline, "rowTitle 没带字重")
+        XCTAssertNotEqual(Typography.overline, Font.caption2, "overline 没带字重")
+        XCTAssertNotEqual(Typography.lede, Font.title3, "lede 没带字重")
+        XCTAssertNotEqual(Typography.navItem, Font.body, "navItem 没带字重")
+        XCTAssertNotEqual(Typography.numberHero, Font.largeTitle, "numberHero 没带字重")
+        XCTAssertNotEqual(Typography.numberHero, Font.largeTitle.weight(.bold),
+                          "numberHero 没带等宽数字")
         XCTAssertNotEqual(Typography.body, Font.body, "body 没带字重")
         XCTAssertNotEqual(Typography.secondary, Font.callout, "secondary 没带字重")
         XCTAssertNotEqual(Typography.label, Font.caption, "label 没带字重")
