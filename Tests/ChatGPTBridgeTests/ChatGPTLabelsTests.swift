@@ -195,4 +195,87 @@ final class ChatGPTLabelsTests: XCTestCase {
         XCTAssertEqual(ChatGPTLabels.structuralMismatches(ChatGPTLabels.startVoice, among: [odd]).count, 1,
                        "role 不符的元素也该进诊断，否则排查时看到的情况比实际更干净")
     }
+
+    // MARK: - 2026-08-30：ChatGPT 26.820.60940 把「新建会话」改成了叶子按钮
+
+    /// 下面这几个形状**逐字来自 `axprobe dump` 读到的真实 AX 树**（用户报障当时那一棵），
+    /// 不是想出来的。用户看到的是：
+    ///
+    /// > 找到了标签为「New chat」的元素 2 个，但都结构不符，不是真正的控制按钮
+    ///
+    /// 而那两个恰恰都是真按钮，只是这一版把里面那个 `AXImage` 去掉了。
+    func testTheNewChatButtonIsFoundNowThatItIsALeafNode() {
+        // 顶部工具条那一颗：label 在 title 上。
+        let topBar = AXNodeSnapshot(element: AXElementRef(rawID: 1, epoch: 0),
+                                    role: "AXButton", title: "New chat",
+                                    childCount: 0, childRoles: [])
+        // 侧边栏工具条那一颗：label 在 description 上。
+        let sidebarBar = AXNodeSnapshot(element: AXElementRef(rawID: 2, epoch: 0),
+                                        role: "AXButton",
+                                        descriptionText: "New chat",
+                                        childCount: 0, childRoles: [])
+
+        for node in [topBar, sidebarBar] {
+            XCTAssertTrue(
+                node.isIconOnlyControl,
+                "叶子形状的真按钮被判成了结构不符。ChatGPT 26.820.60940 把 `New chat` "
+                    + "里面那个 `AXImage` 去掉了，只认「恰好一个 AXImage 子节点」会让"
+                    + "「新建会话」这一步整个卡死——而每一场练习都从它开始。")
+            XCTAssertNotNil(
+                ChatGPTLabels.matchControl(ChatGPTLabels.newChat, among: [node]),
+                "`matchControl` 找不到这一版的「新建会话」按钮")
+        }
+
+        XCTAssertTrue(
+            ChatGPTLabels.structuralMismatches(ChatGPTLabels.newChat,
+                                               among: [topBar, sidebarBar]).isEmpty,
+            "这两颗真按钮还被算进「结构不符」里——诊断信息会继续把人往"
+                + "「侧边栏里的同名历史会话」这个错方向指。")
+    }
+
+    /// **放宽之后，当初要防的那个坑必须还堵着。**
+    ///
+    /// ChatGPT 每开一次语音就自动生成一条名叫 "New voice chat" 的会话挂在侧边栏，
+    /// 而 `ChatGPTLabels.startVoice` 恰好把这个字符串当候选标签。
+    /// 同一份实测树里它就在（`AXButton desc="New voice chat" children=4`）——
+    /// 只按标签取第一个命中会点中这条历史会话，而 `kAXPressAction` 返回成功。
+    ///
+    /// 历史会话行**一定不是叶子**：里面裹着一个 `AXGroup`，装着 `Pin chat` 与 `Chat actions`。
+    func testASidebarConversationNamedLikeAControlIsStillRejected() {
+        // 逐字照抄实测形状：AXButton desc="New voice chat" children=4
+        let historyRow = AXNodeSnapshot(element: AXElementRef(rawID: 3, epoch: 0),
+                                        role: "AXButton",
+                                        descriptionText: "New voice chat",
+                                        childCount: 4,
+                                        childRoles: ["AXGroup", "AXGroup", "AXGroup", "AXGroup"])
+        XCTAssertFalse(
+            historyRow.isIconOnlyControl,
+            "侧边栏里那条名叫「New voice chat」的历史会话又被当成控制按钮了。"
+                + "按下去只会打开一段旧对话，而返回码是成功的——"
+                + "这正是 spec 2.3.1 那条结构判据存在的全部理由。")
+        XCTAssertNil(
+            ChatGPTLabels.matchControl(ChatGPTLabels.startVoice, among: [historyRow]),
+            "`matchControl` 把侧边栏历史会话当成了「启动语音」按钮")
+
+        // 真正的语音按钮在同一份树里是图标形状，没变——两种形状都要认得。
+        let realVoiceButton = AXNodeSnapshot(element: AXElementRef(rawID: 4, epoch: 0),
+                                             role: "AXButton",
+                                             descriptionText: "Start new voice chat",
+                                             childCount: 1, childRoles: ["AXImage"])
+        XCTAssertNotNil(
+            ChatGPTLabels.matchControl(ChatGPTLabels.startVoice, among: [historyRow,
+                                                                        realVoiceButton]),
+            "历史会话排在前面时，没能跳过它找到后面那颗真的语音按钮")
+    }
+
+    /// 带内容的会话行（标题是用户自己那句话）同样不许被当成按钮。
+    func testAnOrdinaryConversationRowIsNotAControlEither() {
+        let row = AXNodeSnapshot(element: AXElementRef(rawID: 5, epoch: 0),
+                                 role: "AXButton",
+                                 descriptionText: "New chat",
+                                 childCount: 3,
+                                 childRoles: ["AXGroup", "AXGroup", "AXGroup"])
+        XCTAssertFalse(row.isIconOnlyControl,
+                       "一条恰好叫「New chat」的历史会话被当成了新建按钮")
+    }
 }

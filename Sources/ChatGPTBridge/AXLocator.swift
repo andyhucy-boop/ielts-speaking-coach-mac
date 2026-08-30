@@ -63,9 +63,25 @@ public struct AXLocator: Sendable {
 
         let mismatches = ChatGPTLabels.structuralMismatches(candidates, among: lastNodes)
         if !mismatches.isEmpty {
+            // **把看到的形状原样带上。**
+            //
+            // 这句话原来只写「很可能是侧边栏里的同名历史会话」——那是一句猜测，
+            // 而 2026-08-30 那次真实报障里它恰好猜反了：两个元素都是**真按钮**，
+            // 只是 ChatGPT 换版之后把里面那个 `AXImage` 去掉了。
+            // 用户和开发者都被这句猜测往「是不是停在侧边栏了」的方向带了一程，
+            // 最后是靠 `axprobe dump` 读真实的树才看出来。
+            //
+            // 带上 role 与子节点形状之后，同一类问题下次一眼就能判：
+            // 子节点是空的 = ChatGPT 改了按钮结构；子节点是一堆 AXGroup = 真的点到历史会话了。
+            let shapes = mismatches.map { node in
+                "\(node.role)/子节点\(node.childCount)"
+                    + (node.childRoles.isEmpty ? "" : "(\(node.childRoles.joined(separator: "+")))")
+            }
             throw BridgeError.elementNotFound(
                 "找到了标签为「\(candidates[0])」的元素 \(mismatches.count) 个，但都结构不符，"
-                + "不是真正的控制按钮（很可能是侧边栏里的同名历史会话）。"
+                + "不是真正的控制按钮。实际形状是：\(shapes.joined(separator: "、"))。"
+                + "（真按钮应当是「恰好一个 AXImage 子节点」或「没有子节点」；"
+                + "一堆 AXGroup 子节点的多半是侧边栏里的同名历史会话。）"
                 + "下一步：确认 ChatGPT 窗口停在对话界面而不是设置或侧边栏；"
                 + "若 ChatGPT 刚更新过，\(host.diagnosticsInstruction)。")
         }

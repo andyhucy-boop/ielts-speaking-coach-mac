@@ -53,6 +53,14 @@ final class AXLocatorTests: XCTestCase {
         XCTAssertThrowsError(try locator.waitForControl(ChatGPTLabels.startVoice, timeout: 0.1)) { error in
             XCTAssertTrue("\(error)".contains("结构不符"),
                           "标签命中但结构不符时，错误信息必须说清楚，否则用户完全看不出问题在哪：\(error)")
+            // **还要报出看到的形状。** 只说「结构不符」的话，这句话就只能靠猜补完——
+            // 2026-08-30 那次真实报障里它猜的是「很可能是侧边栏里的同名历史会话」，
+            // 而实际上两个都是真按钮，只是 ChatGPT 换版去掉了里面那个 AXImage。
+            // 那句猜测把排查往错的方向带了一程。
+            XCTAssertTrue("\(error)".contains("AXGroup"),
+                          "没有把看到的子节点形状报出来，下次同类问题还是只能靠猜：\(error)")
+            XCTAssertTrue("\(error)".contains("子节点3"),
+                          "没有把子节点个数报出来——「空」和「一堆 AXGroup」是两种完全不同的病因：\(error)")
         }
     }
 

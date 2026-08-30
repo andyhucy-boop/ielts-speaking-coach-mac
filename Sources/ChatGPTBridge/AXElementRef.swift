@@ -41,9 +41,40 @@ public struct AXNodeSnapshot: Equatable, Sendable {
     /// 标签优先取 description，为空时退到 title。ChatGPT 的控件两者都可能承载文字。
     public var label: String { descriptionText.isEmpty ? title : descriptionText }
 
-    /// spec 2.3.1 的结构判据：真控制按钮的子节点恰好一个且为 AXImage。
-    /// 侧边栏会话行嵌套 AXButton（含 Pin chat / Archive chat），不满足此条件。
-    public var isIconOnlyControl: Bool { childRoles == ["AXImage"] }
+    /// spec 2.3.1 的结构判据：**它要挡的是「侧边栏里的同名历史会话」**。
+    ///
+    /// ChatGPT 每开一次语音就自动生成一条名叫 "New voice chat" 的会话挂在侧边栏，
+    /// 而侧边栏在深度优先遍历里常排在真按钮前面——只按标签取第一个命中会点中历史会话，
+    /// 而且 `kAXPressAction` 返回成功（spec 2.3.1，实测发生过）。
+    ///
+    /// 真控制按钮有**两种**形状，两种都要认：
+    ///
+    ///   · **图标按钮**：恰好一个 `AXImage` 子节点。
+    ///     `Pin chat`、`Dictate`、`Start new voice chat` 现在都是这一种。
+    ///   · **叶子按钮**：一个子节点都没有。
+    ///     `New chat`、`Search`、`Recents` 现在是这一种。
+    ///
+    /// 而历史会话行**一定不是叶子**：它里面裹着一个 `AXGroup`，装着 `Pin chat`
+    /// 与 `Chat actions`。所以「子节点为空」这一条不会把它放进来。
+    ///
+    /// ## 2026-08-30：只认第一种曾经把「新建会话」整个卡死
+    ///
+    /// 用户报障：「找到了标签为「New chat」的元素 2 个，但都结构不符」。
+    /// 拿 `axprobe dump` 读当时的树（ChatGPT 26.820.60940）看到的是：
+    ///
+    /// ```
+    /// AXButton title="New chat" children=0     ← 顶部工具条，与 Search / Switch mode 并排
+    /// AXButton desc="New chat"  children=0     ← 侧边栏工具条，与 Recents 并排
+    /// ```
+    ///
+    /// 两颗都是真按钮，只是这一版把里面那个 `AXImage` 去掉了，于是
+    /// `childRoles == ["AXImage"]` 把它们双双判成「结构不符」——
+    /// 而错误信息还在猜「很可能是侧边栏里的同名历史会话」，把人往错的方向指。
+    ///
+    /// **同一份树里那条真的历史会话仍然被挡着**（`AXButton desc="New voice chat" children=4`），
+    /// 所以这次放宽没有把当初要防的那个坑放回来。`AXElementRefTests` 拿这两组
+    /// 实测形状各钉了一条。
+    public var isIconOnlyControl: Bool { childRoles == ["AXImage"] || childCount == 0 }
 
     /// 输入框是否处于「空」状态。**空态的 value 不是空字符串**（spec 2.3.6，实测）——
     /// 是「换行 + 该元素自己的 description」，例如 `"\nMessage ChatGPT"`。
