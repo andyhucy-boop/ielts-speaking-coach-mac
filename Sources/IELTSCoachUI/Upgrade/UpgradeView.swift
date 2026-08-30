@@ -1,3 +1,5 @@
+import AppKit
+import IELTSCoachCore
 import SwiftUI
 
 /// 阶段状态在界面上长什么样。
@@ -39,14 +41,30 @@ extension PhaseStatus {
 @MainActor
 public struct UpgradeView: View {
     private let metadata: AppMetadata
+    /// 打开发布页。**做成参数而不是直接调 `NSWorkspace`**，理由与
+    /// `RecordingSettingsView` 一致：测试不能真去开浏览器；而且它的返回值要接住——
+    /// `NSWorkspace.open` 返回 false 时不吭声的话，用户看到的是一颗「点了没反应」的按钮。
+    private let openURL: (URL) -> Bool
 
     /// 哪几条更新记录是展开的。初始值由 `Changelog.defaultExpandedVersions()` 给，
     /// 规则本身（只展开最新那一条）写在那里，有测试拿两条以上的记录问着。
     @State private var expandedVersions: Set<String>
 
-    public init(metadata: AppMetadata = .current) {
+    /// 有没有新版本。**默认值会真的发一次网络请求**（每天最多一次），
+    /// 所以预览与测试必须自己传一个假的进来。
+    @State private var updates: UpdateCheckViewModel
+
+    /// 打不开发布页时那句话。**不能什么都不做**：点了浏览器没起来，
+    /// 用户只会以为程序坏了（禁止静默失败）。
+    @State private var openFailure: String?
+
+    public init(metadata: AppMetadata = .current,
+                updates: UpdateCheckViewModel? = nil,
+                openURL: @escaping (URL) -> Bool = { NSWorkspace.shared.open($0) }) {
         self.metadata = metadata
+        self.openURL = openURL
         _expandedVersions = State(initialValue: Changelog.defaultExpandedVersions())
+        _updates = State(initialValue: updates ?? UpdateCheckViewModel())
     }
 
     public var body: some View {
@@ -54,6 +72,7 @@ public struct UpgradeView: View {
             VStack(alignment: .leading, spacing: Spacing.lg) {
                 header
                 versionNoticeLine
+                updateCard
                 SectionHeader(number: 1, label: "RELEASE NOTES", title: "每一版改了什么")
                 releasesSection
                 SectionHeader(number: 2, label: "PHASES", title: "十个阶段走到哪儿了")
@@ -63,6 +82,83 @@ public struct UpgradeView: View {
         }
         .background(Palette.canvas)
         .font(Typography.body)
+        // 打开这一页时自动查一次（每天最多一次，见 `UpdateCheckSchedule`）。
+        // **不能每次打开都查**：GitHub 对匿名请求每小时只给 60 次，
+        // 打满之后返回 403——于是这个功能在最需要它的时候恰好是坏的。
+        .task { await updates.checkIfDue(localVersion: metadata.shortVersion) }
+    }
+
+    // MARK: - 有没有新版本
+
+    /// **只检测，不自动装。**
+    ///
+    /// 这块告诉你有没有新版本、并把发布页打开；它不会自己下载，更不会自己替换 App。
+    /// 自动装要么得引入 Sparkle 那一套（还要一对签名密钥），要么就是让程序去下载并执行
+    /// 一个来自网络的二进制——后者在本项目是明令不做的一类操作。
+    /// 换包是十秒钟的事，而「App 会自己改自己」值得用户自己点一下头。
+    private var updateCard: some View {
+        CoachCard {
+            VStack(alignment: .leading, spacing: Spacing.md) {
+                HStack(spacing: Spacing.sm) {
+                    Text("检查有没有新版本")
+                        .font(Typography.cardTitle)
+                        .foregroundStyle(Palette.textPrimary)
+                    if updates.isChecking {
+                        // 超过 300ms 的操作都要有反馈（规范第 5 节）。
+                        ProgressView().controlSize(.small)
+                        Text("正在问 GitHub…")
+                            .font(Typography.secondary)
+                            .foregroundStyle(Palette.textSecondary)
+                    }
+                    Spacer(minLength: 0)
+                }
+
+                // 还没查过时这里是 nil，界面上只有一颗按钮——
+                // 「还没查」和「查过、没有新版本」不能长得一样。
+                if let message = updates.message {
+                    Text(message)
+                        .font(Typography.body)
+                        .foregroundStyle(Palette.textPrimary)
+                        .textSelection(.enabled)
+                        .coachParagraph()
+                        .coachReadingColumn()
+                }
+
+                HStack(spacing: Spacing.sm) {
+                    Button("检查更新") {
+                        Task { await updates.check(localVersion: metadata.shortVersion) }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(updates.isChecking)
+
+                    // 查失败时**也**给这颗按钮：那时用户最需要的就是自己去看一眼。
+                    //
+                    // 两支分开写，不写成 `.buttonStyle(x ? .a : .b)`：那两个样式不是同一个类型，
+                    // 三元表达式编不过。顺带也让两句按钮文字都以字面量留在源码里，
+                    // `RenderReachabilitySweepTests` 要靠那份清单核对文案里指名的控件。
+                    if updates.hasUpdate {
+                        Button("去 GitHub 看这一版") { openReleasePage() }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Palette.accent)
+                    } else {
+                        Button("打开发布页") { openReleasePage() }
+                            .buttonStyle(.bordered)
+                    }
+                    Spacer(minLength: 0)
+                }
+
+                if let openFailure {
+                    NoticeCard(.warning, openFailure)
+                }
+            }
+        }
+    }
+
+    /// 打开发布页。**返回值要接住**——`NSWorkspace.open` 返回 false 时不吭声的话，
+    /// 用户看到的是一颗点了没反应的按钮。
+    private func openReleasePage() {
+        openFailure = openURL(updates.pageURL) ? nil
+            : "打不开浏览器。下一步：自己在浏览器里打开 \(updates.pageURL.absoluteString)"
     }
 
     /// 顶上那块：这一页存在的全部意义就是回答「我手上这份到底是哪一版」。
@@ -207,6 +303,9 @@ public struct UpgradeView: View {
 /// 版本号取自 `Changelog.current`，**不写字面值**：这一页里任何一处写死的版本号，
 /// 下一版发出去就是错的（`UpgradeViewTests` 连预览一起扫）。
 #Preview("功能升级") {
+    // **必须传一个假的进来。** 默认的 `UpdateCheckViewModel()` 用的是
+    // `LiveReleaseFetcher`，打开画布就会真去 GitHub 发一次请求（铁律 5：
+    // 预览不许碰真实的外部世界）。`PreviewSafetyTests` 扫源码守着这一条。
     UpgradeView(metadata: AppMetadata(
         displayName: "IELTS Speaking Coach",
         bundleIdentifier: "com.ielts.speakingcoach",
@@ -215,5 +314,8 @@ public struct UpgradeView: View {
         buildCommit: "a1b2c3d",
         buildDate: "2026-08-06T09:00:00Z",
         signingIdentity: "IELTS Coach Dev",
-        channel: .selfSigned))
+        channel: .selfSigned),
+        updates: UpdateCheckViewModel(fetcher: FixedReleaseFetcher.upToDate,
+                                      store: InMemoryUpdateCheckStore()),
+        openURL: { _ in true })
 }

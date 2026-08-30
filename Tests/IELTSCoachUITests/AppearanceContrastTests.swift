@@ -350,6 +350,41 @@ final class AppearanceContrastTests: XCTestCase {
                 + "下一步：确认动态令牌确实按绘制时的外观解析，而不是被固定成了一套。")
     }
 
+    // MARK: - 玻璃只许当浮层，不许当底
+
+    /// **液态玻璃不许铺在整片侧边栏底上。**
+    ///
+    /// 2026-08-30 试过，实测否掉了：`Glass.tint(_:)` 是给材质**上色**，
+    /// 不是按不透明度把颜色压上去——传一个 alpha 0.92 的深紫进去，
+    /// 渲染出来仍然是浅色（从实机截图上采样到 rgb(219,219,220)）。
+    /// 于是这条深色侧边栏在浅色壁纸下整片变浅，白字糊成一片；
+    /// 而在开发者自己的深色壁纸上，这件事完全看不出来。
+    ///
+    /// 玻璃跟着背后的东西走，而侧边栏背后是用户的壁纸。所以它只能当浮层
+    /// （选中那颗药丸、面板上那几颗按钮），不能当承载文字的底。
+    ///
+    /// 这条守的是「别再试一次」：源码里那句 `.background(Palette.sidebarBackground)`
+    /// 一旦被换成 `coachGlass`，这里当场变红。
+    func testTheSidebarSurfaceItselfIsOpaqueAndOnlyThePillIsGlass() throws {
+        let code = try SourceGuard.code("Sidebar/SidebarView.swift")
+        let body = try SourceGuard.memberBody(of: "var body: some View", in: code)
+        XCTAssertTrue(
+            body.contains(".background(Palette.sidebarBackground)"),
+            "侧边栏底不再是不透明的 `Palette.sidebarBackground`。玻璃跟着背后的东西走，"
+                + "而这一片背后是用户的壁纸——浅色壁纸下整条侧边栏会变浅，白字糊成一片，"
+                + "而开发者自己的深色壁纸上完全看不出来（2026-08-30 实测采样确认）。"
+                + "下一步：玻璃只给浮层用（选中那颗药丸、面板上那几颗按钮）。"
+                + "实际取到的是：\n\(body)")
+        XCTAssertFalse(
+            body.contains("coachGlass"),
+            "整片侧边栏底又用上玻璃了，理由同上。实际取到的是：\n\(body)")
+        // 反过来也要有牙齿：药丸那一处必须真的是玻璃，否则这条就只是在禁止一件没人做的事。
+        XCTAssertTrue(
+            code.contains("content.coachGlass("),
+            "选中/悬停那颗药丸没有用玻璃了。那是这一页唯一用得对的地方："
+                + "浮层 + 背后有一片我们自己铺好的深色底。")
+    }
+
     // MARK: - 深色是真的深色，不是浅色的别名
 
     func testDarkIsActuallyDark() {

@@ -168,6 +168,8 @@ extension SidebarItem {
         case .history: self = .history
         case .issues: self = .issues
         case .vocabulary: self = .vocabulary
+        case .upgrade: self = .upgrade
+        case .feedback: self = .feedback
         }
     }
 }

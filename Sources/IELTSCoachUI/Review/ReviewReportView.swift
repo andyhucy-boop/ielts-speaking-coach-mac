@@ -341,7 +341,9 @@ struct ReviewReportView: View {
             .foregroundStyle(Palette.accent)
             .padding(.horizontal, Spacing.md)
             .padding(.vertical, Spacing.sm)
-            .background(Palette.card, in: RoundedRectangle(cornerRadius: Radius.control))
+            // 浮在那块深色面板上，同 `PrimaryActionCard` 那颗按钮。
+            .coachGlass(tint: Palette.card, fallback: Palette.card, interactive: true,
+                        in: RoundedRectangle(cornerRadius: Radius.control))
         }
         .buttonStyle(.plain)
         .padding(.top, Spacing.sm)

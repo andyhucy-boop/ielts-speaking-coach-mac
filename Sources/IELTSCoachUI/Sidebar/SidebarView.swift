@@ -41,6 +41,15 @@ struct SidebarView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollContentBackground(.hidden)
+        // **底色是不透明的。玻璃用在上面那颗选中药丸上，不用在这一整片底上。**
+        //
+        // 试过整片用玻璃，实测否掉了（2026-08-30）：`Glass.tint(_:)` 是给材质上色，
+        // **不是**按不透明度把颜色压上去——传一个 alpha 0.92 的深紫进去，
+        // 渲染出来仍然是浅色（实测采样到 rgb(219,219,220)）。
+        // 于是这条深色侧边栏在浅色壁纸下整片变浅，白字糊成一片。
+        //
+        // 换句话说：玻璃跟着背后的东西走，而这条侧边栏背后是用户的壁纸。
+        // 想让它保持深色，就只能自己铺一层不透明的底——那也就不是玻璃了。
         .background(Palette.sidebarBackground)
     }
 
@@ -74,23 +83,7 @@ private struct SidebarRow: View {
 
     var body: some View {
         Button(action: onSelect) {
-            HStack(spacing: Spacing.sm) {
-                RoundedRectangle(cornerRadius: Radius.pill)
-                    .fill(isSelected ? Palette.accent : Palette.sidebarHighlight)
-                    .frame(width: Layout.railWidth)
-                    .opacity(isSelected ? 1 : 0)
-                Image(systemName: item.systemImage)
-                    .frame(width: Spacing.md)
-                Text(item.title)
-                Spacer(minLength: 0)
-            }
-            .font(Typography.navItem)
-            .foregroundStyle(isSelected ? Palette.sidebarTextSelected : Palette.sidebarText)
-            .padding(.vertical, Spacing.sm)
-            .padding(.trailing, Spacing.sm)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(background, in: RoundedRectangle(cornerRadius: Radius.control))
-            .contentShape(RoundedRectangle(cornerRadius: Radius.control))
+            surface(label)
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
@@ -100,8 +93,44 @@ private struct SidebarRow: View {
         .help(item.title)
     }
 
-    private var background: Color {
-        isSelected || isHovering ? Palette.sidebarHighlight : Palette.sidebarBackground
+    private var label: some View {
+        HStack(spacing: Spacing.sm) {
+            RoundedRectangle(cornerRadius: Radius.pill)
+                .fill(isSelected ? Palette.accent : Palette.sidebarHighlight)
+                .frame(width: Layout.railWidth)
+                .opacity(isSelected ? 1 : 0)
+            Image(systemName: item.systemImage)
+                .frame(width: Spacing.md)
+            Text(item.title)
+            Spacer(minLength: 0)
+        }
+        .font(Typography.navItem)
+        .foregroundStyle(isSelected ? Palette.sidebarTextSelected : Palette.sidebarText)
+        .padding(.vertical, Spacing.sm)
+        .padding(.trailing, Spacing.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(RoundedRectangle(cornerRadius: Radius.control))
+    }
+
+    /// 选中/悬停那颗药丸用**液态玻璃**；其余的行**什么底都不画**。
+    ///
+    /// 两件事各修掉一个坑：
+    ///
+    /// - **不画底**：从前这里给未选中的行也铺了一块 `Palette.sidebarBackground`。
+    ///   侧边栏不透明时那是隐形的（底色一样），一旦换了底就当场现形成十个贴纸。
+    ///   这类 bug 只有在换底之后才看得见，而它在换底之前一直躺在那儿。
+    /// - **玻璃只给这颗药丸**：它浮在一片我们自己铺好的深色底上，玻璃采样到的就是那片深色，
+    ///   所以文字的落脚点仍然可控。整片侧边栏用玻璃试过，实测否掉了——见 `body` 里的说明。
+    @ViewBuilder
+    private func surface(_ content: some View) -> some View {
+        if isSelected || isHovering {
+            content.coachGlass(tint: Palette.sidebarHighlight,
+                               fallback: Palette.sidebarHighlight,
+                               interactive: true,
+                               in: RoundedRectangle(cornerRadius: Radius.control))
+        } else {
+            content
+        }
     }
 }
 

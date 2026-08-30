@@ -44,6 +44,7 @@ final class CoachRouteTests: XCTestCase {
         // 改了就是破坏兼容，必须让改动者先看到这条测试红掉。
         XCTAssertEqual(CoachRoute.allCases.map(\.rawValue),
                        ["dashboard", "today", "questions", "plan", "retraining",
-                        "reviews", "history", "issues", "vocabulary"])
+                        "reviews", "history", "issues", "vocabulary",
+                        "upgrade", "feedback"])
     }
 }

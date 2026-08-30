@@ -9,7 +9,12 @@ import Foundation
 /// 十项导航里的「功能升级」「问题反馈」刻意没有路由：从外部唤起这两页没有意义，
 /// 少两个 case 就少两处要维护的字符串。
 public enum CoachRoute: String, CaseIterable, Sendable {
+    // 侧边栏十项**每一项都要有一条**（`dashboard` 是 `today` 的别名）。
+    // 少了哪一项，那一页就既不能用深链接打开、也不在 MCP 的 `open_dashboard` 里——
+    // 而这一条链接打不开时给出的那句提示会把「认得的页面」逐个列出来，
+    // 列表里没有的那两页，用户读完只会以为自己记错了名字。
     case dashboard, today, questions, plan, retraining, reviews, history, issues, vocabulary
+    case upgrade, feedback
 
     public static let scheme = "ieltscoach"
 

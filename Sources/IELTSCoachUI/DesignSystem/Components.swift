@@ -65,6 +65,48 @@ extension View {
     }
 }
 
+// MARK: - 液态玻璃
+
+/// 液态玻璃（macOS 26 起）。**更早的系统回落成不透明底色，不是「什么都不画」。**
+///
+/// ## 用在哪儿、不用在哪儿
+///
+/// 玻璃的意义是「浮在内容之上的那一层」——它要靠**背后有东西**才成立。
+/// 所以这个 App 里只有两类地方用它：
+///
+/// - **侧边栏**：浮在桌面之上，这是 macOS 上玻璃最经典的用法；
+/// - **浮在有颜色的面板上的那几颗按钮**（主行动卡片、复盘页的目标横幅）。
+///
+/// **卡片、提示卡、页面正文一律不用。** 它们贴在一整片纯色底上，
+/// 背后什么都没有，玻璃在那儿只会变成一层灰蒙蒙的膜——既没有效果，
+/// 又让本来验过 4.5:1 的文字底色变成了半透明的未知数。
+///
+/// ## 为什么要带 `tint`
+///
+/// 对比度那条线（第 2 节，不可协商）是拿**不透明**令牌算出来的
+/// （`AppearanceContrastTests.testEveryBackgroundTokenIsOpaque` 守着这个前提）。
+/// 玻璃是半透明的，背后是用户的桌面壁纸——白底壁纸上，一段压在纯玻璃上的浅色文字
+/// 是真的会读不清的。加了 `tint` 之后，那一层仍然以我们自己的深色为主，
+/// 文字的落脚点因此还是可控的。**不要去掉 tint 换成纯玻璃。**
+extension View {
+    /// - Parameters:
+    ///   - tint: 玻璃的底色。必须给——理由见上。
+    ///   - fallback: macOS 26 以下用的不透明底色。
+    ///   - interactive: 跟手的那种玻璃（按下会形变）。只给按钮用。
+    @ViewBuilder
+    public func coachGlass(tint: Color, fallback: Color, interactive: Bool = false,
+                           in shape: some Shape) -> some View {
+        if #available(macOS 26.0, *) {
+            let glass = interactive
+                ? Glass.regular.tint(tint).interactive()
+                : Glass.regular.tint(tint)
+            glassEffect(glass, in: shape)
+        } else {
+            background(fallback, in: shape)
+        }
+    }
+}
+
 // MARK: - 页面骨架
 
 /// 一整页的外壳：滚动、页面内边距、最大宽度、内容区底色。
@@ -313,6 +355,9 @@ public struct PrimaryActionCard<Detail: View>: View {
 
             // 白底主色字这一对的对比度有测试守着（5.5:1）。
             // 主色底上再放一个主色按钮会糊成一片，所以这里翻面。
+            // 这颗按钮浮在主色面板上——正是玻璃该用的地方（见 `coachGlass`）。
+            // 文字仍是主色压在浅底上，那一对的对比度有测试守着（5.5:1）；
+            // 玻璃的 tint 就是那块浅底本身，所以落脚点没变。
             HStack(spacing: Spacing.xs) {
                 Text(actionTitle).font(Typography.action)
                 Image(systemName: "arrow.right")
@@ -320,7 +365,8 @@ public struct PrimaryActionCard<Detail: View>: View {
             .foregroundStyle(Palette.accent)
             .padding(.horizontal, Spacing.md)
             .padding(.vertical, Spacing.sm)
-            .background(Palette.card, in: RoundedRectangle(cornerRadius: Radius.control))
+            .coachGlass(tint: Palette.card, fallback: Palette.card, interactive: true,
+                        in: RoundedRectangle(cornerRadius: Radius.control))
             .fixedSize()
         }
         .padding(Spacing.lg)

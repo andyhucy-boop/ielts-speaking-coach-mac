@@ -37,7 +37,7 @@ final class DeepLinkTests: XCTestCase {
     /// 而映射错了的后果，是用户从 Codex 点「打开问题档案」跳到了词汇本——
     /// 页面正常渲染，看不出哪里不对，只是走错了门。
     ///
-    /// 所以这里把九条逐条钉死，并当场确认这张表覆盖了 `CoachRoute` 的每一个 case：
+    /// 所以这里把每一条逐条钉死，并当场确认这张表覆盖了 `CoachRoute` 的每一个 case：
     /// 将来 Core 加了新路由而这张表忘了补，这条测试会红，而不是安静地少守一条。
     func testEveryRouteIsPinnedToOneSpecificPage() throws {
         let expected: [CoachRoute: SidebarItem] = [
@@ -49,7 +49,9 @@ final class DeepLinkTests: XCTestCase {
             .reviews: .reviewReports,
             .history: .history,
             .issues: .issues,
-            .vocabulary: .vocabulary
+            .vocabulary: .vocabulary,
+            .upgrade: .upgrade,
+            .feedback: .feedback
         ]
         XCTAssertEqual(Set(expected.keys), Set(CoachRoute.allCases),
                        "这张对照表和 CoachRoute 的 case 对不上，有路由没人钉。"
