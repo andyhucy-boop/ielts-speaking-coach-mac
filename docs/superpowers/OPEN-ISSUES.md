@@ -775,3 +775,48 @@ A3 是修复方没跑过的一个突变，我补上的：`lastSeenAt` 那一行�
 **下一步**：再遇到时，用 `swift test 2>&1 | tee /tmp/t.log` 完整留档，
 在 `/tmp/t.log` 里搜 `failed` 而不是 `error:`。在能复现之前不要动任何测试的超时数字——
 把超时调大是掩盖，不是修复。
+
+---
+
+## 2026-08-30：上面那次抖动抓到了，是**两条不同的**测试
+
+按上一节留下的做法（`tee` 全量日志，搜 `' failed ('` 而不是 `error:`），
+连跑四遍 `./scripts/build-app.sh`，前两遍各红一次、后两遍全绿。**两次红的不是同一条。**
+
+### 一、`AXDriverTests.testSendTextWaitsForTheSendButtonToAppearInsteadOfFallingBackImmediately`
+**已修，机制清楚。**
+
+它原来靠 `DispatchQueue.global().asyncAfter(deadline: .now() + 0.02)` 让 Send 按钮晚一点出现，
+等待窗口给的是 1 秒。全量跑测试时几百条用例把全局队列的线程占满，
+那个 0.02 秒的块可能一秒都排不上 —— 于是等待窗口先到期。
+**失败与被测代码无关，只与机器有多忙有关。**
+
+改成用 `FakeAXAccess.onSnapshot` 在「第 3 次读树」时补上按钮：不再依赖调度延迟，
+而且守的东西更准了 —— 它现在证明的是「会一直读到按钮出现为止」这个行为本身，
+不是「一秒之内能不能等到」。
+
+> 改的过程里自己踩了一个坑，记下来：第一版是**整树替换**，
+> 于是每次读树都把输入框的 value 写回「你好」，而 `onPress` 清空它正是
+> 「文字确实发出去了」的判据 —— 结果那条测试从偶发红变成稳定红。
+> 往树里补东西时只 `append`，别整树替换。
+
+### 二、`NotarizeScriptTests.testExecuteRefusesToResignBeforeTheSignatureBaselineIsRotated`
+**未修，机制未明。**
+
+失败的是这两条断言：`result.output.contains(recordedBaseline())` 与
+`result.output.contains(newRequirement)` —— 也就是 `scripts/notarize.sh --execute`
+**在走到比对基线那一步之前就退出了**（输出里只有「❌ 前置条件没满足，不执行公证。」）。
+
+已经排除的猜想：
+
+- ~~`.build/IELTS Speaking Coach.app` 不存在导致前置条件不过~~ ——
+  **实测否掉了**：手动删掉那个 .app 再跑，10 条全过（`ensureBuiltAppExists` 会造一个空壳）。
+- 单独跑 `swift test --filter NotarizeScriptTests` 连跑六遍，一次都不红。
+
+剩下的唯一共同点：**只在整套测试一起跑时出现**（`PackagingTests` 与其余目标并行，
+而这条测试要 fork 一个 shell 脚本、脚本里再调好几个假工具）。
+嫌疑是脚本里某一步在机器满负载时超时或被抢跑，但没有证据。
+
+**下一步**：再遇到时，把 `result.output` 整段打进失败信息（现在只打了断言那一行的上下文），
+那样一眼就能看出脚本停在哪个前置条件上。在拿到那段输出之前，
+**不要动脚本里的任何超时数字，也不要给这条测试加重试** —— 那是掩盖，不是修复。

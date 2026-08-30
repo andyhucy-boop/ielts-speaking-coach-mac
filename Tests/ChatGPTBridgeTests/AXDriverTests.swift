@@ -198,15 +198,24 @@ final class AXDriverTests: XCTestCase {
         access.onPress = { _, nodes in
             for i in nodes.indices where nodes[i].role == "AXTextArea" { nodes[i].value = "" }
         }
-        // 整树替换而不是 append：nodes 会被轮询线程并发读写，赋一份新数组与本文件
-        // 其余 asyncAfter 用例的写法一致（见 testWaitForVoiceComposerKeepsWaiting…）。
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.02) {
-            access.nodes = [
-                AXNodeSnapshot(element: AXElementRef(rawID: 1, epoch: 0), role: "AXTextArea",
-                               value: "你好", descriptionText: ChatGPTLabels.composerDescription),
-                AXNodeSnapshot(element: AXElementRef(rawID: 2, epoch: 0), role: "AXButton",
-                               descriptionText: "Send", childCount: 1, childRoles: ["AXImage"])
-            ]
+        // **按「第几次读树」出现，不按挂钟。**
+        //
+        // 这里原本是 `DispatchQueue.global().asyncAfter(deadline: .now() + 0.02)`，
+        // 而 2026-08-30 抓到它在整套测试跑满时会红（`AXLocator` 报「等了 0 秒…仍未发生」）：
+        // 全量跑测试时几百条用例把全局队列的线程占满，那个 0.02 秒的块可能一秒都排不上，
+        // 于是 1 秒的等待窗口先到期——**测试失败与被测代码无关，只与机器有多忙有关**。
+        //
+        // 换成第 3 次读树时出现之后，这条测试不再依赖调度延迟，
+        // 而且守的东西更准了：它现在证明的是「会一直读到按钮出现为止」这个行为本身，
+        // 不是「一秒之内能不能等到」。
+        // **只补一颗按钮，不整树替换。** 整树替换会把输入框的 value 一并写回「你好」，
+        // 而 `onPress` 清空它正是「文字确实发出去了」的判据——
+        // 于是发送之后那一步 `waitUntil` 永远等不到，测试反而稳定地红。
+        access.onSnapshot = { count, nodes in
+            guard count == 3 else { return }
+            nodes.append(AXNodeSnapshot(element: AXElementRef(rawID: 2, epoch: 0),
+                                        role: "AXButton", descriptionText: "Send",
+                                        childCount: 1, childRoles: ["AXImage"]))
         }
 
         try driver(access, sendButtonTimeout: 1.0).sendText("你好", into: .any)
